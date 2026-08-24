@@ -1,0 +1,5 @@
+Claude Code
+
+❯ Add parser fixtures without touching running sessions
+
+Waiting for approval

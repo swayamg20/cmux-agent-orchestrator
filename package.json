@@ -1,0 +1,26 @@
+{
+  "name": "obsidian-agent-cockpit",
+  "version": "0.1.0",
+  "description": "A task-centric Obsidian cockpit for agent sessions owned by cmux.",
+  "private": true,
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "check": "npm run lint && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.34.0",
+    "@types/node": "^22.18.0",
+    "esbuild": "^0.25.9",
+    "eslint": "^9.34.0",
+    "obsidian": "1.10.3",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.41.0",
+    "vitest": "^3.2.4"
+  }
+}

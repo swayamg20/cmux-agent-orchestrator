@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "protocol": "cmux-socket",
+  "access_mode": "cmuxOnly",
+  "socket_path": "/Users/example/Library/Application Support/cmux/cmux.sock",
+  "methods": [
+    "system.tree",
+    "workspace.list",
+    "workspace.select",
+    "pane.focus",
+    "surface.focus",
+    "surface.read_text",
+    "notification.list",
+    "system.identify"
+  ]
+}

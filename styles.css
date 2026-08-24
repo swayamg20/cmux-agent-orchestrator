@@ -1,0 +1,1090 @@
+.agent-cockpit-view-content {
+  padding: 0 !important;
+  overflow: auto;
+}
+
+.agent-cockpit {
+  --ac-space-1: 4px;
+  --ac-space-2: 8px;
+  --ac-space-3: 12px;
+  --ac-space-4: 16px;
+  --ac-space-6: 24px;
+  --ac-space-8: 32px;
+  --ac-ease: cubic-bezier(0.25, 1, 0.5, 1);
+  min-height: 100%;
+  color: var(--text-normal);
+  background: var(--background-primary);
+  container-type: inline-size;
+}
+
+.agent-cockpit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ac-space-4);
+  padding: var(--ac-space-6) var(--ac-space-6) var(--ac-space-4);
+}
+
+.agent-cockpit-heading-group,
+.agent-cockpit-heading-line,
+.agent-cockpit-title-line,
+.agent-cockpit-header-actions,
+.agent-cockpit-row-actions,
+.agent-cockpit-inbox-actions,
+.agent-cockpit-task-runtime,
+.agent-cockpit-session-trailing,
+.agent-cockpit-panel-heading,
+.agent-cockpit-kanban-column-header {
+  display: flex;
+  align-items: center;
+}
+
+.agent-cockpit-heading-group {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-cockpit-heading-line,
+.agent-cockpit-title-line {
+  gap: var(--ac-space-3);
+  min-width: 0;
+}
+
+.agent-cockpit-heading-group h1,
+.agent-cockpit-panel-heading h2,
+.agent-cockpit-workspace-heading h3,
+.agent-cockpit-kanban-column-header h3,
+.agent-cockpit-session-body h4 {
+  margin: 0;
+  color: var(--text-normal);
+}
+
+.agent-cockpit-heading-group h1 {
+  font-size: var(--font-ui-large);
+  font-weight: var(--font-semibold);
+  letter-spacing: -0.015em;
+}
+
+.agent-cockpit-header-actions {
+  gap: var(--ac-space-2);
+  flex: none;
+}
+
+.agent-cockpit-header-actions button,
+.agent-cockpit-row-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-cockpit-header-actions svg,
+.agent-cockpit-button-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.agent-cockpit-connection,
+.agent-cockpit-runtime-badge,
+.agent-cockpit-confidence,
+.agent-cockpit-priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.agent-cockpit-connection,
+.agent-cockpit-runtime-badge,
+.agent-cockpit-confidence {
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-state-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.agent-cockpit-connection[data-status="connected"] .agent-cockpit-state-dot,
+.agent-cockpit-runtime-badge[data-state="running"] .agent-cockpit-state-dot {
+  background: var(--color-green);
+}
+
+.agent-cockpit-connection[data-status="connecting"] .agent-cockpit-state-dot,
+.agent-cockpit-runtime-badge[data-state="idle"] .agent-cockpit-state-dot,
+.agent-cockpit-runtime-badge[data-state="needs-input"] .agent-cockpit-state-dot {
+  background: var(--color-orange);
+}
+
+.agent-cockpit-connection[data-status="error"] .agent-cockpit-state-dot,
+.agent-cockpit-connection[data-status="access-blocked"] .agent-cockpit-state-dot,
+.agent-cockpit-connection[data-status="disconnected"] .agent-cockpit-state-dot,
+.agent-cockpit-runtime-badge[data-state="error"] .agent-cockpit-state-dot,
+.agent-cockpit-runtime-badge[data-state="exited"] .agent-cockpit-state-dot {
+  background: var(--color-red);
+}
+
+.agent-cockpit-connection-panel {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: var(--ac-space-3);
+  margin: 0 var(--ac-space-6) var(--ac-space-4);
+  padding: var(--ac-space-4);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+}
+
+.agent-cockpit-connection-panel-icon svg {
+  width: 18px;
+  height: 18px;
+  color: var(--interactive-accent);
+}
+
+.agent-cockpit-connection-panel[data-kind="unsafe"] .agent-cockpit-connection-panel-icon svg,
+.agent-cockpit-connection-panel[data-kind="unavailable"] .agent-cockpit-connection-panel-icon svg {
+  color: var(--text-warning);
+}
+
+.agent-cockpit-connection-panel-body h2 {
+  margin: 0;
+  font-size: var(--font-ui-medium);
+}
+
+.agent-cockpit-connection-panel-body > p {
+  margin: var(--ac-space-1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.agent-cockpit-setup-steps {
+  margin: var(--ac-space-3) 0;
+  padding-left: 22px;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+}
+
+.agent-cockpit-setup-steps li + li {
+  margin-top: var(--ac-space-1);
+}
+
+.agent-cockpit-security-note {
+  padding: var(--ac-space-2) var(--ac-space-3);
+  border-left: 2px solid var(--interactive-accent);
+  background: var(--background-primary-alt);
+}
+
+.agent-cockpit-setup-alternative {
+  margin-top: var(--ac-space-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.agent-cockpit-setup-alternative summary {
+  color: var(--text-normal);
+  cursor: pointer;
+}
+
+.agent-cockpit-setup-alternative p {
+  margin: var(--ac-space-2) 0 0;
+}
+
+.agent-cockpit-connection-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ac-space-2);
+  margin-top: var(--ac-space-4);
+}
+
+.agent-cockpit-mode-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--ac-space-1);
+  min-height: 45px;
+  padding: 0 var(--ac-space-6);
+  overflow-x: auto;
+  border-top: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  scrollbar-width: none;
+}
+
+.agent-cockpit-mode-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.agent-cockpit .agent-cockpit-mode-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ac-space-2);
+  min-width: max-content;
+  min-height: 44px;
+  padding: 0 var(--ac-space-3);
+  border: 0;
+  border-radius: 0;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-medium);
+  transition:
+    color 120ms var(--ac-ease),
+    background-color 120ms var(--ac-ease);
+}
+
+.agent-cockpit .agent-cockpit-mode-tab:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.agent-cockpit .agent-cockpit-mode-tab:active {
+  color: var(--text-normal);
+  background: var(--background-modifier-active-hover);
+}
+
+.agent-cockpit .agent-cockpit-mode-tab[aria-selected="true"] {
+  color: var(--text-normal);
+}
+
+.agent-cockpit .agent-cockpit-mode-tab[aria-selected="true"]::after {
+  position: absolute;
+  right: var(--ac-space-2);
+  bottom: -1px;
+  left: var(--ac-space-2);
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--interactive-accent);
+  content: "";
+}
+
+.agent-cockpit-mode-tab-icon {
+  display: inline-flex;
+  color: currentColor;
+}
+
+.agent-cockpit-mode-tab-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.agent-cockpit-mode-tab-count {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.agent-cockpit-mode-tab-alert {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-orange);
+}
+
+.agent-cockpit-mode-host {
+  min-width: 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.agent-cockpit-mode-panel {
+  min-width: 0;
+  min-height: 320px;
+}
+
+.agent-cockpit button:focus-visible,
+.agent-cockpit select:focus-visible,
+.agent-cockpit summary:focus-visible,
+.agent-cockpit-mode-panel:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+.agent-cockpit-panel {
+  padding: var(--ac-space-6);
+}
+
+.agent-cockpit-panel + .agent-cockpit-panel {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.agent-cockpit-panel-heading {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ac-space-3);
+  margin-bottom: var(--ac-space-4);
+}
+
+.agent-cockpit-panel-heading h2 {
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
+}
+
+.agent-cockpit-panel-title {
+  min-width: 0;
+}
+
+.agent-cockpit-panel-title > p {
+  max-width: 78ch;
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-count {
+  min-width: 22px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+  font-size: var(--font-ui-smaller);
+  text-align: center;
+}
+
+.agent-cockpit-attention-list,
+.agent-cockpit-session-tree {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.agent-cockpit-attention-panel.is-clear {
+  padding-top: var(--ac-space-4);
+  padding-bottom: var(--ac-space-4);
+}
+
+.agent-cockpit-attention-panel.is-clear .agent-cockpit-panel-heading {
+  margin-bottom: var(--ac-space-3);
+}
+
+.agent-cockpit-session-row {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.agent-cockpit-session-row > summary {
+  list-style: none;
+}
+
+.agent-cockpit-session-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-cockpit-session-summary {
+  display: grid;
+  grid-template-columns: 28px minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: var(--ac-space-3);
+  min-height: 68px;
+  padding: var(--ac-space-3) var(--ac-space-2);
+  cursor: pointer;
+  transition: background-color 120ms var(--ac-ease);
+}
+
+.agent-cockpit-session-summary:hover {
+  background: var(--background-modifier-hover);
+}
+
+.agent-cockpit-session-summary:active {
+  background: var(--background-modifier-active-hover);
+}
+
+.agent-cockpit-session-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.agent-cockpit-session-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.agent-cockpit-session-identity {
+  min-width: 0;
+}
+
+.agent-cockpit-session-title {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-weight: var(--font-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-cockpit-session-meta,
+.agent-cockpit-observed-time,
+.agent-cockpit-section-note,
+.agent-cockpit-task-context,
+.agent-cockpit-run-count,
+.agent-cockpit-muted {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-session-meta {
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-cockpit-session-trailing {
+  justify-content: flex-end;
+  gap: var(--ac-space-3);
+}
+
+.agent-cockpit-session-body {
+  padding: var(--ac-space-2) var(--ac-space-2) var(--ac-space-6) 40px;
+  animation: agent-cockpit-reveal 160ms var(--ac-ease);
+}
+
+@keyframes agent-cockpit-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.agent-cockpit-reasons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ac-space-2);
+  margin-bottom: var(--ac-space-4);
+}
+
+.agent-cockpit-reason {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ac-space-4);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.agent-cockpit-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: var(--ac-space-6);
+}
+
+.agent-cockpit-preview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ac-space-3);
+}
+
+.agent-cockpit-preview-heading button {
+  flex: none;
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-session-body h4 {
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+}
+
+.agent-cockpit-section-note {
+  margin: 2px 0 var(--ac-space-3);
+}
+
+.agent-cockpit-terminal-preview,
+.agent-cockpit-preview-placeholder {
+  max-height: 320px;
+  margin: 0;
+  padding: var(--ac-space-4);
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+  background: var(--background-secondary);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent-cockpit-preview-placeholder {
+  color: var(--text-muted);
+  font-family: var(--font-interface);
+}
+
+.agent-cockpit-last-input {
+  display: grid;
+  gap: var(--ac-space-1);
+  margin-bottom: var(--ac-space-3);
+  padding: var(--ac-space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.agent-cockpit-field-label {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.agent-cockpit-truncation {
+  margin-top: var(--ac-space-2);
+  color: var(--text-warning);
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-metadata-list {
+  margin: var(--ac-space-3) 0 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.agent-cockpit-definition {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.35fr) minmax(0, 1fr);
+  gap: var(--ac-space-3);
+  padding: var(--ac-space-2) 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.agent-cockpit-definition dt {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-definition dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--font-ui-small);
+}
+
+.agent-cockpit-notifications {
+  margin-top: var(--ac-space-4);
+}
+
+.agent-cockpit-notification {
+  display: flex;
+  gap: var(--ac-space-3);
+  padding: var(--ac-space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.agent-cockpit-notification-state {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.agent-cockpit-row-actions {
+  flex-wrap: wrap;
+  gap: var(--ac-space-2);
+  margin-top: var(--ac-space-4);
+}
+
+.agent-cockpit-action {
+  min-height: 32px;
+}
+
+.agent-cockpit-task-attention-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: var(--ac-space-4);
+  min-height: 68px;
+  padding: var(--ac-space-3) var(--ac-space-2);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.agent-cockpit-attention-detail {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.agent-cockpit-empty-state {
+  max-width: 560px;
+  margin: clamp(36px, 8vh, 88px) auto;
+  text-align: center;
+}
+
+.agent-cockpit-empty-icon {
+  display: inline-flex;
+  margin-bottom: var(--ac-space-3);
+  color: var(--text-muted);
+}
+
+.agent-cockpit-empty-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.agent-cockpit-empty-state h3 {
+  margin: 0 0 var(--ac-space-2);
+  font-size: var(--font-ui-medium);
+}
+
+.agent-cockpit-empty-state p {
+  max-width: 64ch;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.agent-cockpit-inline-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--ac-space-2);
+  min-height: 40px;
+  padding: var(--ac-space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.agent-cockpit-inline-empty svg {
+  width: 17px;
+  height: 17px;
+  color: var(--color-green);
+}
+
+.agent-cockpit-inline-empty-title {
+  color: var(--text-normal);
+  font-weight: var(--font-medium);
+}
+
+.agent-cockpit-inbox-list {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.agent-cockpit-inbox-row {
+  display: grid;
+  grid-template-columns: 24px minmax(220px, 1fr) auto auto;
+  align-items: center;
+  gap: var(--ac-space-3);
+  min-width: 0;
+  min-height: 56px;
+  padding: var(--ac-space-2) var(--ac-space-1);
+  border-bottom: 1px solid var(--background-modifier-border);
+  transition: background-color 120ms var(--ac-ease);
+}
+
+.agent-cockpit-inbox-row:hover,
+.agent-cockpit-inbox-row:focus-within {
+  background: var(--background-modifier-hover);
+}
+
+.agent-cockpit-inbox-row:hover .agent-cockpit-inbox-icon,
+.agent-cockpit-inbox-row:focus-within .agent-cockpit-inbox-icon {
+  color: var(--text-normal);
+}
+
+.agent-cockpit-inbox-icon {
+  color: var(--text-muted);
+}
+
+.agent-cockpit-inbox-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.agent-cockpit-inbox-identity {
+  min-width: 0;
+}
+
+.agent-cockpit-inbox-runtime {
+  justify-self: end;
+}
+
+.agent-cockpit-inbox-actions {
+  flex: none;
+  gap: var(--ac-space-2);
+}
+
+.agent-cockpit-inbox-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-inbox-actions svg {
+  width: 14px;
+  height: 14px;
+}
+
+.agent-cockpit-track-button {
+  color: var(--text-accent);
+}
+
+.agent-cockpit .agent-cockpit-track-button,
+.agent-cockpit .agent-cockpit-icon-button {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  transition:
+    color 120ms var(--ac-ease),
+    background-color 120ms var(--ac-ease),
+    transform 120ms var(--ac-ease);
+}
+
+.agent-cockpit .agent-cockpit-track-button:hover,
+.agent-cockpit .agent-cockpit-icon-button:hover {
+  color: var(--text-accent-hover);
+  background: var(--background-modifier-hover);
+}
+
+.agent-cockpit .agent-cockpit-track-button:active,
+.agent-cockpit .agent-cockpit-icon-button:active {
+  background: var(--background-modifier-active-hover);
+  transform: translateY(1px);
+}
+
+.agent-cockpit-icon-button {
+  justify-content: center;
+  width: 32px;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.agent-cockpit-inbox-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ac-space-3);
+  padding-top: var(--ac-space-2);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-inbox-footer button {
+  flex: none;
+}
+
+.agent-cockpit-kanban-panel {
+  overflow: hidden;
+}
+
+.agent-cockpit-board-empty-note {
+  margin: calc(var(--ac-space-2) * -1) 0 var(--ac-space-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-kanban-board {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(200px, 1fr));
+  gap: var(--ac-space-3);
+  padding-bottom: var(--ac-space-3);
+  overflow-x: auto;
+}
+
+.agent-cockpit-kanban-column {
+  min-height: 170px;
+  padding: var(--ac-space-3);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+}
+
+.agent-cockpit-kanban-column-header {
+  justify-content: space-between;
+  gap: var(--ac-space-2);
+  padding: 0 var(--ac-space-1) var(--ac-space-3);
+}
+
+.agent-cockpit-kanban-column-header h3 {
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+}
+
+.agent-cockpit-kanban-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ac-space-2);
+  min-height: 110px;
+}
+
+.agent-cockpit-kanban-column-empty {
+  padding: var(--ac-space-3) var(--ac-space-2);
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  text-align: center;
+}
+
+.agent-cockpit-modal-intro {
+  margin: 0 0 var(--ac-space-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.agent-cockpit-task-card {
+  padding: var(--ac-space-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  transition:
+    border-color 120ms var(--ac-ease),
+    transform 120ms var(--ac-ease);
+}
+
+.agent-cockpit-task-card:hover {
+  border-color: var(--background-modifier-border-hover);
+  transform: translateY(-1px);
+}
+
+.agent-cockpit-task-card:focus-within {
+  border-color: var(--interactive-accent);
+}
+
+.agent-cockpit-task-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ac-space-2);
+  margin-bottom: var(--ac-space-2);
+}
+
+.agent-cockpit-priority {
+  font-size: var(--font-ui-smaller);
+  text-transform: capitalize;
+}
+
+.agent-cockpit-priority[data-priority="urgent"] {
+  color: var(--text-error);
+  font-weight: var(--font-semibold);
+}
+
+.agent-cockpit-priority[data-priority="high"] {
+  color: var(--text-warning);
+}
+
+.agent-cockpit-task-title {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: var(--text-normal);
+  background: transparent;
+  box-shadow: none;
+  font-weight: var(--font-medium);
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
+}
+
+.agent-cockpit-task-title:hover {
+  color: var(--text-accent);
+  background: transparent;
+}
+
+.agent-cockpit-task-repository {
+  margin-top: var(--ac-space-2);
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-cockpit-task-pending {
+  margin-top: var(--ac-space-2);
+  padding: var(--ac-space-2);
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+}
+
+.agent-cockpit-task-runtime {
+  justify-content: space-between;
+  gap: var(--ac-space-2);
+  margin-top: var(--ac-space-3);
+  padding-top: var(--ac-space-2);
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-workflow-control {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--ac-space-2);
+  margin-top: var(--ac-space-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-workflow-control select {
+  width: 100%;
+}
+
+.agent-cockpit-filters {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(130px, 1fr)) auto;
+  align-items: end;
+  gap: var(--ac-space-2);
+  margin-bottom: var(--ac-space-4);
+}
+
+.agent-cockpit-filter {
+  display: grid;
+  gap: var(--ac-space-1);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-filter select {
+  width: 100%;
+  min-width: 0;
+}
+
+.agent-cockpit-checkbox-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--ac-space-2);
+  min-height: 32px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.agent-cockpit-workspace-group {
+  padding: var(--ac-space-4) 0 var(--ac-space-2);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.agent-cockpit-workspace-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ac-space-3);
+  padding: 0 var(--ac-space-2) var(--ac-space-2);
+}
+
+.agent-cockpit-workspace-heading h3 {
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+}
+
+.agent-cockpit-workspace-heading span,
+.agent-cockpit-pane-label {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-cockpit-pane-group {
+  margin-top: var(--ac-space-2);
+}
+
+.agent-cockpit-pane-label {
+  padding: var(--ac-space-2);
+  font-weight: var(--font-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.agent-cockpit-confirm-targets {
+  padding: var(--ac-space-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+}
+
+.agent-cockpit-confirm-targets dd {
+  margin: var(--ac-space-1) 0;
+  font-family: var(--font-monospace);
+  overflow-wrap: anywhere;
+}
+
+@container (max-width: 900px) {
+  .agent-cockpit-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-cockpit-filters {
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+  }
+
+}
+
+@container (max-width: 620px) {
+  .agent-cockpit-header {
+    align-items: flex-start;
+    padding: var(--ac-space-4);
+  }
+
+  .agent-cockpit-header-actions button span:not(.agent-cockpit-button-icon) {
+    display: none;
+  }
+
+  .agent-cockpit-panel {
+    padding-right: var(--ac-space-4);
+    padding-left: var(--ac-space-4);
+  }
+
+  .agent-cockpit-mode-tabs {
+    padding: 0 var(--ac-space-4);
+  }
+
+  .agent-cockpit-session-summary {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .agent-cockpit-session-trailing {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+
+  .agent-cockpit-session-body {
+    padding-left: 36px;
+  }
+
+  .agent-cockpit-task-attention-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-cockpit-inbox-row {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+
+  .agent-cockpit-inbox-icon {
+    grid-row: 1 / span 3;
+  }
+
+  .agent-cockpit-inbox-runtime,
+  .agent-cockpit-inbox-actions {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-cockpit *,
+  .agent-cockpit *::before,
+  .agent-cockpit *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "agent-cockpit",
+  "name": "Agent Cockpit",
+  "version": "0.1.0",
+  "minAppVersion": "1.10.0",
+  "description": "A task-centric Obsidian cockpit for Claude Code and Codex sessions running in cmux.",
+  "author": "Swayam Gupta",
+  "isDesktopOnly": true
+}
+
