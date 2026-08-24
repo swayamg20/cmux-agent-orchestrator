@@ -19,6 +19,8 @@ const task = (workflowStatus: TaskRecord["workflowStatus"] = "active"): TaskReco
 });
 
 const binding: BindingRecord = {
+  bindingId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  runId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
   taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   workspaceId: "22222222-2222-4222-8222-222222222222",
   paneId: "33333333-3333-4333-8333-333333333333",
@@ -42,7 +44,7 @@ describe("AttentionEngine", () => {
   });
 
   it("sorts runtime errors above generic unread notifications", () => {
-    const base: Omit<LiveSession, "key" | "surfaceId" | "runtime" | "notifications"> = {
+    const base: Omit<LiveSession, "key" | "surfaceId" | "assessment" | "notifications"> = {
       workspaceId: "workspace",
       paneId: "pane",
       workspaceTitle: "Workspace",
@@ -62,11 +64,7 @@ describe("AttentionEngine", () => {
         ...base,
         key: "generic",
         surfaceId: "generic",
-        runtime: {
-          state: "unknown",
-          evidence: { source: "surface-presence", confidence: "low", observedAt: 1_000, explanation: "unknown" },
-          lastObservedChangeAt: null
-        },
+        assessment: assessment("unknown"),
         notifications: [
           { id: "n1", workspaceId: "workspace", surfaceId: "generic", title: "Notice", subtitle: "", body: "Update", isRead: false }
         ]
@@ -75,11 +73,7 @@ describe("AttentionEngine", () => {
         ...base,
         key: "error",
         surfaceId: "error",
-        runtime: {
-          state: "error",
-          evidence: { source: "cmux-notification", confidence: "medium", observedAt: 1_000, explanation: "error" },
-          lastObservedChangeAt: null
-        },
+        assessment: assessment("failed"),
         notifications: []
       }
     ];
@@ -87,3 +81,19 @@ describe("AttentionEngine", () => {
     expect(result.map((item) => item.key)).toEqual(["error", "generic"]);
   });
 });
+
+function assessment(phase: LiveSession["assessment"]["executionPhase"]): LiveSession["assessment"] {
+  return {
+    surfacePresence: "present",
+    agentPresence: "unknown",
+    executionPhase: phase,
+    activity: "unknown",
+    coverage: phase === "unknown" ? "fallback" : "partial",
+    confidence: phase === "unknown" ? "low" : "medium",
+    source: phase === "unknown" ? "cmux-topology" : "cmux-notification",
+    explanation: phase === "failed" ? "error" : "unknown",
+    updatedAt: 1_000,
+    lastActivityAt: null,
+    primaryEvidenceId: null
+  };
+}

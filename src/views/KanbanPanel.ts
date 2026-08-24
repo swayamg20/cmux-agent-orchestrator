@@ -66,8 +66,8 @@ export function renderKanbanPanel(
       });
     }
     for (const task of tasks) {
-      const session = state.sessions.find((candidate) => candidate.linkedTaskId === task.taskId) ?? null;
-      renderTaskCard(taskList, task, session, {
+      const sessions = state.sessions.filter((candidate) => candidate.linkedTaskId === task.taskId);
+      renderTaskCard(taskList, task, sessions, {
         open: actions.openTask,
         move: actions.moveTask
       });

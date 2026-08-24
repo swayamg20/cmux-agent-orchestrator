@@ -107,7 +107,89 @@ describe("BindingRepository", () => {
     expect(repository.list()).toEqual([]);
 
     shouldFail = false;
-    await expect(repository.attach(binding)).resolves.toBeUndefined();
+    await expect(repository.attach(binding)).resolves.toMatchObject({ isNewRun: true });
     expect(repository.list()).toHaveLength(1);
+  });
+
+  it("migrates schema-v1 bindings to stable schema-v2 identities without losing the mapping", async () => {
+    let data: unknown = {
+      schemaVersion: 1,
+      settings: {},
+      machines: {
+        "00000000000000000000": {
+          bindings: [
+            {
+              taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              workspaceId: "22222222-2222-4222-8222-222222222222",
+              paneId: "33333333-3333-4333-8333-333333333333",
+              surfaceId: "44444444-4444-4444-8444-444444444444",
+              provider: "codex",
+              providerSessionId: null,
+              attachedAt: "2026-08-23T00:00:00.000Z"
+            }
+          ]
+        }
+      }
+    };
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    await repository.updateSettings(repository.getSettings());
+
+    const saved = data as {
+      schemaVersion: number;
+      machines: Record<string, { bindings: { bindingId: string; runId: string }[]; runs: { runId: string }[] }>;
+    };
+    expect(saved.schemaVersion).toBe(2);
+    expect(saved.machines["00000000000000000000"]?.bindings[0]).toMatchObject({
+      bindingId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      runId: expect.stringMatching(/^[0-9a-f-]{36}$/)
+    });
+    expect(saved.machines["00000000000000000000"]?.runs).toHaveLength(1);
+  });
+
+  it("keeps several runs for one durable task and reuses the run on repeated attachment", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const base = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      provider: "codex" as const,
+      providerSessionId: null,
+      attachedAt: "2026-08-23T00:00:00.000Z"
+    };
+    const first = await repository.attach({
+      ...base,
+      surfaceId: "44444444-4444-4444-8444-444444444444"
+    });
+    const second = await repository.attach({
+      ...base,
+      surfaceId: "55555555-5555-4555-8555-555555555555",
+      attachedAt: "2026-08-23T00:01:00.000Z"
+    });
+    const repeated = await repository.attach({
+      ...base,
+      surfaceId: "55555555-5555-4555-8555-555555555555",
+      attachedAt: "2026-08-23T00:02:00.000Z"
+    });
+
+    expect(first.isNewRun).toBe(true);
+    expect(second.isNewRun).toBe(true);
+    expect(repeated).toMatchObject({ isNewRun: false, run: { runId: second.run.runId } });
+    expect(repository.listRuns(base.taskId)).toHaveLength(2);
+    expect(repository.list()).toHaveLength(2);
   });
 });

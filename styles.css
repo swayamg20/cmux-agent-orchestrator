@@ -17,6 +17,34 @@
   container-type: inline-size;
 }
 
+.agent-cockpit-stable-slot {
+  display: contents;
+}
+
+.agent-cockpit-source-health {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-2-2);
+  margin-top: var(--size-2-2);
+}
+
+.agent-cockpit-source-health-pill {
+  align-items: center;
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: var(--font-ui-smaller);
+  gap: var(--size-2-1);
+}
+
+.agent-cockpit-source-health-pill[data-status="fresh"] .agent-cockpit-state-dot {
+  background: var(--color-green);
+}
+
+.agent-cockpit-source-health-pill[data-status="stale"] .agent-cockpit-state-dot,
+.agent-cockpit-source-health-pill[data-status="unavailable"] .agent-cockpit-state-dot {
+  background: var(--color-orange);
+}
+
 .agent-cockpit-header {
   display: flex;
   align-items: center;
@@ -111,21 +139,20 @@
 }
 
 .agent-cockpit-connection[data-status="connected"] .agent-cockpit-state-dot,
-.agent-cockpit-runtime-badge[data-state="running"] .agent-cockpit-state-dot {
+.agent-cockpit-runtime-badge[data-state="working"] .agent-cockpit-state-dot {
   background: var(--color-green);
 }
 
 .agent-cockpit-connection[data-status="connecting"] .agent-cockpit-state-dot,
-.agent-cockpit-runtime-badge[data-state="idle"] .agent-cockpit-state-dot,
-.agent-cockpit-runtime-badge[data-state="needs-input"] .agent-cockpit-state-dot {
+.agent-cockpit-runtime-badge[data-state="waiting"] .agent-cockpit-state-dot,
+.agent-cockpit-runtime-badge[data-state="turn-finished"] .agent-cockpit-state-dot {
   background: var(--color-orange);
 }
 
 .agent-cockpit-connection[data-status="error"] .agent-cockpit-state-dot,
 .agent-cockpit-connection[data-status="access-blocked"] .agent-cockpit-state-dot,
 .agent-cockpit-connection[data-status="disconnected"] .agent-cockpit-state-dot,
-.agent-cockpit-runtime-badge[data-state="error"] .agent-cockpit-state-dot,
-.agent-cockpit-runtime-badge[data-state="exited"] .agent-cockpit-state-dot {
+.agent-cockpit-runtime-badge[data-state="failed"] .agent-cockpit-state-dot {
   background: var(--color-red);
 }
 

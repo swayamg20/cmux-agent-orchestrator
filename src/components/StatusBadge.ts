@@ -1,4 +1,4 @@
-import type { Confidence, ConnectionState, RuntimeAssessment } from "../state/types";
+import type { Confidence, ConnectionState, ExecutionPhase, SessionAssessment } from "../state/types";
 
 export function renderConnectionBadge(container: HTMLElement, connection: ConnectionState): HTMLElement {
   const badge = container.createSpan({ cls: "agent-cockpit-connection" });
@@ -10,16 +10,19 @@ export function renderConnectionBadge(container: HTMLElement, connection: Connec
   return badge;
 }
 
-export function renderRuntimeBadge(container: HTMLElement, runtime: RuntimeAssessment): HTMLElement {
+export function renderRuntimeBadge(container: HTMLElement, assessment: SessionAssessment): HTMLElement {
   const badge = container.createSpan({ cls: "agent-cockpit-runtime-badge" });
-  badge.dataset.state = runtime.state;
+  badge.dataset.state = assessment.executionPhase;
   badge.createSpan({ cls: "agent-cockpit-state-dot", attr: { "aria-hidden": "true" } });
-  badge.createSpan({ text: runtimeLabel(runtime.state) });
+  badge.createSpan({ text: phaseLabel(assessment.executionPhase) });
   badge.setAttribute(
     "aria-label",
-    `${runtimeLabel(runtime.state)}, ${runtime.evidence.confidence} confidence. ${runtime.evidence.explanation}`
+    `${phaseLabel(assessment.executionPhase)}, ${assessment.confidence} confidence, ${assessment.coverage} coverage. ${assessment.explanation}`
   );
-  badge.setAttribute("title", `${runtime.evidence.confidence} confidence · ${runtime.evidence.explanation}`);
+  badge.setAttribute(
+    "title",
+    `${assessment.confidence} confidence · ${assessment.coverage} coverage · ${assessment.explanation}`
+  );
   return badge;
 }
 
@@ -41,16 +44,15 @@ function connectionLabel(status: ConnectionState["status"]): string {
   return labels[status];
 }
 
-export function runtimeLabel(state: RuntimeAssessment["state"]): string {
-  const labels: Record<RuntimeAssessment["state"], string> = {
-    unknown: "Runtime: Unknown",
-    running: "Runtime: Running",
-    "needs-input": "Runtime: Needs input",
-    idle: "Runtime: Idle",
-    exited: "Runtime: Exited",
-    error: "Runtime: Error"
+export function phaseLabel(phase: ExecutionPhase): string {
+  const labels: Record<ExecutionPhase, string> = {
+    unknown: "State unknown",
+    working: "Working",
+    waiting: "Needs input",
+    "turn-finished": "Review output",
+    failed: "Error reported"
   };
-  return labels[state];
+  return labels[phase];
 }
 
 function capitalize(value: string): string {

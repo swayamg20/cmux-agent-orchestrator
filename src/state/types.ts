@@ -1,17 +1,14 @@
 import type { CmuxNotification, CmuxPreview, CmuxSnapshot, CmuxTarget } from "../cmux/types";
-import type { BindingRecord } from "../bindings/types";
+import type { AgentRunRecord, BindingRecord } from "../bindings/types";
+import type { ActivityKind, EvidenceSource } from "../evidence/types";
 import type { TaskRecord, WorkflowStatus } from "../tasks/TaskSchema";
 
 export type ProviderKind = "claude" | "codex" | "shell" | "unknown";
 export type Confidence = "low" | "medium" | "high";
-export type RuntimeStateKind = "unknown" | "running" | "needs-input" | "idle" | "exited" | "error";
-
-export interface RuntimeEvidence {
-  source: "cmux-notification" | "surface-presence" | "screen-change" | "screen-heuristic" | "manual";
-  confidence: Confidence;
-  observedAt: number;
-  explanation: string;
-}
+export type SurfacePresence = "present" | "missing";
+export type AgentPresence = "unknown" | "attached" | "ended";
+export type ExecutionPhase = "unknown" | "working" | "waiting" | "turn-finished" | "failed";
+export type EvidenceCoverage = "structured" | "partial" | "fallback" | "none";
 
 export interface ProviderDetection {
   provider: ProviderKind;
@@ -21,10 +18,18 @@ export interface ProviderDetection {
   sessionId: string | null;
 }
 
-export interface RuntimeAssessment {
-  state: RuntimeStateKind;
-  evidence: RuntimeEvidence;
-  lastObservedChangeAt: number | null;
+export interface SessionAssessment {
+  surfacePresence: SurfacePresence;
+  agentPresence: AgentPresence;
+  executionPhase: ExecutionPhase;
+  activity: ActivityKind;
+  coverage: EvidenceCoverage;
+  confidence: Confidence;
+  source: EvidenceSource | "none";
+  explanation: string;
+  updatedAt: number;
+  lastActivityAt: number | null;
+  primaryEvidenceId: string | null;
 }
 
 export interface LiveSession extends CmuxTarget {
@@ -37,7 +42,7 @@ export interface LiveSession extends CmuxTarget {
   surfaceType: string;
   currentDirectory: string | null;
   provider: ProviderDetection;
-  runtime: RuntimeAssessment;
+  assessment: SessionAssessment;
   observedAt: number;
   notifications: CmuxNotification[];
   linkedTaskId: string | null;
@@ -83,10 +88,25 @@ export interface AttentionItem {
 export interface SessionFilters {
   repository: string;
   provider: ProviderKind | "all";
-  runtime: RuntimeStateKind | "all";
+  phase: ExecutionPhase | "all";
   workspaceId: string;
   link: "all" | "linked" | "orphan";
   attentionOnly: boolean;
+}
+
+export type SourceHealthStatus = "fresh" | "stale" | "unavailable";
+
+export interface SourceHealth {
+  status: SourceHealthStatus;
+  checkedAt: number | null;
+  lastSuccessAt: number | null;
+  message: string;
+}
+
+export interface CockpitHealth {
+  topology: SourceHealth;
+  notifications: SourceHealth;
+  lifecycle: SourceHealth;
 }
 
 export interface CockpitState {
@@ -96,7 +116,9 @@ export interface CockpitState {
   notifications: CmuxNotification[];
   tasks: TaskRecord[];
   bindings: BindingRecord[];
+  runs: AgentRunRecord[];
   attention: AttentionItem[];
+  health: CockpitHealth;
   filters: SessionFilters;
   refreshing: boolean;
   lastRefreshAt: number | null;
@@ -106,7 +128,7 @@ export interface CockpitState {
 export const EMPTY_FILTERS: SessionFilters = {
   repository: "",
   provider: "all",
-  runtime: "all",
+  phase: "all",
   workspaceId: "",
   link: "all",
   attentionOnly: false
@@ -126,7 +148,28 @@ export const INITIAL_COCKPIT_STATE: CockpitState = {
   notifications: [],
   tasks: [],
   bindings: [],
+  runs: [],
   attention: [],
+  health: {
+    topology: {
+      status: "unavailable",
+      checkedAt: null,
+      lastSuccessAt: null,
+      message: "Topology has not been loaded."
+    },
+    notifications: {
+      status: "unavailable",
+      checkedAt: null,
+      lastSuccessAt: null,
+      message: "Notifications have not been loaded."
+    },
+    lifecycle: {
+      status: "unavailable",
+      checkedAt: null,
+      lastSuccessAt: null,
+      message: "No structured provider lifecycle source is available."
+    }
+  },
   filters: EMPTY_FILTERS,
   refreshing: false,
   lastRefreshAt: null,

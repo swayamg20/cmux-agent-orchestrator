@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { AttentionItem, LiveSession, ProviderKind, RuntimeStateKind } from "../../src/state/types";
+import type { AttentionItem, ExecutionPhase, LiveSession, ProviderKind } from "../../src/state/types";
 import { selectSessionInbox } from "../../src/views/SessionInboxModel";
 
 function session(
   key: string,
   provider: ProviderKind,
-  runtime: RuntimeStateKind = "unknown",
+  phase: ExecutionPhase = "unknown",
   linkedTaskId: string | null = null
 ): LiveSession {
   return {
@@ -27,15 +27,18 @@ function session(
       explanation: "fixture",
       sessionId: null
     },
-    runtime: {
-      state: runtime,
-      evidence: {
-        source: "surface-presence",
-        confidence: "low",
-        observedAt: 1_000,
-        explanation: "fixture"
-      },
-      lastObservedChangeAt: null
+    assessment: {
+      surfacePresence: "present",
+      agentPresence: "unknown",
+      executionPhase: phase,
+      activity: "unknown",
+      coverage: "fallback",
+      confidence: "low",
+      source: "cmux-topology",
+      explanation: "fixture",
+      updatedAt: 1_000,
+      lastActivityAt: null,
+      primaryEvidenceId: null
     },
     observedAt: 1_000,
     notifications: [],
@@ -65,8 +68,8 @@ describe("selectSessionInbox", () => {
   });
 
   it("puts attention-bearing runs first without creating or linking anything", () => {
-    const ordinary = session("ordinary", "codex", "running");
-    const urgent = session("urgent", "claude", "needs-input");
+    const ordinary = session("ordinary", "codex", "working");
+    const urgent = session("urgent", "claude", "waiting");
     const attention: AttentionItem = {
       key: urgent.key,
       session: urgent,

@@ -80,7 +80,7 @@ function renderInboxRow(container: HTMLElement, session: LiveSession, actions: S
   });
 
   const runtime = row.createDiv({ cls: "agent-cockpit-inbox-runtime" });
-  renderRuntimeBadge(runtime, session.runtime);
+  renderRuntimeBadge(runtime, session.assessment);
 
   const rowActions = row.createDiv({ cls: "agent-cockpit-inbox-actions" });
   inboxButton(

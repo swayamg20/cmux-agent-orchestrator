@@ -11,10 +11,10 @@ The repository currently targets Obsidian 1.10.x and the installed cmux 0.62.2 c
 - All five workflow columns are always visible, including in a brand-new vault with no task notes.
 - Canonical workspace, pane, and surface UUIDs from cmux JSON output.
 - Conservative Claude, Codex, shell, and unknown detection with evidence and confidence.
-- Bounded, memory-only terminal previews loaded once at startup, on explicit refresh, or when requested.
-- Exact Focus in cmux with fresh target resolution and a postcondition check.
+- Bounded, memory-only terminal previews loaded only when a session is expanded or explicitly requested.
+- Exact Focus in cmux with fresh target resolution and bounded postcondition retries.
 - Markdown task creation and workflow states: Backlog, Active, Review, Parked, and Done.
-- Machine-scoped task-to-surface bindings in plugin data.
+- Machine-scoped task, run-history, and surface bindings in schema-v2 plugin data.
 - Orphan sessions and stale bindings.
 - Clear cmux disconnected, blocked, malformed-output, timeout, and output-limit states.
 - One-time GUI onboarding for normal Finder, Dock, and Spotlight launches when cmux rejects external clients.
@@ -30,7 +30,7 @@ Agent Cockpit does not host a PTY, resume providers, send terminal input, read c
 | Agent Cockpit | Runtime observations, task associations, workflow presentation, and narrow explicit actions |
 | Markdown notes | Human-owned goals, criteria, context, decisions, run summaries, and outcomes |
 
-Runtime state and workflow state are deliberately independent. An idle, missing, errored, or exited surface never moves a task to Done.
+Agent evidence and workflow state are deliberately independent. A quiet, missing, errored, or ended session never moves a task to Done.
 
 Detected, unlinked Claude and Codex runs appear automatically in the Agent runs tab. They do not silently become Markdown notes or Kanban cards. `Track in board` opens a prefilled form, writes one Active durable task note, and attaches that exact run. The row's overflow menu provides Focus in cmux and Attach to existing task.
 
@@ -72,7 +72,9 @@ updated-at:
 ---
 ```
 
-cmux UUIDs and provider observations do not go into task frontmatter. Plugin `data.json` stores settings and explicit bindings under a one-way hashed machine namespace. Terminal previews, notification bodies, output hashes, first-seen times, and runtime snapshots remain memory-only.
+cmux UUIDs and provider observations do not go into task frontmatter. Plugin `data.json` schema version 2 stores settings, explicit surface bindings, and durable run relationships under a one-way hashed machine namespace. Existing schema-v1 bindings migrate in memory and are written as v2 on the next plugin-data mutation. Terminal previews, notification bodies, evidence ledgers, output fingerprints, and source-health snapshots remain memory-only.
+
+A task may own several runs and several currently attached surfaces. Each binding has its own canonical binding ID and run ID. Reattaching the same surface/provider run reuses that run; a different provider is recorded as a handoff; uncertain same-provider relationships remain explicitly `unknown` rather than being invented as a resume or fork.
 
 ## cmux transport
 
@@ -96,30 +98,33 @@ Explicit user-initiated selection:
 cmux focus-panel --panel <surface-uuid> --workspace <workspace-uuid>
 ```
 
-Focus refreshes the tree before the command, requires the exact workspace/pane/surface tuple to resolve once, invokes the exact surface, and verifies cmux's authoritative focused workspace/pane/surface tuple afterward. It sends no terminal text and changes no workflow state.
+Focus refreshes the tree before the command, requires the exact workspace/pane/surface tuple to resolve once, invokes the exact surface, and verifies cmux's authoritative focused workspace/pane/surface tuple afterward. Verification is retried only inside a bounded 500 ms window so normal cmux selection propagation is not reported as an immediate false negative. It sends no terminal text and changes no workflow state.
 
 ## Refresh and performance
 
-- Topology, notifications, and one bounded display preview per terminal load once when the plugin starts through a two-process queue.
-- Clicking Refresh or running the refresh command explicitly repeats that bounded scan.
+- Startup probes cmux once, then loads topology and notifications in parallel. A warm global Refresh invokes only those two read-only sources.
+- Global Refresh never reads terminal previews. Concurrent refresh requests coalesce, stale generations are ignored, and a notification failure does not discard a healthy topology snapshot.
 - There is no repeating topology, notification, or preview timer.
 - Workspace CWD metadata is cached for 30 seconds across closely spaced manual refreshes.
-- Previews load during the one-time startup scan, when a row is expanded, and during an explicit global Refresh; they allow at most two concurrent reads.
-- Displayed previews remain configurable up to 80 lines with a 16 KiB default in-memory ceiling.
-- Only terminals still lacking a provider after the display preview receive one additional provider-only read, bounded to 500 lines and 64 KiB. The deeper text is discarded after detection and is never displayed or persisted.
+- Display previews load only when a row is expanded or the user presses Load/Refresh preview; they allow at most two concurrent reads.
+- Displayed previews remain configurable up to 80 lines with a 16 KiB default ceiling and live in a 20-entry, 1 MiB in-memory LRU.
+- A newly discovered terminal that still lacks provider evidence may receive one provider-only background read, bounded to 500 lines and 64 KiB with two-process concurrency. That deeper text is discarded immediately after classification, is never displayed, and is not repeated by later global refreshes.
 - Every read-screen process retains a 96 KiB raw output ceiling.
 - Unloading the plugin terminates only its own short-lived cmux CLI children.
 
-## Runtime evidence
+## Agent evidence
 
-Each runtime assessment includes a state, source, confidence, observation time, and explanation. In cmux 0.62.2, surface presence and terminal text do not prove provider lifecycle state. Consequently, many sessions correctly show `Runtime: Unknown` even after provider detection identifies Claude or Codex. Distinctive provider TUI markers can classify the provider with explicit low, medium, or high confidence, but never prove lifecycle state or completion.
+Each session projects separate dimensions: surface presence, agent presence, execution phase, recent activity, evidence coverage, source, confidence, and explanation. This avoids compressing unrelated facts into a misleading single runtime badge.
 
-- Unread structured notifications can support medium-confidence Error or Needs input.
-- Generic words such as `approval` or `confirm` in terminal prose never assert Needs input.
-- A changed bounded preview can support low-confidence Running.
-- A long-observed unchanged preview can support low-confidence Idle.
+- In cmux 0.62.2, topology proves only that a canonical surface exists. It does not prove an attached agent, a live turn, or completion.
+- Unread cmux notifications can support medium-confidence `Needs input`, `Error reported`, or `Review output`.
+- A changed on-demand preview records low-confidence recent activity such as reading, editing, or command output, but leaves execution phase `State unknown`.
+- Generic words such as `approval` or `confirm` in terminal prose never assert `Needs input`.
 - A missing linked surface creates an attention item but does not prove provider completion.
 - Provider session IDs remain absent unless a future structured source proves them.
+- Source health is independent: topology, notifications, and provider lifecycle each report fresh, stale, or unavailable. On the installed cmux 0.62.2 surface, structured lifecycle coverage is honestly `unavailable`.
+
+The in-memory evidence ledger is bounded to 32 entries per session and 2,048 total. The deterministic reducer ranks structured lifecycle evidence above notifications, preview heuristics, and surface presence. No reducer transition changes Markdown workflow state.
 
 ## Tests
 
@@ -165,7 +170,8 @@ src/
   app/          orchestration controller
   cmux/         transport, subprocess runner, commands, and decoders
   agents/       conservative provider adapters
-  runtime/      previews, runtime evidence, and attention
+  evidence/     bounded evidence ledger, event types, and deterministic reducer
+  runtime/      preview cache/scheduler, session projection, and attention
   state/        typed observable store
   tasks/        Markdown schema, template, and repository
   bindings/     machine-scoped task/session mappings
@@ -180,4 +186,4 @@ tests/
 
 ## Still requiring manual verification
 
-Repository-local tests cannot prove that Obsidian loads the bundle, renders both themes, persists through an Obsidian reload, or transfers macOS focus to the correct cmux window. Those checks require a separately approved vault installation and, for the current machine, a safely scheduled cmux Automation-mode change. The final focus test should target the development surface and must not send input.
+Repository-local tests cannot prove that Obsidian renders both themes, preserves hover/focus under every third-party theme, persists through an actual Obsidian reload, or transfers macOS focus to the intended cmux window. Those checks require the vault-local build and a controlled manual click. Password mode already supports normal Finder, Dock, and Spotlight launches without passing the socket password through Agent Cockpit. The final focus test should target a user-approved development surface and must not send input.

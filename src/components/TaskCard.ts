@@ -13,7 +13,7 @@ export interface TaskCardActions {
 export function renderTaskCard(
   container: HTMLElement,
   task: TaskRecord,
-  session: LiveSession | null,
+  sessions: readonly LiveSession[],
   actions: TaskCardActions
 ): HTMLElement {
   const card = container.createDiv({ cls: "agent-cockpit-task-card", attr: { draggable: "true" } });
@@ -41,10 +41,18 @@ export function renderTaskCard(
     card.createDiv({ cls: "agent-cockpit-task-context", text: task.worktree ?? task.branch ?? "" });
   }
 
+  const session = selectPrimarySession(sessions);
   if (session) {
     const runtime = card.createDiv({ cls: "agent-cockpit-task-runtime" });
     runtime.createSpan({ text: providerLabel(session.provider.provider) });
-    renderRuntimeBadge(runtime, session.runtime);
+    renderRuntimeBadge(runtime, session.assessment);
+    if (sessions.length > 1) {
+      runtime.createSpan({
+        cls: "agent-cockpit-run-count",
+        text: `${sessions.length} live`,
+        attr: { title: `${sessions.length} cmux surfaces are attached to this task.` }
+      });
+    }
     card.createDiv({
       cls: "agent-cockpit-task-context",
       text: `${session.workspaceTitle} · ${session.surfaceTitle}`
@@ -52,9 +60,9 @@ export function renderTaskCard(
     card.createDiv({
       cls: "agent-cockpit-task-context",
       text:
-        session.runtime.lastObservedChangeAt === null
+        session.assessment.lastActivityAt === null
           ? `Seen ${formatRelativeTime(session.observedAt)}`
-          : `Changed ${formatRelativeTime(session.runtime.lastObservedChangeAt)}`
+          : `Activity ${formatRelativeTime(session.assessment.lastActivityAt)}`
     });
     const unread = session.notifications.find((notification) => !notification.isRead);
     if (unread) {
@@ -62,7 +70,7 @@ export function renderTaskCard(
         cls: "agent-cockpit-task-pending",
         text: excerpt(unread.title || unread.body || "Unread cmux notification")
       });
-    } else if (session.runtime.state === "needs-input") {
+    } else if (session.assessment.executionPhase === "waiting") {
       card.createDiv({ cls: "agent-cockpit-task-pending", text: "Possible input request" });
     }
   } else {
@@ -81,6 +89,21 @@ export function renderTaskCard(
     actions.move(task, status);
   });
   return card;
+}
+
+function selectPrimarySession(sessions: readonly LiveSession[]): LiveSession | null {
+  const priority: Record<LiveSession["assessment"]["executionPhase"], number> = {
+    failed: 5,
+    waiting: 4,
+    "turn-finished": 3,
+    working: 2,
+    unknown: 1
+  };
+  return [...sessions].sort(
+    (left, right) =>
+      priority[right.assessment.executionPhase] - priority[left.assessment.executionPhase] ||
+      right.observedAt - left.observedAt
+  )[0] ?? null;
 }
 
 function excerpt(value: string): string {

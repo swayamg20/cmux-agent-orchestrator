@@ -18,6 +18,7 @@ const DEFAULT_CANDIDATES = [
   "/opt/homebrew/bin/cmux",
   "/usr/local/bin/cmux"
 ] as const;
+const FOCUS_VERIFICATION_DELAYS_MS = [0, 50, 150, 300] as const;
 
 export interface FocusResult {
   target: CmuxResolvedTarget;
@@ -56,7 +57,12 @@ export class CmuxClient {
     const before = await this.snapshot(signal);
     resolveTarget(before, target);
     await this.transport.focus(target, signal);
-    const focused = await this.transport.focusedTarget(signal);
+    let focused: CmuxTarget | null = null;
+    for (const delayMs of FOCUS_VERIFICATION_DELAYS_MS) {
+      if (delayMs > 0) await boundedDelay(delayMs, signal);
+      focused = await this.transport.focusedTarget(signal);
+      if (sameTarget(focused, target)) break;
+    }
     const after = await this.snapshot(signal);
     if (after.windows.length !== before.windows.length) {
       throw new CmuxError(
@@ -66,16 +72,37 @@ export class CmuxClient {
     }
     const selected = resolveTarget(after, target);
     const verified =
-      focused !== null &&
-      focused.workspaceId === target.workspaceId &&
-      focused.paneId === target.paneId &&
-      focused.surfaceId === target.surfaceId;
+      sameTarget(focused, target);
     return { target: selected, verified };
   }
 
   dispose(): void {
     this.transport.dispose();
   }
+}
+
+function sameTarget(left: CmuxTarget | null, right: CmuxTarget): boolean {
+  return (
+    left !== null &&
+    left.workspaceId === right.workspaceId &&
+    left.paneId === right.paneId &&
+    left.surfaceId === right.surfaceId
+  );
+}
+
+function boundedDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new CmuxError("aborted", "The cmux focus verification was cancelled."));
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = (): void => {
+      clearTimeout(timeout);
+      reject(new CmuxError("aborted", "The cmux focus verification was cancelled."));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export function resolveTarget(snapshot: CmuxSnapshot, target: CmuxTarget): CmuxResolvedTarget {

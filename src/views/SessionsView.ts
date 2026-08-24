@@ -1,4 +1,4 @@
-import type { CockpitState, LiveSession, ProviderKind, RuntimeStateKind } from "../state/types";
+import type { CockpitState, ExecutionPhase, LiveSession, ProviderKind } from "../state/types";
 import type { SessionCardActions } from "../components/SessionCard";
 import { renderSessionCard } from "../components/SessionCard";
 
@@ -26,6 +26,10 @@ export function renderSessionsPanel(
     attr: { "aria-label": `${state.sessions.length} cmux surfaces` }
   });
   title.createEl("p", { text: "Exact workspace, pane, and surface hierarchy with bounded evidence on demand." });
+  const health = title.createDiv({ cls: "agent-cockpit-source-health", attr: { "aria-label": "Evidence source health" } });
+  sourceHealthPill(health, "Topology", state.health.topology);
+  sourceHealthPill(health, "Notifications", state.health.notifications);
+  sourceHealthPill(health, "Lifecycle", state.health.lifecycle);
 
   renderFilters(panel, state, actions);
   const sessions = filteredSessions(state);
@@ -69,6 +73,18 @@ export function renderSessionsPanel(
   }
 }
 
+function sourceHealthPill(
+  container: HTMLElement,
+  label: string,
+  health: CockpitState["health"]["topology"]
+): void {
+  const pill = container.createSpan({ cls: "agent-cockpit-source-health-pill" });
+  pill.dataset.status = health.status;
+  pill.createSpan({ cls: "agent-cockpit-state-dot", attr: { "aria-hidden": "true" } });
+  pill.createSpan({ text: `${label}: ${health.status}` });
+  pill.setAttribute("title", health.message);
+}
+
 function renderFilters(container: HTMLElement, state: Readonly<CockpitState>, actions: SessionsPanelActions): void {
   const filters = container.createDiv({ cls: "agent-cockpit-filters" });
   const repositories = unique(state.sessions.map((session) => session.currentDirectory).filter(isString));
@@ -90,18 +106,17 @@ function renderFilters(container: HTMLElement, state: Readonly<CockpitState>, ac
   );
   selectFilter(
     filters,
-    "Runtime",
-    state.filters.runtime,
+    "Execution",
+    state.filters.phase,
     [
-      { value: "all", label: "All runtime states" },
-      { value: "unknown", label: "Unknown" },
-      { value: "running", label: "Running" },
-      { value: "needs-input", label: "Needs input" },
-      { value: "idle", label: "Idle" },
-      { value: "exited", label: "Exited" },
-      { value: "error", label: "Error" }
+      { value: "all", label: "All execution phases" },
+      { value: "unknown", label: "State unknown" },
+      { value: "working", label: "Working" },
+      { value: "waiting", label: "Needs input" },
+      { value: "turn-finished", label: "Review output" },
+      { value: "failed", label: "Error reported" }
     ],
-    (runtime) => actions.setFilter({ runtime: runtime as RuntimeStateKind | "all" })
+    (phase) => actions.setFilter({ phase: phase as ExecutionPhase | "all" })
   );
   selectFilter(filters, "Workspace", state.filters.workspaceId, [{ value: "", label: "All workspaces" }, ...workspaces.map((value) => ({ value, label: state.sessions.find((session) => session.workspaceId === value)?.workspaceTitle ?? value }))], (workspaceId) => actions.setFilter({ workspaceId }));
   selectFilter(
@@ -145,7 +160,7 @@ function filteredSessions(state: Readonly<CockpitState>): LiveSession[] {
   return state.sessions.filter((session) => {
     if (state.filters.repository && session.currentDirectory !== state.filters.repository) return false;
     if (state.filters.provider !== "all" && session.provider.provider !== state.filters.provider) return false;
-    if (state.filters.runtime !== "all" && session.runtime.state !== state.filters.runtime) return false;
+    if (state.filters.phase !== "all" && session.assessment.executionPhase !== state.filters.phase) return false;
     if (state.filters.workspaceId && session.workspaceId !== state.filters.workspaceId) return false;
     if (state.filters.link === "linked" && !session.linkedTaskId) return false;
     if (state.filters.link === "orphan" && session.linkedTaskId) return false;

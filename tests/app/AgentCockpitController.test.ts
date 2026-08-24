@@ -83,7 +83,7 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
-  it("loads provider evidence once at startup and refreshes again only when explicitly requested", async () => {
+  it("classifies a new surface once without reading terminal output on later global refreshes", async () => {
     let snapshotCalls = 0;
     let notificationCalls = 0;
     let previewCalls = 0;
@@ -129,13 +129,14 @@ describe("AgentCockpitController connection failures", () => {
     const controller = new AgentCockpitController(app, plugin, async () => new CmuxClient(transport));
 
     await controller.initialize();
+    await controller.waitForBackgroundWork();
     expect({ snapshotCalls, notificationCalls }).toEqual({ snapshotCalls: 1, notificationCalls: 1 });
     expect(previewCalls).toBe(1);
     expect(controller.store.getState().sessions[0]?.provider.provider).toBe("codex");
 
     await controller.refreshNow();
     expect({ snapshotCalls, notificationCalls }).toEqual({ snapshotCalls: 2, notificationCalls: 2 });
-    expect(previewCalls).toBe(2);
+    expect(previewCalls).toBe(1);
     expect(controller.store.getState().sessions[0]?.provider.provider).toBe("codex");
     controller.dispose();
   });
@@ -182,12 +183,17 @@ describe("AgentCockpitController connection failures", () => {
     const controller = new AgentCockpitController(app, plugin, async () => new CmuxClient(transport));
 
     await controller.initialize();
+    await controller.waitForBackgroundWork();
 
-    expect(requests).toEqual([
-      { lines: 60, maxBytes: 16 * 1024 },
-      { lines: 500, maxBytes: 64 * 1024 }
-    ]);
+    expect(requests).toEqual([{ lines: 500, maxBytes: 64 * 1024 }]);
     expect(controller.store.getState().sessions[0]?.provider.provider).toBe("codex");
+    expect(controller.store.getState().sessions[0]?.preview).toBeNull();
+
+    await controller.loadPreview(controller.store.getState().sessions[0]!);
+    expect(requests).toEqual([
+      { lines: 500, maxBytes: 64 * 1024 },
+      { lines: 60, maxBytes: 16 * 1024 }
+    ]);
     expect(controller.store.getState().sessions[0]?.preview?.text).toBe(shallowText);
     controller.dispose();
   });
@@ -243,6 +249,7 @@ describe("AgentCockpitController connection failures", () => {
     expect(controller.store.getState().connection.status).toBe("access-blocked");
 
     await controller.testConnection();
+    await controller.waitForBackgroundWork();
 
     expect(clientAttempts).toBe(2);
     expect(snapshotCalls).toBe(1);
@@ -253,6 +260,64 @@ describe("AgentCockpitController connection failures", () => {
     });
     expect(controller.store.getState().sessions).toHaveLength(1);
     expect(controller.store.getState().sessions[0]?.provider.provider).toBe("codex");
+    controller.dispose();
+  });
+
+  it("keeps topology connected and marks only notification health stale after a partial refresh failure", async () => {
+    let notificationFails = false;
+    let observedAt = 0;
+    const notification = {
+      id: "notice",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      title: "Review",
+      subtitle: "",
+      body: "Ready for review",
+      isRead: false
+    };
+    const transport: CmuxTransport = {
+      probe: async () => ({
+        binaryPath: "/cmux",
+        versionText: "cmux 0.62.2",
+        capabilities: {
+          version: 2,
+          protocol: "cmux-socket",
+          accessMode: "password",
+          methods: new Set()
+        },
+        latencyMs: 1
+      }),
+      snapshot: async () => snapshot(++observedAt),
+      notifications: async () => {
+        if (notificationFails) throw new Error("notification parser failed");
+        return [notification];
+      },
+      readPreview: async (target) => ({ ...target, text: "shell", observedAt, truncated: false }),
+      focusedTarget: async () => null,
+      focus: async () => undefined,
+      dispose: () => undefined
+    };
+    const app = { vault: { getMarkdownFiles: () => [] } } as unknown as App;
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(app, plugin, async () => new CmuxClient(transport));
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    notificationFails = true;
+    await controller.refreshNow();
+
+    expect(controller.store.getState()).toMatchObject({
+      connection: { status: "connected" },
+      notifications: [notification],
+      health: {
+        topology: { status: "fresh" },
+        notifications: { status: "stale" },
+        lifecycle: { status: "unavailable" }
+      }
+    });
     controller.dispose();
   });
 });

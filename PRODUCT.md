@@ -10,7 +10,7 @@ Agent Cockpit is for a developer operating many Claude Code and Codex CLI sessio
 
 ## Product Purpose
 
-Agent Cockpit makes Obsidian a visual control plane for existing cmux sessions. It observes runtime state, connects temporary sessions to durable work items, and offers narrow explicit actions without becoming a terminal host, agent platform, transcript store, or autonomous orchestrator.
+Agent Cockpit makes Obsidian a visual control plane for existing cmux sessions. It projects bounded evidence about surfaces and agents, connects temporary sessions to durable work items, and offers narrow explicit actions without becoming a terminal host, agent platform, transcript store, or autonomous orchestrator.
 
 Success means the user can launch Obsidian normally, open one native view, see what needs attention, understand the evidence behind each status, move between task workflow and live runtime context, and focus the exact existing cmux surface safely.
 

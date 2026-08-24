@@ -31,7 +31,14 @@ export function renderSessionCard(container: HTMLElement, options: SessionCardOp
   details.open = options.expanded;
   const summary = details.createEl("summary", { cls: "agent-cockpit-session-summary" });
   const stateIcon = summary.createSpan({ cls: "agent-cockpit-session-icon", attr: { "aria-hidden": "true" } });
-  setIcon(stateIcon, session.runtime.state === "error" ? "circle-alert" : session.runtime.state === "needs-input" ? "message-circle-question" : "terminal");
+  setIcon(
+    stateIcon,
+    session.assessment.executionPhase === "failed"
+      ? "circle-alert"
+      : session.assessment.executionPhase === "waiting"
+        ? "message-circle-question"
+        : "terminal"
+  );
 
   const identity = summary.createDiv({ cls: "agent-cockpit-session-identity" });
   const title = identity.createDiv({ cls: "agent-cockpit-session-title" });
@@ -51,13 +58,13 @@ export function renderSessionCard(container: HTMLElement, options: SessionCardOp
   }
 
   const trailing = summary.createDiv({ cls: "agent-cockpit-session-trailing" });
-  renderRuntimeBadge(trailing, session.runtime);
+  renderRuntimeBadge(trailing, session.assessment);
   trailing.createSpan({
     cls: "agent-cockpit-observed-time",
     text:
-      session.runtime.lastObservedChangeAt === null
+      session.assessment.lastActivityAt === null
         ? `seen ${formatRelativeTime(session.observedAt)}`
-        : `changed ${formatRelativeTime(session.runtime.lastObservedChangeAt)}`
+        : `activity ${formatRelativeTime(session.assessment.lastActivityAt)}`
   });
 
   const body = details.createDiv({ cls: "agent-cockpit-session-body" });
@@ -110,18 +117,22 @@ function renderSessionDetail(container: HTMLElement, options: SessionCardOptions
   }
 
   const evidence = grid.createDiv({ cls: "agent-cockpit-evidence-section" });
-  evidence.createEl("h4", { text: "Runtime evidence" });
+  evidence.createEl("h4", { text: "Session evidence" });
   const evidenceList = evidence.createEl("dl", { cls: "agent-cockpit-metadata-list" });
-  addDefinition(evidenceList, "State", session.runtime.state);
-  addDefinition(evidenceList, "Source", session.runtime.evidence.source);
-  addDefinition(evidenceList, "Confidence", session.runtime.evidence.confidence);
-  addDefinition(evidenceList, "Why", session.runtime.evidence.explanation);
+  addDefinition(evidenceList, "Surface", session.assessment.surfacePresence);
+  addDefinition(evidenceList, "Agent", session.assessment.agentPresence);
+  addDefinition(evidenceList, "Execution phase", session.assessment.executionPhase);
+  addDefinition(evidenceList, "Recent activity", session.assessment.activity);
+  addDefinition(evidenceList, "Coverage", session.assessment.coverage);
+  addDefinition(evidenceList, "Source", session.assessment.source);
+  addDefinition(evidenceList, "Confidence", session.assessment.confidence);
+  addDefinition(evidenceList, "Why", session.assessment.explanation);
   addDefinition(
     evidenceList,
-    "Last observed change",
-    session.runtime.lastObservedChangeAt === null
+    "Last observed activity",
+    session.assessment.lastActivityAt === null
       ? "Not established in this plugin run"
-      : new Date(session.runtime.lastObservedChangeAt).toLocaleString()
+      : new Date(session.assessment.lastActivityAt).toLocaleString()
   );
   addDefinition(evidenceList, "Provider", `${providerLabel(session.provider.provider)} (${session.provider.confidence})`);
   addDefinition(evidenceList, "Repository / CWD", session.currentDirectory ?? "Unknown");

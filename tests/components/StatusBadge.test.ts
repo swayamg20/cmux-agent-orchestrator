@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { runtimeLabel } from "../../src/components/StatusBadge";
+import { phaseLabel } from "../../src/components/StatusBadge";
 
-describe("runtimeLabel", () => {
-  it("labels runtime state explicitly instead of showing an ambiguous bare value", () => {
-    expect(runtimeLabel("unknown")).toBe("Runtime: Unknown");
-    expect(runtimeLabel("needs-input")).toBe("Runtime: Needs input");
-    expect(runtimeLabel("running")).toBe("Runtime: Running");
+describe("phaseLabel", () => {
+  it("labels execution evidence without pretending topology is runtime state", () => {
+    expect(phaseLabel("unknown")).toBe("State unknown");
+    expect(phaseLabel("waiting")).toBe("Needs input");
+    expect(phaseLabel("working")).toBe("Working");
   });
 });

@@ -48,14 +48,13 @@ export function selectSessionInbox(
 }
 
 function inboxPriority(session: LiveSession, attentionSeverity: ReadonlyMap<string, number>): number {
-  const runtimePriority: Record<LiveSession["runtime"]["state"], number> = {
-    error: 60,
-    "needs-input": 50,
-    exited: 40,
-    running: 30,
-    idle: 20,
+  const phasePriority: Record<LiveSession["assessment"]["executionPhase"], number> = {
+    failed: 60,
+    waiting: 50,
+    "turn-finished": 40,
+    working: 30,
     unknown: 10
   };
   const unread = session.notifications.some((notification) => !notification.isRead) ? 80 : 0;
-  return (attentionSeverity.get(session.key) ?? 0) * 100 + unread + runtimePriority[session.runtime.state];
+  return (attentionSeverity.get(session.key) ?? 0) * 100 + unread + phasePriority[session.assessment.executionPhase];
 }

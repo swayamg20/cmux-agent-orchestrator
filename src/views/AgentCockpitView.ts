@@ -23,6 +23,12 @@ export class AgentCockpitView extends ItemView {
   private activeSection: CockpitSection = "work";
   private pendingFocusKey: string | null = null;
   private showAllInbox = false;
+  private headerSlot: HTMLElement | null = null;
+  private connectionSlot: HTMLElement | null = null;
+  private tabsSlot: HTMLElement | null = null;
+  private panelSlot: HTMLElement | null = null;
+  private queuedState: Readonly<CockpitState> | null = null;
+  private animationFrame: number | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -46,28 +52,72 @@ export class AgentCockpitView extends ItemView {
 
   protected override async onOpen(): Promise<void> {
     this.contentEl.addClass("agent-cockpit-view-content");
-    this.unsubscribe = this.controller.store.subscribe((state) => this.render(state));
+    this.buildStableShell();
+    this.unsubscribe = this.controller.store.subscribe((state) => this.scheduleRender(state));
   }
 
   protected override async onClose(): Promise<void> {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    if (this.animationFrame !== null) {
+      this.contentEl.ownerDocument.defaultView?.cancelAnimationFrame(this.animationFrame);
+      this.animationFrame = null;
+    }
+    this.queuedState = null;
     this.contentEl.empty();
+  }
+
+  private buildStableShell(): void {
+    this.contentEl.empty();
+    const root = this.contentEl.createDiv({ cls: "agent-cockpit" });
+    this.headerSlot = root.createDiv({ cls: "agent-cockpit-stable-slot" });
+    this.connectionSlot = root.createDiv({ cls: "agent-cockpit-stable-slot" });
+    this.tabsSlot = root.createDiv({ cls: "agent-cockpit-stable-slot" });
+    this.panelSlot = root.createDiv({ cls: "agent-cockpit-stable-slot agent-cockpit-panel-slot" });
+  }
+
+  private scheduleRender(state: Readonly<CockpitState>): void {
+    this.queuedState = state;
+    if (this.animationFrame !== null) return;
+    const view = this.contentEl.ownerDocument.defaultView;
+    if (!view) {
+      queueMicrotask(() => {
+        const pending = this.queuedState;
+        this.queuedState = null;
+        if (pending) this.render(pending);
+      });
+      return;
+    }
+    this.animationFrame = view.requestAnimationFrame(() => {
+      this.animationFrame = null;
+      const pending = this.queuedState;
+      this.queuedState = null;
+      if (pending) this.render(pending);
+    });
   }
 
   private render(state: Readonly<CockpitState>): void {
     const active = this.contentEl.ownerDocument.activeElement as HTMLElement | null;
     const focusKey = this.pendingFocusKey ?? active?.dataset.focusKey ?? null;
     this.pendingFocusKey = null;
-    this.contentEl.empty();
-    const root = this.contentEl.createDiv({ cls: "agent-cockpit" });
-    renderHeader(root, state, this.controller);
-    renderCmuxConnectionPanel(root, state.connection, state.refreshing, {
+    if (!this.headerSlot || !this.connectionSlot || !this.tabsSlot || !this.panelSlot) {
+      this.buildStableShell();
+    }
+    const headerSlot = this.headerSlot!;
+    const connectionSlot = this.connectionSlot!;
+    const tabsSlot = this.tabsSlot!;
+    const panelSlot = this.panelSlot!;
+    headerSlot.empty();
+    connectionSlot.empty();
+    tabsSlot.empty();
+    panelSlot.empty();
+    renderHeader(headerSlot, state, this.controller);
+    renderCmuxConnectionPanel(connectionSlot, state.connection, state.refreshing, {
       retry: () => void this.controller.testConnection(),
       copySetupSteps: () => void this.controller.copyCmuxSetupSteps()
     });
-    this.renderSectionTabs(root, state);
-    const panel = this.renderSectionPanels(root);
+    this.renderSectionTabs(tabsSlot, state);
+    const panel = this.renderSectionPanels(panelSlot);
     const sessionActions = this.sessionActions();
     if (this.activeSection === "work") {
       renderNeedsAttentionPanel(panel, state, this.expanded, {
@@ -84,7 +134,7 @@ export class AgentCockpitView extends ItemView {
         ...sessionActions,
         setShowAll: (showAll) => {
           this.showAllInbox = showAll;
-          this.render(this.controller.store.getState());
+          this.scheduleRender(this.controller.store.getState());
         }
       });
     } else {
@@ -204,7 +254,7 @@ export class AgentCockpitView extends ItemView {
   private activateSection(section: CockpitSection): void {
     this.activeSection = section;
     this.pendingFocusKey = `mode-${section}`;
-    this.render(this.controller.store.getState());
+    this.scheduleRender(this.controller.store.getState());
   }
 }
 

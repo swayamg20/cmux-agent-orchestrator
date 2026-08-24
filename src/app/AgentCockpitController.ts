@@ -1,52 +1,53 @@
 import { Notice, type App, type Plugin } from "obsidian";
-import { AgentDetector } from "../agents/AgentDetector";
 import { FocusSessionAction } from "../actions/FocusSessionAction";
 import { validateBinarySetting, validateBindingIdentity } from "../actions/validators";
+import { AgentDetector } from "../agents/AgentDetector";
+import { ProviderClassifier } from "../agents/ProviderClassifier";
 import { BindingRepository } from "../bindings/BindingRepository";
-import type { BindingRecord } from "../bindings/types";
 import { CMUX_SETUP_CLIPBOARD_TEXT } from "../cmux/accessSetup";
 import { CmuxClient } from "../cmux/CmuxClient";
-import { CmuxError, type CmuxPreview, type CmuxSurface } from "../cmux/types";
-import { CreateTaskModal, TaskPickerModal } from "../components/TaskModals";
-import { AttentionEngine } from "../runtime/AttentionEngine";
-import { PreviewScheduler } from "../runtime/PreviewScheduler";
-import { RuntimeStateEngine } from "../runtime/RuntimeStateEngine";
-import { buildLiveSessions } from "../runtime/types";
 import {
-  parseSettings,
-  type AgentCockpitSettings
-} from "../settings/AgentCockpitSettings";
+  CmuxError,
+  type CmuxNotification,
+  type CmuxSnapshot
+} from "../cmux/types";
+import { CreateTaskModal, TaskPickerModal } from "../components/TaskModals";
+import { CmuxEvidenceService } from "../evidence/CmuxEvidenceService";
+import { AttentionEngine } from "../runtime/AttentionEngine";
+import { PreviewCache } from "../runtime/PreviewCache";
+import { PreviewScheduler } from "../runtime/PreviewScheduler";
+import { projectLiveSessions } from "../runtime/SessionProjection";
+import { parseSettings, type AgentCockpitSettings } from "../settings/AgentCockpitSettings";
 import { CockpitStore } from "../state/CockpitStore";
 import type {
+  ConnectionState,
   LiveSession,
-  ProviderDetection,
-  SessionFilters
+  SessionFilters,
+  SourceHealth
 } from "../state/types";
 import type { CreateTaskOptions } from "../tasks/TaskRepository";
 import { TaskRepository } from "../tasks/TaskRepository";
 import type { TaskRecord, WorkflowStatus } from "../tasks/TaskSchema";
+import { RefreshCoordinator, type RefreshResult } from "./RefreshCoordinator";
 
 export type CmuxClientFactory = (explicitBinaryPath: string) => Promise<CmuxClient>;
-
-const PROVIDER_EVIDENCE_LINES = 500;
-const PROVIDER_EVIDENCE_MAX_BYTES = 64 * 1024;
 
 export class AgentCockpitController {
   readonly store = new CockpitStore();
 
   private readonly bindings: BindingRepository;
   private readonly detector = new AgentDetector();
-  private readonly runtimeEngine = new RuntimeStateEngine();
   private readonly attentionEngine = new AttentionEngine();
   private readonly previewScheduler = new PreviewScheduler(2);
-  private readonly previews = new Map<string, CmuxPreview>();
-  private readonly providerEvidence = new Map<string, ProviderDetection>();
+  private readonly previewCache = new PreviewCache();
+  private readonly providerClassifier = new ProviderClassifier(this.detector, this.previewScheduler);
+  private readonly evidence = new CmuxEvidenceService(this.detector);
+  private readonly refreshCoordinator = new RefreshCoordinator();
+  private classificationWork: Promise<void> = Promise.resolve();
   private client: CmuxClient | null = null;
   private focusAction: FocusSessionAction | null = null;
   private taskRepository: TaskRepository | null = null;
   private settings: AgentCockpitSettings | null = null;
-  private topologyRefresh: Promise<void> | null = null;
-  private notificationRefresh: Promise<void> | null = null;
   private disposed = false;
 
   constructor(
@@ -63,20 +64,11 @@ export class AgentCockpitController {
     this.taskRepository = new TaskRepository(this.app, this.settings.taskFolder);
     this.store.update({
       tasks: this.taskRepository.list(),
-      bindings: this.bindings.list()
+      bindings: this.bindings.list(),
+      runs: this.bindings.listRuns()
     });
     await this.connect();
-    if (this.client !== null) {
-      this.store.update({ refreshing: true });
-      try {
-        await this.refreshSnapshot();
-        if (this.store.getState().connection.status === "connected") {
-          await this.refreshSessionEvidence();
-        }
-      } finally {
-        this.store.update({ refreshing: false });
-      }
-    }
+    if (this.client !== null) await this.refreshNow();
   }
 
   async refreshNow(): Promise<void> {
@@ -84,132 +76,48 @@ export class AgentCockpitController {
     this.store.update({ refreshing: true });
     try {
       if (this.client === null) await this.connect();
-      if (this.client === null) return;
-      await this.refreshSnapshot();
-      if (this.store.getState().connection.status === "connected") {
-        await this.refreshSessionEvidence();
-      }
+      const client = this.client;
+      if (client === null) return;
+      const result = await this.refreshCoordinator.refresh({
+        topology: (signal) => client.snapshot(signal),
+        notifications: (signal) => client.notifications(signal)
+      });
+      this.applyRefreshResult(result);
+      if (result.current && result.snapshot !== null) this.scheduleProviderClassification();
     } catch (error) {
       this.handleError(error);
     } finally {
-      this.store.update({ refreshing: false });
+      if (!this.disposed) this.store.update({ refreshing: false });
     }
   }
 
-  private async refreshSnapshot(): Promise<void> {
-    await Promise.all([this.refreshTopology(), this.refreshNotifications()]);
-  }
-
-  private async refreshSessionEvidence(): Promise<void> {
-    const client = this.requireClient();
-    const settings = this.requireSettings();
-    const sessions = this.store.getState().sessions.filter((session) => session.surfaceType === "terminal");
-    for (const session of sessions) this.providerEvidence.delete(session.key);
-    const results = await Promise.allSettled(
-      sessions.map((session) =>
-        this.previewScheduler
-          .schedule(session.key, () =>
-            client.readPreview(session, {
-              lines: settings.previewLines,
-              maxBytes: settings.previewMaxBytes
-            })
-          )
-          .then((preview) => ({ key: session.key, preview }))
-      )
-    );
-    if (this.disposed) return;
-    for (const result of results) {
-      if (result.status === "fulfilled") this.previews.set(result.value.key, result.value.preview);
-    }
-    this.recomputeSessions();
-    const unresolved = this.store
-      .getState()
-      .sessions.filter(
-        (session) => session.surfaceType === "terminal" && session.provider.provider === "unknown"
-      );
-    await this.refreshProviderEvidence(unresolved);
-  }
-
-  private async refreshProviderEvidence(sessions: readonly LiveSession[]): Promise<void> {
-    if (sessions.length === 0) return;
-    const client = this.requireClient();
-    for (const session of sessions) this.providerEvidence.delete(session.key);
-    const results = await Promise.allSettled(
-      sessions.map((session) =>
-        this.previewScheduler
-          .schedule(`provider:${session.key}`, () =>
-            client.readPreview(session, {
-              lines: PROVIDER_EVIDENCE_LINES,
-              maxBytes: PROVIDER_EVIDENCE_MAX_BYTES
-            })
-          )
-          .then((preview) => ({ session, preview }))
-      )
-    );
-    if (this.disposed) return;
-    for (const result of results) {
-      if (result.status !== "fulfilled") continue;
-      const detection = this.detector.detect(
-        surfaceForDetection(result.value.session),
-        result.value.preview.text
-      );
-      if (detection.provider === "claude" || detection.provider === "codex") {
-        this.providerEvidence.set(result.value.session.key, detection);
-      }
-    }
-    this.recomputeSessions();
-  }
-
-  refreshTopology(signal?: AbortSignal): Promise<void> {
-    if (this.topologyRefresh !== null) return this.topologyRefresh;
-    const refresh = this.performTopologyRefresh(signal).finally(() => {
-      if (this.topologyRefresh === refresh) this.topologyRefresh = null;
-    });
-    this.topologyRefresh = refresh;
-    return refresh;
-  }
-
-  private async performTopologyRefresh(signal?: AbortSignal): Promise<void> {
+  async refreshTopology(signal?: AbortSignal): Promise<void> {
     const client = this.client;
-    if (client === null) return;
+    if (client === null || this.disposed) return;
     try {
       const snapshot = await client.snapshot(signal);
-      this.store.update({
-        snapshot,
-        lastRefreshAt: snapshot.observedAt,
-        error: null,
-        connection: {
-          ...this.store.getState().connection,
-          status: "connected",
-          message: connectionMessage(this.store.getState().connection.accessMode),
-          checkedAt: snapshot.observedAt
-        }
-      });
-      this.recomputeSessions();
+      this.applyTopology(snapshot);
+      this.scheduleProviderClassification();
     } catch (error) {
-      this.handleError(error);
+      if (isAbort(error)) return;
+      this.applyTopologyFailure(error);
     }
   }
 
-  refreshNotifications(signal?: AbortSignal): Promise<void> {
-    if (this.notificationRefresh !== null) return this.notificationRefresh;
-    const refresh = this.performNotificationRefresh(signal).finally(() => {
-      if (this.notificationRefresh === refresh) this.notificationRefresh = null;
-    });
-    this.notificationRefresh = refresh;
-    return refresh;
-  }
-
-  private async performNotificationRefresh(signal?: AbortSignal): Promise<void> {
+  async refreshNotifications(signal?: AbortSignal): Promise<void> {
     const client = this.client;
-    if (client === null) return;
+    if (client === null || this.disposed) return;
     try {
       const notifications = await client.notifications(signal);
-      this.store.update({ notifications });
-      this.recomputeSessions();
+      this.applyNotifications(notifications);
     } catch (error) {
-      this.handleError(error);
+      if (isAbort(error)) return;
+      this.applyNotificationFailure(error);
     }
+  }
+
+  async waitForBackgroundWork(): Promise<void> {
+    await this.classificationWork;
   }
 
   async loadPreview(session: LiveSession): Promise<void> {
@@ -222,15 +130,14 @@ export class AgentCockpitController {
           maxBytes: settings.previewMaxBytes
         })
       );
-      this.providerEvidence.delete(session.key);
-      this.previews.set(session.key, preview);
-      this.recomputeSessions();
-      const refreshed = this.store
-        .getState()
-        .sessions.find((candidate) => candidate.key === session.key);
-      if (refreshed?.provider.provider === "unknown") {
-        await this.refreshProviderEvidence([refreshed]);
+      if (this.disposed) return;
+      this.previewCache.set(session.key, preview);
+      this.evidence.recordPreview(session.key, preview);
+      const detection = this.providerClassifier.detect(session, preview.text);
+      if (detection.provider === "claude" || detection.provider === "codex") {
+        this.evidence.recordProvider(session.key, detection, preview.observedAt);
       }
+      this.recomputeSessions();
     } catch (error) {
       this.handleError(error, false);
       new Notice(readableError(error));
@@ -244,7 +151,7 @@ export class AgentCockpitController {
       new Notice(
         result.verified
           ? `Focused ${result.target.workspaceTitle} / ${result.target.surfaceTitle} in cmux.`
-          : "cmux accepted the focus command, but Agent Cockpit could not verify the selected surface."
+          : "cmux accepted the focus command, but the selected surface could not be verified within the bounded retry window."
       );
     } catch (error) {
       this.handleError(error, false);
@@ -270,26 +177,23 @@ export class AgentCockpitController {
     try {
       validateBindingIdentity(task.taskId, session);
       this.requireTaskRepository().findById(task.taskId);
-      const existingBinding = this.bindings.findBySurface(session.surfaceId);
-      const binding: BindingRecord = {
+      const attachedAt = new Date().toISOString();
+      const result = await this.bindings.attach({
         taskId: task.taskId,
         workspaceId: session.workspaceId,
         paneId: session.paneId,
         surfaceId: session.surfaceId,
         provider: session.provider.provider,
         providerSessionId: session.provider.sessionId,
-        attachedAt: new Date().toISOString()
-      };
-      await this.bindings.attach(binding);
-      this.store.update({ bindings: this.bindings.list() });
-      if (existingBinding?.taskId !== task.taskId) {
+        attachedAt
+      });
+      this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
+      if (result.isNewRun) {
         try {
           const runCount = await this.requireTaskRepository().incrementRunCount(task);
           this.store.update((state) => ({
             tasks: state.tasks.map((candidate) =>
-              candidate.taskId === task.taskId
-                ? { ...candidate, runCount, updatedAt: new Date().toISOString() }
-                : candidate
+              candidate.taskId === task.taskId ? { ...candidate, runCount, updatedAt: attachedAt } : candidate
             )
           }));
         } catch (error) {
@@ -306,9 +210,9 @@ export class AgentCockpitController {
 
   async detachTask(session: LiveSession): Promise<void> {
     await this.bindings.detach(session.surfaceId);
-    this.store.update({ bindings: this.bindings.list() });
+    this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
     this.recomputeSessions();
-    new Notice("Detached the session. The task note was not changed.");
+    new Notice("Detached the session. The task note and run history were not deleted.");
   }
 
   async createTask(options: CreateTaskOptions, session: LiveSession | null = null): Promise<TaskRecord> {
@@ -362,7 +266,7 @@ export class AgentCockpitController {
       surfaceTitle: session.surfaceTitle,
       repository: session.currentDirectory,
       provider: session.provider,
-      runtime: session.runtime,
+      assessment: session.assessment,
       linkedTaskId: session.linkedTaskId
     };
     try {
@@ -388,6 +292,7 @@ export class AgentCockpitController {
     this.settings = parsed;
     this.requireTaskRepository().setTaskFolder(parsed.taskFolder);
     if (current.cmuxBinaryPath !== parsed.cmuxBinaryPath) {
+      this.refreshCoordinator.dispose();
       this.client?.dispose();
       this.client = null;
       this.focusAction = null;
@@ -398,12 +303,12 @@ export class AgentCockpitController {
 
   async testConnection(): Promise<void> {
     if (this.disposed || this.store.getState().refreshing) return;
+    this.refreshCoordinator.dispose();
     this.client?.dispose();
     this.client = null;
     this.focusAction = null;
     await this.refreshNow();
-    const connection = this.store.getState().connection;
-    new Notice(connection.message);
+    new Notice(this.store.getState().connection.message);
   }
 
   async copyCmuxSetupSteps(): Promise<void> {
@@ -417,13 +322,14 @@ export class AgentCockpitController {
 
   dispose(): void {
     this.disposed = true;
+    this.refreshCoordinator.dispose();
     this.previewScheduler.dispose();
     this.client?.dispose();
     this.client = null;
-    this.runtimeEngine.clear();
     this.attentionEngine.clear();
-    this.previews.clear();
-    this.providerEvidence.clear();
+    this.previewCache.clear();
+    this.evidence.clear();
+    this.providerClassifier.clear();
     this.store.clear();
   }
 
@@ -442,17 +348,27 @@ export class AgentCockpitController {
       this.client = await this.createClient(this.requireSettings().cmuxBinaryPath);
       const probe = await this.client.probe();
       this.focusAction = new FocusSessionAction(this.client);
-      this.store.update({
+      const checkedAt = Date.now();
+      this.store.update((state) => ({
         connection: {
           status: "connected",
           message: connectionMessage(probe.capabilities.accessMode),
           versionText: probe.versionText,
           accessMode: probe.capabilities.accessMode,
           binaryPath: probe.binaryPath,
-          checkedAt: Date.now()
+          checkedAt
+        },
+        health: {
+          ...state.health,
+          lifecycle: {
+            status: "unavailable",
+            checkedAt,
+            lastSuccessAt: null,
+            message: "cmux 0.62.2 exposes topology and notifications, but no structured agent lifecycle stream."
+          }
         },
         error: null
-      });
+      }));
     } catch (error) {
       this.client?.dispose();
       this.client = null;
@@ -461,60 +377,135 @@ export class AgentCockpitController {
     }
   }
 
+  private applyRefreshResult(result: RefreshResult): void {
+    if (!result.current || this.disposed) return;
+    this.store.batch(() => {
+      if (result.snapshot !== null) this.applyTopology(result.snapshot);
+      else if (result.topologyError !== null) this.applyTopologyFailure(result.topologyError);
+      if (result.notifications !== null) this.applyNotifications(result.notifications);
+      else if (result.notificationError !== null) this.applyNotificationFailure(result.notificationError);
+    });
+  }
+
+  private applyTopology(snapshot: CmuxSnapshot): void {
+    const checkedAt = snapshot.observedAt;
+    this.store.update((state) => ({
+      snapshot,
+      lastRefreshAt: checkedAt,
+      connection: {
+        ...state.connection,
+        status: "connected",
+        message: connectionMessage(state.connection.accessMode),
+        checkedAt
+      },
+      health: {
+        ...state.health,
+        topology: freshHealth(checkedAt, "cmux topology loaded.")
+      },
+      error: null
+    }));
+    this.recomputeSessions();
+  }
+
+  private applyNotifications(notifications: CmuxNotification[]): void {
+    const checkedAt = Date.now();
+    this.store.update((state) => ({
+      notifications,
+      health: {
+        ...state.health,
+        notifications: freshHealth(checkedAt, "cmux notifications loaded.")
+      },
+      error: null
+    }));
+    this.recomputeSessions();
+  }
+
+  private applyTopologyFailure(error: unknown): void {
+    const checkedAt = Date.now();
+    const message = readableError(error);
+    this.store.update((state) => ({
+      connection: connectionAfterError(state.connection, error, checkedAt),
+      health: {
+        ...state.health,
+        topology: failedHealth(state.health.topology, checkedAt, message, state.snapshot !== null)
+      },
+      error: message
+    }));
+  }
+
+  private applyNotificationFailure(error: unknown): void {
+    const checkedAt = Date.now();
+    const message = readableError(error);
+    this.store.update((state) => ({
+      health: {
+        ...state.health,
+        notifications: failedHealth(
+          state.health.notifications,
+          checkedAt,
+          message,
+          state.health.notifications.lastSuccessAt !== null
+        )
+      },
+      error: `Notifications unavailable: ${message}`
+    }));
+  }
+
   private recomputeSessions(): void {
     const state = this.store.getState();
     if (state.snapshot === null) {
-      this.providerEvidence.clear();
       this.store.update({ sessions: [], attention: [] });
       return;
     }
-    const sessions = buildLiveSessions({
+    this.syncCurrentEvidence(state.snapshot, state.notifications);
+    const sessions = projectLiveSessions({
       snapshot: state.snapshot,
       notifications: state.notifications,
       bindings: state.bindings,
-      previews: this.previews,
       detector: this.detector,
-      runtimeEngine: this.runtimeEngine,
-      staleAfterMs: this.requireSettings().staleAfterMs
-    }).map((session) => {
-      const evidence = this.providerEvidence.get(session.key);
-      return session.provider.provider === "unknown" && evidence !== undefined
-        ? { ...session, provider: evidence }
-        : session;
+      providerEvidence: this.providerClassifier.evidence,
+      previewFor: (key) => this.previewCache.peek(key),
+      evidenceFor: (key) => this.evidence.list(key)
     });
-    const liveKeys = new Set(sessions.map((session) => session.key));
-    for (const key of this.previews.keys()) {
-      if (!liveKeys.has(key)) this.previews.delete(key);
-    }
-    for (const key of this.providerEvidence.keys()) {
-      if (!liveKeys.has(key)) this.providerEvidence.delete(key);
-    }
     const attention = this.attentionEngine.build(sessions, state.tasks, state.bindings, Date.now());
     this.store.update({ sessions, attention });
   }
 
+  private syncCurrentEvidence(snapshot: CmuxSnapshot, notifications: readonly CmuxNotification[]): void {
+    const notificationObservedAt =
+      this.store.getState().health.notifications.lastSuccessAt ?? snapshot.observedAt;
+    const liveKeys = this.evidence.sync(snapshot, notifications, notificationObservedAt);
+    this.previewCache.retain(liveKeys);
+    this.providerClassifier.retain(liveKeys);
+  }
+
+  private scheduleProviderClassification(): void {
+    if (this.disposed || this.client === null) return;
+    const classification = this.providerClassifier.classifyNew(this.store.getState().sessions, this.client);
+    if (classification === null) return;
+    const work = classification.then((observations) => {
+      if (this.disposed) return;
+      this.store.batch(() => {
+        for (const observation of observations) {
+          this.evidence.recordProvider(observation.key, observation.detection, observation.observedAt);
+        }
+        this.recomputeSessions();
+      });
+    });
+    this.classificationWork = Promise.all([this.classificationWork.catch(() => undefined), work]).then(() => undefined);
+  }
+
   private handleError(error: unknown, connectionFailure = true): void {
-    if (error instanceof CmuxError && error.code === "aborted") return;
+    if (isAbort(error)) return;
     const message = readableError(error);
     if (!connectionFailure) {
       this.store.update({ error: message });
       return;
     }
-    const status =
-      error instanceof CmuxError && error.code === "access-blocked"
-        ? "access-blocked"
-        : error instanceof CmuxError && error.code === "cmux-not-running"
-          ? "disconnected"
-          : "error";
-    this.store.update({
-      connection: {
-        ...this.store.getState().connection,
-        status,
-        message,
-        checkedAt: Date.now()
-      },
+    const checkedAt = Date.now();
+    this.store.update((state) => ({
+      connection: connectionAfterError(state.connection, error, checkedAt),
       error: message
-    });
+    }));
   }
 
   private requireClient(): CmuxClient {
@@ -533,22 +524,40 @@ export class AgentCockpitController {
   }
 }
 
-function surfaceForDetection(session: LiveSession): CmuxSurface {
+function freshHealth(checkedAt: number, message: string): SourceHealth {
+  return { status: "fresh", checkedAt, lastSuccessAt: checkedAt, message };
+}
+
+function failedHealth(
+  previous: SourceHealth,
+  checkedAt: number,
+  message: string,
+  hasUsableData: boolean
+): SourceHealth {
   return {
-    id: session.surfaceId,
-    paneId: session.paneId,
-    index: session.surfaceIndex,
-    indexInPane: session.surfaceIndex,
-    title: session.surfaceTitle,
-    type: session.surfaceType,
-    selected: false,
-    focused: false,
-    active: false
+    status: hasUsableData ? "stale" : "unavailable",
+    checkedAt,
+    lastSuccessAt: previous.lastSuccessAt,
+    message
   };
+}
+
+function connectionAfterError(connection: ConnectionState, error: unknown, checkedAt: number): ConnectionState {
+  const status =
+    error instanceof CmuxError && error.code === "access-blocked"
+      ? "access-blocked"
+      : error instanceof CmuxError && error.code === "cmux-not-running"
+        ? "disconnected"
+        : "error";
+  return { ...connection, status, message: readableError(error), checkedAt };
 }
 
 function readableError(error: unknown): string {
   return error instanceof Error ? error.message : "An unknown Agent Cockpit error occurred.";
+}
+
+function isAbort(error: unknown): boolean {
+  return error instanceof CmuxError && error.code === "aborted";
 }
 
 function connectionMessage(accessMode: string | null): string {
@@ -556,9 +565,7 @@ function connectionMessage(accessMode: string | null): string {
     return "Connected through cmux process-only access. Complete the one-time access setup before relying on normal Finder, Dock, or Spotlight launches.";
   }
   if (accessMode === "automation") return "Connected through cmux Automation mode.";
-  if (accessMode === "password") {
-    return "Connected through cmux Password mode. The socket password remains owned by cmux.";
-  }
+  if (accessMode === "password") return "Connected through cmux Password mode. The socket password remains owned by cmux.";
   if (accessMode === "allowAll") {
     return "Connected through cmux Full open access. Switch to Password or Automation mode to restrict local access.";
   }

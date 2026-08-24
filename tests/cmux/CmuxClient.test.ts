@@ -92,6 +92,30 @@ describe("CmuxClient focus safety", () => {
 
     await expect(client.focusExact(target)).resolves.toMatchObject({ verified: true });
   });
+
+  it("retries focused-target verification for a bounded window when cmux selection propagation lags", async () => {
+    const snapshot = decodeTree(await fixture("tree.json"), 1);
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "55555555-5555-4555-8555-555555555555"
+    };
+    const transport = fakeTransport([snapshot, snapshot], []);
+    let calls = 0;
+    transport.focusedTarget = async () => {
+      calls += 1;
+      return calls === 1
+        ? {
+            workspaceId: target.workspaceId,
+            paneId: target.paneId,
+            surfaceId: "44444444-4444-4444-8444-444444444444"
+          }
+        : target;
+    };
+    const result = await new CmuxClient(transport).focusExact(target);
+    expect(result.verified).toBe(true);
+    expect(calls).toBe(2);
+  });
 });
 
 function fakeTransport(

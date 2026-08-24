@@ -15,6 +15,15 @@ export class AttentionEngine {
   ): AttentionItem[] {
     const items = new Map<string, AttentionItem>();
     const taskById = new Map(tasks.map((task) => [task.taskId, task]));
+    const sessionByTarget = new Map(
+      sessions.map((session) => [`${session.workspaceId}:${session.surfaceId}`, session] as const)
+    );
+    const firstSessionByTask = new Map<string, LiveSession>();
+    for (const session of sessions) {
+      if (session.linkedTaskId && !firstSessionByTask.has(session.linkedTaskId)) {
+        firstSessionByTask.set(session.linkedTaskId, session);
+      }
+    }
 
     const add = (key: string, session: LiveSession | null, task: TaskRecord | null, reason: AttentionReason): void => {
       const item = items.get(key) ?? { key, session, task, reasons: [], severity: 0 };
@@ -26,28 +35,32 @@ export class AttentionEngine {
     for (const session of sessions) {
       const task = session.linkedTaskId ? taskById.get(session.linkedTaskId) ?? null : null;
       const firstSeen = this.seenAt(session.key, now);
-      if (session.runtime.state === "error") {
+      if (session.assessment.executionPhase === "failed") {
         add(session.key, session, task, {
           kind: "runtime-error",
           label: "Error reported",
-          detail: session.runtime.evidence.explanation,
+          detail: session.assessment.explanation,
           severity: 4,
-          confidence: session.runtime.evidence.confidence,
+          confidence: session.assessment.confidence,
           firstObservedAt: firstSeen
         });
-      } else if (session.runtime.state === "needs-input") {
+      } else if (session.assessment.executionPhase === "waiting") {
         add(session.key, session, task, {
           kind: "needs-input",
           label: "Input may be required",
-          detail: session.runtime.evidence.explanation,
+          detail: session.assessment.explanation,
           severity: 4,
-          confidence: session.runtime.evidence.confidence,
+          confidence: session.assessment.confidence,
           firstObservedAt: firstSeen
         });
       }
 
       const unread = session.notifications.filter((notification) => !notification.isRead);
-      if (unread.length > 0 && session.runtime.state !== "error" && session.runtime.state !== "needs-input") {
+      if (
+        unread.length > 0 &&
+        session.assessment.executionPhase !== "failed" &&
+        session.assessment.executionPhase !== "waiting"
+      ) {
         const review = unread.some((notification) =>
           REVIEW_PATTERN.test(`${notification.title}\n${notification.subtitle}\n${notification.body}`)
         );
@@ -60,22 +73,10 @@ export class AttentionEngine {
           firstObservedAt: firstSeen
         });
       }
-      if (session.runtime.state === "idle" && session.runtime.lastObservedChangeAt !== null) {
-        add(session.key, session, task, {
-          kind: "stale",
-          label: "Session appears stale",
-          detail: "No terminal preview change has been observed during the configured stale window.",
-          severity: 1,
-          confidence: "low",
-          firstObservedAt: firstSeen
-        });
-      }
     }
 
     for (const binding of bindings) {
-      const exists = sessions.some(
-        (session) => session.workspaceId === binding.workspaceId && session.surfaceId === binding.surfaceId
-      );
+      const exists = sessionByTarget.has(`${binding.workspaceId}:${binding.surfaceId}`);
       if (exists) continue;
       const key = `missing:${binding.workspaceId}:${binding.surfaceId}`;
       add(key, null, taskById.get(binding.taskId) ?? null, {
@@ -89,7 +90,7 @@ export class AttentionEngine {
     }
 
     for (const task of tasks.filter((candidate) => candidate.workflowStatus === "review")) {
-      const session = sessions.find((candidate) => candidate.linkedTaskId === task.taskId) ?? null;
+      const session = firstSessionByTask.get(task.taskId) ?? null;
       const key = session?.key ?? `task:${task.taskId}`;
       add(key, session, task, {
         kind: "review-ready",

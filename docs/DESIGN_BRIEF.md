@@ -26,7 +26,7 @@ The header establishes connection health and refresh without dominating. A compa
 ## Key states
 
 - Connecting, connected, access blocked, cmux closed, malformed response, and stale snapshot.
-- Empty attention queue, unread notification, input suspected, error suspected, review suggested, linked surface missing, and stale observation.
+- Empty attention queue, unread notification, input suspected, error suspected, review suggested, linked surface missing, and partial source failure.
 - Empty task folder, task creation, linked and orphan sessions, stale binding, and every workflow column.
 - Preview idle, loading, loaded, truncated, timed out, and unavailable.
 - Focus resolving, succeeded, stale target, ambiguous target, command failure, and unverifiable postcondition.
@@ -37,7 +37,7 @@ The three modes use an accessible tablist with explicit hover, focus, selected, 
 
 ## Content requirements
 
-Use honest labels such as `Last observed change`, `Last visible input`, `Runtime evidence`, `Unknown`, and `Access blocked`. Do not use `Done` for runtime state or imply that unchanged output proves completion.
+Use honest labels such as `Last observed activity`, `Last visible input`, `Session evidence`, `State unknown`, and `Access blocked`. Do not use `Done` for agent execution or imply that unchanged output proves completion.
 
 ## Visual probe decision
 
