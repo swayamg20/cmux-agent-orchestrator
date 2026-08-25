@@ -10,8 +10,8 @@ export interface RefreshResult {
   current: boolean;
   snapshot: CmuxSnapshot | null;
   notifications: CmuxNotification[] | null;
-  topologyError: unknown | null;
-  notificationError: unknown | null;
+  topologyError: unknown;
+  notificationError: unknown;
 }
 
 export class RefreshCoordinator {

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import type { Plugin } from "obsidian";
+import { PRODUCT_NAME } from "../identity";
 import { isCanonicalUuid } from "../security/identifiers";
 import { parseSettings, type AgentCockpitSettings } from "../settings/AgentCockpitSettings";
 import type {
@@ -11,6 +12,7 @@ import type {
   NewBindingRecord,
   RunRelation
 } from "./types";
+import { loadLegacyPluginData } from "./LegacyDataImporter";
 
 const MAX_MACHINES = 100;
 const MAX_BINDINGS_PER_MACHINE = 5_000;
@@ -135,10 +137,21 @@ export class BindingRepository {
   private data: PersistedPluginData | null = null;
   private saveChain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly plugin: Plugin) {}
+  constructor(
+    private readonly plugin: Plugin,
+    private readonly loadLegacyData: () => Promise<unknown> = () => loadLegacyPluginData(plugin)
+  ) {}
 
   async load(): Promise<void> {
-    const loaded: unknown = await this.plugin.loadData();
+    let loaded: unknown = await this.plugin.loadData();
+    let importedLegacyData = false;
+    if (!hasPersistedPluginData(loaded)) {
+      const legacyData = await this.loadLegacyData();
+      if (hasPersistedPluginData(legacyData)) {
+        loaded = legacyData;
+        importedLegacyData = true;
+      }
+    }
     const raw = typeof loaded === "object" && loaded !== null ? (loaded as Record<string, unknown>) : {};
     const rawMachines =
       typeof raw.machines === "object" && raw.machines !== null
@@ -155,6 +168,7 @@ export class BindingRepository {
       settings: parseSettings(raw.settings),
       machines
     };
+    if (importedLegacyData) await this.plugin.saveData(structuredClone(this.data));
   }
 
   getSettings(): AgentCockpitSettings {
@@ -199,7 +213,7 @@ export class BindingRepository {
         (input.providerSessionId === null || reusableRun.providerSessionId === input.providerSessionId);
       const isNewRun = !isSameProviderSession;
       if (isNewRun && machine.runs.length >= MAX_RUNS_PER_MACHINE) {
-        throw new Error("This machine has reached the Agent Cockpit run-history limit.");
+        throw new Error(`This machine has reached the ${PRODUCT_NAME} run-history limit.`);
       }
       const latestTaskRun = machine.runs
         .filter((run) => run.taskId === input.taskId)
@@ -223,7 +237,7 @@ export class BindingRepository {
       };
       const replacing = machine.bindings.some((candidate) => candidate.surfaceId === binding.surfaceId);
       if (!replacing && machine.bindings.length >= MAX_BINDINGS_PER_MACHINE) {
-        throw new Error("This machine has reached the Agent Cockpit binding limit.");
+        throw new Error(`This machine has reached the ${PRODUCT_NAME} binding limit.`);
       }
       machine.bindings = machine.bindings.filter((candidate) => candidate.surfaceId !== binding.surfaceId);
       machine.bindings.push(binding);
@@ -231,7 +245,7 @@ export class BindingRepository {
       machine.runs.push(run);
       result = { binding: { ...binding }, run: { ...run }, isNewRun };
     });
-    if (result === null) throw new Error("Agent Cockpit could not persist the session attachment.");
+    if (result === null) throw new Error(`${PRODUCT_NAME} could not persist the session attachment.`);
     return result;
   }
 
@@ -267,6 +281,11 @@ export class BindingRepository {
     this.saveChain = operation;
     return operation;
   }
+}
+
+function hasPersistedPluginData(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  return "schemaVersion" in value || "settings" in value || "machines" in value;
 }
 
 function inferRelation(latest: AgentRunRecord | null, input: NewBindingRecord): RunRelation {

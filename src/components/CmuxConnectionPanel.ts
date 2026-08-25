@@ -3,6 +3,7 @@ import {
   CMUX_PASSWORD_SETUP_STEPS,
   cmuxConnectionGuidance
 } from "../cmux/accessSetup";
+import { PRODUCT_NAME } from "../identity";
 import type { ConnectionState } from "../state/types";
 
 export interface CmuxConnectionPanelActions {
@@ -47,7 +48,7 @@ function renderSetup(
     text:
       connection.status === "connected"
         ? "Finish setup for normal Obsidian launches"
-        : "Connect Agent Cockpit to cmux",
+        : `Connect ${PRODUCT_NAME}`,
     attr: { id: "agent-cockpit-connection-heading" }
   });
   body.createEl("p", {
@@ -61,13 +62,13 @@ function renderSetup(
   for (const step of CMUX_PASSWORD_SETUP_STEPS) steps.createEl("li", { text: step });
   body.createEl("p", {
     cls: "agent-cockpit-security-note",
-    text: "The password remains in cmux's own Application Support storage. Agent Cockpit never reads, receives, logs, or stores it."
+    text: `The password remains in cmux's own application support storage. ${PRODUCT_NAME} never reads, receives, logs, or stores it.`
   });
 
   const alternative = body.createEl("details", { cls: "agent-cockpit-setup-alternative" });
   alternative.createEl("summary", { text: "Automation mode alternative" });
   alternative.createEl("p", {
-    text: "Automation mode also supports normal launches, but it permits external clients running as your macOS user without a password. Never select Full open access."
+    text: "Automation mode also supports normal launches, but it permits external clients running as your macOS user without a password. Never select full open access."
   });
   alternative.createEl("p", {
     text: "If testing remains blocked after changing the mode, cmux may still be enforcing its previous listener policy. Restart cmux only when doing so will not disrupt active sessions."
@@ -81,11 +82,11 @@ function renderUnsafeMode(
   actions: CmuxConnectionPanelActions
 ): void {
   body.createEl("h2", {
-    text: "cmux Full open access is enabled",
+    text: "cmux full open access is enabled",
     attr: { id: "agent-cockpit-connection-heading" }
   });
   body.createEl("p", {
-    text: "Agent Cockpit is connected, but this cmux mode permits unauthenticated local access. Switch cmux to Password mode, or Automation mode if that matches your threat model."
+    text: `${PRODUCT_NAME} is connected, but this cmux mode permits unauthenticated local access. Switch cmux to password mode, or automation mode if that matches your threat model.`
   });
   renderActions(body, refreshing, actions, true);
 }

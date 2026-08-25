@@ -1,4 +1,4 @@
-# Agent Cockpit
+# cmux Agent Orchestrator
 
 ## Register
 
@@ -6,11 +6,11 @@ product
 
 ## Users
 
-Agent Cockpit is for a developer operating many Claude Code and Codex CLI sessions inside cmux while using Obsidian as the durable place for tasks, decisions, and outcomes. The user is frequently context-switching and needs to identify the small number of sessions that require human judgment without losing the larger task history.
+cmux Agent Orchestrator is for a developer operating many Claude Code and Codex CLI sessions inside cmux while using Obsidian as the durable place for tasks, decisions, and outcomes. The user is frequently context-switching and needs to identify the small number of sessions that require human judgment without losing the larger task history.
 
 ## Product Purpose
 
-Agent Cockpit makes Obsidian a visual control plane for existing cmux sessions. It projects bounded evidence about surfaces and agents, connects temporary sessions to durable work items, and offers narrow explicit actions without becoming a terminal host, agent platform, transcript store, or autonomous orchestrator.
+cmux Agent Orchestrator makes Obsidian a human-in-the-loop orchestration layer for existing cmux sessions. It projects bounded evidence about surfaces and agents, connects temporary executions to durable work items, and offers narrow explicit actions without becoming a terminal host, provider runtime, transcript store, or autonomous agent scheduler.
 
 Success means the user can launch Obsidian normally, open one native view, see what needs attention, understand the evidence behind each status, move between task workflow and live runtime context, and focus the exact existing cmux surface safely.
 

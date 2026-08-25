@@ -1,6 +1,6 @@
 # Security model
 
-Agent Cockpit deliberately exposes a smaller capability surface than the host applications it connects.
+cmux Agent Orchestrator deliberately exposes a smaller capability surface than the host applications it connects.
 
 ## Trust boundaries
 
@@ -8,7 +8,7 @@ Agent Cockpit deliberately exposes a smaller capability surface than the host ap
 - Only hard-coded cmux operations can cross the process boundary.
 - cmux, Claude Code, and Codex retain ownership of terminals and provider session data.
 - Plugin settings cannot contain a shell command. The optional binary setting must be an absolute executable path whose basename is `cmux`, and the executable must identify itself through `--version`.
-- Socket authentication remains owned by cmux. Agent Cockpit has no password field and never reads, receives, passes, logs, or persists the cmux Socket Password.
+- Socket authentication remains owned by cmux. cmux Agent Orchestrator has no password field and never reads, receives, passes, logs, or persists the cmux Socket Password.
 
 ## v0.1 process policy
 
@@ -16,7 +16,7 @@ Agent Cockpit deliberately exposes a smaller capability surface than the host ap
 
 No code path launches a shell, provider CLI, arbitrary executable, background daemon, or network request. No code path sends terminal input, clears notifications, closes a surface, or modifies cmux/provider hooks.
 
-When cmux blocks a normally launched Obsidian process, Agent Cockpit provides GUI setup instructions and a connection retry. It never edits cmux configuration, enables Full open access, or restarts cmux.
+When cmux blocks a normally launched Obsidian process, cmux Agent Orchestrator provides GUI setup instructions and a connection retry. It never edits cmux configuration, enables Full open access, or restarts cmux.
 
 ## Reporting a problem
 

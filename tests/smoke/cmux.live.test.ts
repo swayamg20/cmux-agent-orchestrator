@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { CmuxClient } from "../../src/cmux/CmuxClient";
 import { isCanonicalUuid } from "../../src/cmux/commandBuilders";
 
-const live = process.env.AGENT_COCKPIT_LIVE_CMUX === "1" ? describe : describe.skip;
+const liveRequested =
+  process.env.CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX === "1" ||
+  process.env.AGENT_COCKPIT_LIVE_CMUX === "1";
+const live = liveRequested ? describe : describe.skip;
 
 live("installed cmux read-only smoke", () => {
   it("probes, discovers canonical topology, reads notifications, and bounds one preview", async () => {

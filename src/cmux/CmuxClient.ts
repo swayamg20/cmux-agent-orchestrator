@@ -1,6 +1,8 @@
 import { access, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:fs";
+import { clearTimeout as cancelTimer, setTimeout as startTimer } from "node:timers";
+import { PRODUCT_NAME } from "../identity";
 import { CliCmuxTransport } from "./CliCmuxTransport";
 import type { CmuxTransport, PreviewRequest } from "./CmuxTransport";
 import {
@@ -67,7 +69,7 @@ export class CmuxClient {
     if (after.windows.length !== before.windows.length) {
       throw new CmuxError(
         "process-failed",
-        "cmux window count changed unexpectedly during focus. Agent Cockpit will not attempt a cleanup."
+        `cmux window count changed unexpectedly during focus. ${PRODUCT_NAME} will not attempt a cleanup.`
       );
     }
     const selected = resolveTarget(after, target);
@@ -93,12 +95,12 @@ function sameTarget(left: CmuxTarget | null, right: CmuxTarget): boolean {
 function boundedDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(new CmuxError("aborted", "The cmux focus verification was cancelled."));
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
+    const timeout = startTimer(() => {
       signal?.removeEventListener("abort", onAbort);
       resolve();
     }, delayMs);
     const onAbort = (): void => {
-      clearTimeout(timeout);
+      cancelTimer(timeout);
       reject(new CmuxError("aborted", "The cmux focus verification was cancelled."));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
@@ -149,5 +151,5 @@ export async function discoverCmuxBinary(explicitBinaryPath = ""): Promise<strin
   if (explicitBinaryPath.trim()) {
     throw new CmuxError("binary-invalid", "The configured cmux path is not an executable file named cmux.");
   }
-  throw new CmuxError("binary-invalid", "Agent Cockpit could not find the cmux executable.");
+  throw new CmuxError("binary-invalid", `${PRODUCT_NAME} could not find the cmux executable.`);
 }

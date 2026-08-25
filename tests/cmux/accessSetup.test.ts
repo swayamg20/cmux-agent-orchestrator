@@ -35,10 +35,10 @@ describe("cmux connection onboarding", () => {
     expect(cmuxConnectionGuidance(connection("disconnected"))).toBe("unavailable");
   });
 
-  it("provides GUI-only setup steps without asking Agent Cockpit to handle a secret", () => {
+  it("provides GUI-only setup steps without asking the orchestrator to handle a secret", () => {
     expect(CMUX_SETUP_CLIPBOARD_TEXT).toContain("Settings");
     expect(CMUX_SETUP_CLIPBOARD_TEXT).toContain("Password mode");
-    expect(CMUX_SETUP_CLIPBOARD_TEXT).toContain("Agent Cockpit never receives it");
+    expect(CMUX_SETUP_CLIPBOARD_TEXT).toContain("cmux Agent Orchestrator never receives it");
     expect(CMUX_SETUP_CLIPBOARD_TEXT).not.toContain("cmux --password");
     expect(CMUX_SETUP_CLIPBOARD_TEXT).not.toContain("socketPassword");
   });

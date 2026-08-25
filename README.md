@@ -1,6 +1,6 @@
-# Agent Cockpit
+# cmux Agent Orchestrator
 
-Agent Cockpit is a desktop-only Obsidian community plugin for observing Claude Code, Codex CLI, and shell sessions that already run inside cmux. Obsidian is the visual control plane and durable task layer. cmux remains the terminal and process owner.
+cmux Agent Orchestrator is a desktop-only Obsidian community plugin for coordinating Claude Code and Codex CLI sessions that already run inside cmux. It is a human-in-the-loop orchestration layer: Obsidian owns durable work context, cmux remains the terminal and process owner, and each provider retains its own session state.
 
 The repository currently targets Obsidian 1.10.x and the installed cmux 0.62.2 command surface. It has no runtime npm dependencies, telemetry, hosted service, or external network requirement.
 
@@ -19,7 +19,7 @@ The repository currently targets Obsidian 1.10.x and the installed cmux 0.62.2 c
 - Clear cmux disconnected, blocked, malformed-output, timeout, and output-limit states.
 - One-time GUI onboarding for normal Finder, Dock, and Spotlight launches when cmux rejects external clients.
 
-Agent Cockpit does not host a PTY, resume providers, send terminal input, read complete transcripts, or decide that a task is complete.
+cmux Agent Orchestrator does not host a PTY, autonomously resume providers, send terminal input, read complete transcripts, or decide that a task is complete.
 
 ## Ownership boundary
 
@@ -27,7 +27,7 @@ Agent Cockpit does not host a PTY, resume providers, send terminal input, read c
 |---|---|
 | cmux | Workspaces, panes, terminal surfaces, process lifetime, and terminal interaction |
 | Claude Code and Codex | Provider conversation and session persistence |
-| Agent Cockpit | Runtime observations, task associations, workflow presentation, and narrow explicit actions |
+| cmux Agent Orchestrator | Runtime observations, task associations, human-directed coordination, and narrow explicit actions |
 | Markdown notes | Human-owned goals, criteria, context, decisions, run summaries, and outcomes |
 
 Agent evidence and workflow state are deliberately independent. A quiet, missing, errored, or ended session never moves a task to Done.
@@ -39,7 +39,7 @@ Detected, unlinked Claude and Codex runs appear automatically in the Agent runs 
 Requirements:
 
 - macOS
-- Node.js 22 or newer
+- Node.js 22.13 or newer
 - npm
 - Obsidian desktop 1.10 or newer
 - cmux 0.62.2 for the currently tested parser fixtures
@@ -49,11 +49,13 @@ npm install
 npm run check
 ```
 
-`npm run build` creates `main.js` in this repository. For a later manual Obsidian installation, copy `main.js`, `manifest.json`, and `styles.css` into a vault-local `.obsidian/plugins/agent-cockpit/` directory. This repository does not automatically write into a vault.
+`npm run build` creates `main.js` in this repository. For a manual Obsidian installation, copy `main.js`, `manifest.json`, and `styles.css` into a vault-local `.obsidian/plugins/cmux-agent-orchestrator/` directory. This repository does not automatically write into a vault.
+
+Maintainers should follow the complete [release procedure](docs/RELEASING.md), including the normal macOS launch and vault-local safety checks, before creating a tag.
 
 ## Storage
 
-Markdown task notes default to `Agent Cockpit/Tasks/` and contain durable fields only:
+Markdown task notes default to `Agent Cockpit/Tasks/` and contain durable fields only. The pre-release folder and frontmatter marker remain stable so existing task notes continue to load after the public rename:
 
 ```yaml
 ---
@@ -139,18 +141,22 @@ Sanitized fixtures under `tests/fixtures/cmux-0.62.2/` preserve the installed JS
 A read-only local smoke test is opt-in:
 
 ```bash
-AGENT_COCKPIT_LIVE_CMUX=1 npm test -- tests/smoke/cmux.live.test.ts
+CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX=1 npm test -- tests/smoke/cmux.live.test.ts
 ```
 
 It probes capabilities, reads topology and notifications, validates canonical UUIDs, and reads three lines from one selected terminal. It never focuses a surface or sends input.
 
 ## Normal-launch connection setup
 
-cmux defaults to `access_mode: cmuxOnly`, which authorizes only processes descended from cmux terminals. When a normally launched Obsidian process is rejected, Agent Cockpit presents an in-product setup panel instead of requiring Obsidian to be started from a terminal.
+cmux defaults to `access_mode: cmuxOnly`, which authorizes only processes descended from cmux terminals. When a normally launched Obsidian process is rejected, cmux Agent Orchestrator presents an in-product setup panel instead of requiring Obsidian to be started from a terminal.
 
-The recommended setup is cmux Settings → Automation → Socket Control Mode → Password mode, with the Socket Password set inside cmux. The cmux CLI consumes its own saved password; Agent Cockpit never reads, receives, passes, logs, or persists it. Automation mode is supported as a broader same-macOS-user alternative. Full open access is never recommended.
+The recommended setup is cmux Settings → Automation → Socket Control Mode → Password mode, with the Socket Password set inside cmux. The cmux CLI consumes its own saved password; cmux Agent Orchestrator never reads, receives, passes, logs, or persists it. Automation mode is supported as a broader same-macOS-user alternative. Full open access is never recommended.
 
-The setup panel can retest the connection and then load the complete cockpit. Agent Cockpit does not change cmux settings, restart the listener or app, install hooks, or introduce a relay daemon. If the installed cmux build retains its previous socket policy, the UI explains that cmux may need a user-controlled restart after active sessions are safe.
+The setup panel can retest the connection and then load the complete orchestrator. cmux Agent Orchestrator does not change cmux settings, restart the listener or app, install hooks, or introduce a relay daemon. If the installed cmux build retains its previous socket policy, the UI explains that cmux may need a user-controlled restart after active sessions are safe.
+
+## System access and privacy
+
+The plugin accesses one resource outside the Obsidian vault: the local `cmux` executable and the running cmux instance it connects to. That access is required to discover workspaces, panes, terminal surfaces, notifications, and bounded terminal previews, and to focus an exact surface after an explicit click. It does not read Claude or Codex session files, make network requests, collect telemetry, or transmit vault and terminal data.
 
 ## Security limits
 
@@ -186,4 +192,12 @@ tests/
 
 ## Still requiring manual verification
 
-Repository-local tests cannot prove that Obsidian renders both themes, preserves hover/focus under every third-party theme, persists through an actual Obsidian reload, or transfers macOS focus to the intended cmux window. Those checks require the vault-local build and a controlled manual click. Password mode already supports normal Finder, Dock, and Spotlight launches without passing the socket password through Agent Cockpit. The final focus test should target a user-approved development surface and must not send input.
+Repository-local tests cannot prove that Obsidian renders both themes, preserves hover/focus under every third-party theme, persists through an actual Obsidian reload, or transfers macOS focus to the intended cmux window. Those checks require the vault-local build and a controlled manual click. Password mode already supports normal Finder, Dock, and Spotlight launches without passing the socket password through cmux Agent Orchestrator. The final focus test should target a user-approved development surface and must not send input.
+
+## Pre-release migration
+
+The public plugin ID is `cmux-agent-orchestrator`. On first load, it may copy valid bounded data from the former vault-local `agent-cockpit/data.json` into its own plugin folder when no current data exists. The importer never deletes or edits the legacy file, and current plugin data always wins.
+
+## License
+
+[MIT](LICENSE)

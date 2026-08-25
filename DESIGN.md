@@ -1,8 +1,8 @@
-# Agent Cockpit Design System
+# cmux Agent Orchestrator Design System
 
 ## Theme
 
-Agent Cockpit inherits the active Obsidian theme. It does not impose a light or dark theme and does not ship a branded palette. Surfaces, borders, text, controls, and focus treatment use Obsidian CSS variables.
+cmux Agent Orchestrator inherits the active Obsidian theme. It does not impose a light or dark theme and does not ship a branded palette. Surfaces, borders, text, controls, and focus treatment use Obsidian CSS variables.
 
 ## Color strategy
 

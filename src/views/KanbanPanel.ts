@@ -31,7 +31,7 @@ export function renderKanbanPanel(
     text: "Durable Markdown tasks. Moving a card changes workflow only—it never controls a live agent."
   });
   const create = heading.createEl("button", { text: "New task", attr: { type: "button" } });
-  create.addEventListener("click", actions.createTask);
+  create.addEventListener("click", () => actions.createTask());
 
   if (state.tasks.length === 0) {
     panel.createDiv({
@@ -68,8 +68,8 @@ export function renderKanbanPanel(
     for (const task of tasks) {
       const sessions = state.sessions.filter((candidate) => candidate.linkedTaskId === task.taskId);
       renderTaskCard(taskList, task, sessions, {
-        open: actions.openTask,
-        move: actions.moveTask
+        open: (selectedTask) => actions.openTask(selectedTask),
+        move: (selectedTask, nextStatus) => actions.moveTask(selectedTask, nextStatus)
       });
     }
   }

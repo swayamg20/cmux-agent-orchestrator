@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { clearTimeout as cancelTimer, setTimeout as startTimer } from "node:timers";
 
 const FORCE_KILL_AFTER_MS = 250;
 
@@ -75,14 +76,14 @@ export class SafeProcessRunner {
         failureReason ??= reason;
         if (!isRunning(child)) return;
         child.kill("SIGTERM");
-        forceKillTimer ??= setTimeout(() => {
+        forceKillTimer ??= startTimer(() => {
           if (isRunning(child)) child.kill("SIGKILL");
         }, FORCE_KILL_AFTER_MS);
       };
       const abort = (): void => terminate("aborted");
       options.signal?.addEventListener("abort", abort, { once: true });
 
-      const timer = setTimeout(() => terminate("timeout"), options.timeoutMs);
+      const timer = startTimer(() => terminate("timeout"), options.timeoutMs);
       child.stdout?.on("data", (chunk: Buffer) => {
         stdoutBytes += chunk.byteLength;
         if (stdoutBytes > options.maxStdoutBytes) {
@@ -101,8 +102,8 @@ export class SafeProcessRunner {
       });
 
       const cleanup = (): void => {
-        clearTimeout(timer);
-        if (forceKillTimer !== null) clearTimeout(forceKillTimer);
+        cancelTimer(timer);
+        if (forceKillTimer !== null) cancelTimer(forceKillTimer);
         options.signal?.removeEventListener("abort", abort);
         this.children.delete(child);
       };
@@ -154,7 +155,7 @@ export class SafeProcessRunner {
     for (const child of this.children) {
       if (!isRunning(child)) continue;
       child.kill("SIGTERM");
-      const forceKillTimer = setTimeout(() => {
+      const forceKillTimer = startTimer(() => {
         if (isRunning(child)) child.kill("SIGKILL");
       }, FORCE_KILL_AFTER_MS);
       forceKillTimer.unref();

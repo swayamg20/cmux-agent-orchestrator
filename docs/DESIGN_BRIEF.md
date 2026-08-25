@@ -1,8 +1,8 @@
-# Agent Cockpit v0.1 Design Brief
+# cmux Agent Orchestrator v0.1 Design Brief
 
 ## Feature summary
 
-Agent Cockpit is a production-ready desktop Obsidian view for one developer supervising roughly two dozen Claude Code, Codex, and shell surfaces owned by cmux. It connects volatile runtime observations to durable task notes without hosting terminals or changing provider session ownership.
+cmux Agent Orchestrator is a production-ready desktop Obsidian view for one developer supervising roughly two dozen Claude Code, Codex, and shell surfaces owned by cmux. It connects volatile runtime observations to durable task notes without hosting terminals or changing provider session ownership.
 
 ## Primary user action
 

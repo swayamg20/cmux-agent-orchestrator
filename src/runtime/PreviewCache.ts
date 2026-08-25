@@ -65,10 +65,11 @@ export class PreviewCache {
 
   private prune(): void {
     while (this.entries.size > this.limits.entries || this.totalBytes > this.limits.bytes) {
-      const oldest = this.entries.entries().next().value as [string, CacheEntry] | undefined;
-      if (!oldest) return;
-      this.entries.delete(oldest[0]);
-      this.totalBytes -= oldest[1].bytes;
+      const oldest = this.entries.entries().next();
+      if (oldest.done) return;
+      const [key, entry] = oldest.value;
+      this.entries.delete(key);
+      this.totalBytes -= entry.bytes;
     }
   }
 }

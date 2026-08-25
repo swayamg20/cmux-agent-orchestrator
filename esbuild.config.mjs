@@ -1,4 +1,3 @@
-/* global process */
 import esbuild from "esbuild";
 import { builtinModules } from "node:module";
 
@@ -22,7 +21,7 @@ const external = [
 ];
 
 const options = {
-  banner: { js: "/* Agent Cockpit: generated bundle */" },
+  banner: { js: "/* cmux Agent Orchestrator: generated bundle */" },
   entryPoints: ["src/main.ts"],
   bundle: true,
   external,

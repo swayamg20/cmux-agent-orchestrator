@@ -31,7 +31,7 @@ export function renderSessionInbox(
     attr: { "aria-label": `${selection.total} untracked agent runs` }
   });
   title.createEl("p", {
-    text: "Detected automatically from cmux. Track a run to create an Active card without controlling the agent."
+    text: "Detected automatically from cmux. Track a run to create an active card without controlling the agent."
   });
 
   if (selection.total === 0) {

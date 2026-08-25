@@ -1,8 +1,21 @@
 {
-  "name": "obsidian-agent-cockpit",
+  "name": "obsidian-cmux-agent-orchestrator",
   "version": "0.1.0",
-  "description": "A task-centric Obsidian cockpit for agent sessions owned by cmux.",
+  "description": "A human-in-the-loop coding agent orchestrator for cmux inside Obsidian.",
+  "author": "Swayam Gupta",
+  "license": "MIT",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/swayamg20/cmux-agent-orchestrator.git"
+  },
+  "bugs": {
+    "url": "https://github.com/swayamg20/cmux-agent-orchestrator/issues"
+  },
+  "homepage": "https://github.com/swayamg20/cmux-agent-orchestrator#readme",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "type": "module",
   "main": "main.js",
   "scripts": {
@@ -11,13 +24,17 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
+    "validate:release": "node scripts/validate-release.mjs",
     "check": "npm run lint && npm run test && npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
     "@types/node": "^22.18.0",
     "esbuild": "^0.25.9",
-    "eslint": "^9.34.0",
+    "eslint": "^10.9.1",
+    "eslint-plugin-obsidianmd": "^0.4.2",
+    "globals": "^17.11.0",
+    "jiti": "^2.7.0",
     "obsidian": "1.10.3",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.41.0",

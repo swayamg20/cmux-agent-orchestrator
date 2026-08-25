@@ -13,6 +13,7 @@ import {
 } from "../cmux/types";
 import { CreateTaskModal, TaskPickerModal } from "../components/TaskModals";
 import { CmuxEvidenceService } from "../evidence/CmuxEvidenceService";
+import { PRODUCT_NAME } from "../identity";
 import { AttentionEngine } from "../runtime/AttentionEngine";
 import { PreviewCache } from "../runtime/PreviewCache";
 import { PreviewScheduler } from "../runtime/PreviewScheduler";
@@ -53,7 +54,8 @@ export class AgentCockpitController {
   constructor(
     private readonly app: App,
     private readonly plugin: Plugin,
-    private readonly createClient: CmuxClientFactory = CmuxClient.create
+    private readonly createClient: CmuxClientFactory = (explicitBinaryPath) =>
+      CmuxClient.create(explicitBinaryPath)
   ) {
     this.bindings = new BindingRepository(plugin);
   }
@@ -509,12 +511,12 @@ export class AgentCockpitController {
   }
 
   private requireClient(): CmuxClient {
-    if (this.client === null) throw new CmuxError("cmux-not-running", "Agent Cockpit is not connected to cmux.");
+    if (this.client === null) throw new CmuxError("cmux-not-running", `${PRODUCT_NAME} is not connected to cmux.`);
     return this.client;
   }
 
   private requireSettings(): AgentCockpitSettings {
-    if (this.settings === null) throw new Error("Agent Cockpit settings are not loaded.");
+    if (this.settings === null) throw new Error(`${PRODUCT_NAME} settings are not loaded.`);
     return this.settings;
   }
 
@@ -553,7 +555,7 @@ function connectionAfterError(connection: ConnectionState, error: unknown, check
 }
 
 function readableError(error: unknown): string {
-  return error instanceof Error ? error.message : "An unknown Agent Cockpit error occurred.";
+  return error instanceof Error ? error.message : `An unknown ${PRODUCT_NAME} error occurred.`;
 }
 
 function isAbort(error: unknown): boolean {

@@ -7,6 +7,7 @@ import {
   decodeWorkspaceDirectories
 } from "./decoders";
 import { ProcessExecutionError, SafeProcessRunner } from "./SafeProcessRunner";
+import { PRODUCT_NAME } from "../identity";
 import type { CmuxTransport, PreviewRequest } from "./CmuxTransport";
 import {
   CmuxError,
@@ -135,7 +136,7 @@ export class CliCmuxTransport implements CmuxTransport {
         throw new CmuxError("timeout", "cmux did not respond before the timeout.", error);
       }
       if (error.reason === "output-limit") {
-        throw new CmuxError("output-limit", "cmux returned more data than Agent Cockpit allows.", error);
+        throw new CmuxError("output-limit", `cmux returned more data than ${PRODUCT_NAME} allows.`, error);
       }
       if (error.reason === "aborted") {
         throw new CmuxError("aborted", "cmux request was cancelled.", error);

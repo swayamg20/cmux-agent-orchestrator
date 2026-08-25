@@ -5,7 +5,7 @@ import {
   parseSettings
 } from "../../src/settings/AgentCockpitSettings";
 
-describe("Agent Cockpit settings", () => {
+describe("cmux Agent Orchestrator settings", () => {
   it("accepts a normal vault-relative task folder", () => {
     expect(normalizeTaskFolder("Projects/Agent Tasks/")).toBe("Projects/Agent Tasks");
   });

@@ -11,7 +11,7 @@ export class TaskPickerModal extends SuggestModal<TaskRecord> {
   ) {
     super(app);
     this.setPlaceholder("Attach to a task...");
-    this.emptyStateText = "No Agent Cockpit tasks found";
+    this.emptyStateText = "No tracked tasks found";
   }
 
   override getSuggestions(query: string): TaskRecord[] {
@@ -57,12 +57,12 @@ export class CreateTaskModal extends Modal {
   }
 
   override onOpen(): void {
-    this.titleEl.setText(this.hasSession ? "Track run in work board" : "Create Agent Cockpit task");
+    this.titleEl.setText(this.hasSession ? "Track run in work board" : "Create coding task");
     this.contentEl.empty();
     if (this.hasSession) {
       this.contentEl.createEl("p", {
         cls: "agent-cockpit-modal-intro",
-        text: "This creates an Active Markdown task and attaches the exact cmux surface. It does not pause, resume, or message the agent."
+        text: "This creates an active Markdown task and attaches the exact cmux surface. It does not pause, resume, or message the agent."
       });
     }
     new Setting(this.contentEl).setName("Task title").addText((text) => {

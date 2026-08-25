@@ -1,9 +1,58 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Plugin } from "obsidian";
 
 import { BindingRepository } from "../../src/bindings/BindingRepository";
 
 describe("BindingRepository", () => {
+  it("imports legacy plugin data once when the renamed plugin has no data", async () => {
+    let saved: unknown;
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async (next: unknown) => {
+        saved = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const legacyData = {
+      schemaVersion: 1,
+      settings: { taskFolder: "Agent Cockpit/Tasks" },
+      machines: {
+        "00000000000000000000": {
+          bindings: [
+            {
+              taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              workspaceId: "22222222-2222-4222-8222-222222222222",
+              paneId: "33333333-3333-4333-8333-333333333333",
+              surfaceId: "44444444-4444-4444-8444-444444444444",
+              provider: "codex",
+              providerSessionId: null,
+              attachedAt: "2026-08-23T00:00:00.000Z"
+            }
+          ]
+        }
+      }
+    };
+    const repository = new BindingRepository(plugin, async () => legacyData);
+
+    await repository.load();
+
+    expect(repository.getSettings().taskFolder).toBe("Agent Cockpit/Tasks");
+    expect(saved).toMatchObject({ schemaVersion: 2 });
+  });
+
+  it("prefers current plugin data without consulting the legacy loader", async () => {
+    const loadLegacyData = vi.fn(async () => ({ settings: { taskFolder: "Legacy/Tasks" } }));
+    const plugin = {
+      loadData: async () => ({ schemaVersion: 2, settings: { taskFolder: "Current/Tasks" }, machines: {} }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin, loadLegacyData);
+
+    await repository.load();
+
+    expect(repository.getSettings().taskFolder).toBe("Current/Tasks");
+    expect(loadLegacyData).not.toHaveBeenCalled();
+  });
+
   it("persists validated machine-scoped bindings and reloads them", async () => {
     let data: unknown;
     const plugin = {
@@ -146,10 +195,9 @@ describe("BindingRepository", () => {
       machines: Record<string, { bindings: { bindingId: string; runId: string }[]; runs: { runId: string }[] }>;
     };
     expect(saved.schemaVersion).toBe(2);
-    expect(saved.machines["00000000000000000000"]?.bindings[0]).toMatchObject({
-      bindingId: expect.stringMatching(/^[0-9a-f-]{36}$/),
-      runId: expect.stringMatching(/^[0-9a-f-]{36}$/)
-    });
+    const savedBinding = saved.machines["00000000000000000000"]?.bindings[0];
+    expect(savedBinding?.bindingId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(savedBinding?.runId).toMatch(/^[0-9a-f-]{36}$/);
     expect(saved.machines["00000000000000000000"]?.runs).toHaveLength(1);
   });
 

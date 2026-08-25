@@ -1,5 +1,6 @@
 import { Notice, Plugin } from "obsidian";
 import { AgentCockpitController } from "./app/AgentCockpitController";
+import { PRODUCT_NAME } from "./identity";
 import { AgentCockpitSettingsTab } from "./settings/AgentCockpitSettingsTab";
 import { AGENT_COCKPIT_VIEW_TYPE, AgentCockpitView } from "./views/AgentCockpitView";
 
@@ -9,15 +10,15 @@ export default class AgentCockpitPlugin extends Plugin {
   override async onload(): Promise<void> {
     this.controller = new AgentCockpitController(this.app, this);
     this.registerView(AGENT_COCKPIT_VIEW_TYPE, (leaf) => new AgentCockpitView(leaf, this.requireController()));
-    this.addRibbonIcon("layout-dashboard", "Open Agent Cockpit", () => void this.activateView());
+    this.addRibbonIcon("layout-dashboard", `Open ${PRODUCT_NAME}`, () => void this.activateView());
     this.addCommand({
-      id: "open-agent-cockpit",
-      name: "Open Agent Cockpit",
+      id: "open",
+      name: "Open orchestrator",
       callback: () => void this.activateView()
     });
     this.addCommand({
-      id: "refresh-agent-cockpit",
-      name: "Refresh Agent Cockpit",
+      id: "refresh",
+      name: "Refresh orchestrator",
       callback: () => void this.requireController().refreshNow()
     });
     this.addSettingTab(new AgentCockpitSettingsTab(this.app, this, this.controller));
@@ -32,14 +33,13 @@ export default class AgentCockpitPlugin extends Plugin {
     try {
       await this.controller.initialize();
     } catch (error) {
-      new Notice(error instanceof Error ? error.message : "Agent Cockpit could not initialize.");
+      new Notice(error instanceof Error ? error.message : `${PRODUCT_NAME} could not initialize.`);
     }
   }
 
   override onunload(): void {
     this.controller?.dispose();
     this.controller = null;
-    this.app.workspace.detachLeavesOfType(AGENT_COCKPIT_VIEW_TYPE);
   }
 
   private async activateView(): Promise<void> {
@@ -52,7 +52,7 @@ export default class AgentCockpitPlugin extends Plugin {
   }
 
   private requireController(): AgentCockpitController {
-    if (this.controller === null) throw new Error("Agent Cockpit has been unloaded.");
+    if (this.controller === null) throw new Error(`${PRODUCT_NAME} has been unloaded.`);
     return this.controller;
   }
 }

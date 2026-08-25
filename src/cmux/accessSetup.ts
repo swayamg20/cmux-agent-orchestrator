@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "../identity";
 import type { ConnectionState } from "../state/types";
 
 export type CmuxConnectionGuidanceKind = "setup" | "unsafe" | "unavailable";
@@ -6,7 +7,7 @@ export const CMUX_PASSWORD_SETUP_STEPS = [
   "Open cmux and choose cmux → Settings… (⌘,).",
   "Open the Automation section.",
   "Set Socket Control Mode to Password mode.",
-  "Set a Socket Password inside cmux. Agent Cockpit never receives it.",
+  `Set a Socket Password inside cmux. ${PRODUCT_NAME} never receives it.`,
   "Return to Obsidian and select Test connection."
 ] as const;
 

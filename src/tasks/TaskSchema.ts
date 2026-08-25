@@ -21,7 +21,8 @@ export interface TaskRecord {
 }
 
 function oneOf<T extends readonly string[]>(value: unknown, values: T, fallback: T[number]): T[number] {
-  return typeof value === "string" && values.includes(value) ? (value as T[number]) : fallback;
+  if (typeof value !== "string") return fallback;
+  return values.find((candidate) => candidate === value) ?? fallback;
 }
 
 function optionalText(value: unknown, maxLength: number): string | null {
@@ -37,7 +38,7 @@ function dateText(value: unknown, fallback: number): string {
 }
 
 export function isWorkflowStatus(value: unknown): value is WorkflowStatus {
-  return typeof value === "string" && WORKFLOW_STATUSES.includes(value as WorkflowStatus);
+  return typeof value === "string" && WORKFLOW_STATUSES.some((candidate) => candidate === value);
 }
 
 export function parseTaskRecord(file: TFile, frontmatter: unknown): TaskRecord | null {

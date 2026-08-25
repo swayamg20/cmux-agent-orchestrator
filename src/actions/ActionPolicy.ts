@@ -1,4 +1,5 @@
 import type { CmuxTarget } from "../cmux/types";
+import { PRODUCT_NAME } from "../identity";
 import type { ConnectionState } from "../state/types";
 import { validateFocusTarget } from "./validators";
 
@@ -17,7 +18,7 @@ export type MvpAction = (typeof MVP_ACTIONS)[number];
 export class ActionPolicy {
   assertAllowed(action: string): asserts action is MvpAction {
     if (!(MVP_ACTIONS as readonly string[]).includes(action)) {
-      throw new Error(`Action is not allowed in Agent Cockpit v0.1: ${action}`);
+      throw new Error(`Action is not allowed in ${PRODUCT_NAME} v0.1: ${action}`);
     }
   }
 
@@ -25,8 +26,7 @@ export class ActionPolicy {
     this.assertAllowed("focus-session");
     validateFocusTarget(target);
     if (connection.status !== "connected") {
-      throw new Error("Agent Cockpit must have a live cmux connection before focusing a session.");
+      throw new Error(`${PRODUCT_NAME} must have a live cmux connection before focusing a session.`);
     }
   }
 }
-

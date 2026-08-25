@@ -1,5 +1,6 @@
 import { Notice, PluginSettingTab, Setting, type App, type Plugin } from "obsidian";
 import type { AgentCockpitController } from "../app/AgentCockpitController";
+import { PRODUCT_NAME } from "../identity";
 import type { AgentCockpitSettings } from "./AgentCockpitSettings";
 
 export class AgentCockpitSettingsTab extends PluginSettingTab {
@@ -13,7 +14,7 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
 
   display(): void {
     this.containerEl.empty();
-    this.containerEl.createEl("h2", { text: "Agent Cockpit" });
+    new Setting(this.containerEl).setName("Connection and storage").setHeading();
     const draft: AgentCockpitSettings = this.controller.getSettings();
     const connection = this.controller.store.getState().connection;
 
@@ -68,7 +69,7 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
           button.setDisabled(true);
           void this.controller
             .updateSettings(draft)
-            .then(() => new Notice("Agent Cockpit settings saved."))
+            .then(() => new Notice(`${PRODUCT_NAME} settings saved.`))
             .catch((error: unknown) => new Notice(error instanceof Error ? error.message : "Could not save settings."))
             .finally(() => button.setDisabled(false));
         })

@@ -3,6 +3,7 @@ import type { AgentCockpitController } from "../app/AgentCockpitController";
 import { renderCmuxConnectionPanel } from "../components/CmuxConnectionPanel";
 import type { SessionCardActions } from "../components/SessionCard";
 import { renderConnectionBadge } from "../components/StatusBadge";
+import { PRODUCT_NAME } from "../identity";
 import type { CockpitState } from "../state/types";
 import { renderKanbanPanel } from "./KanbanPanel";
 import { renderNeedsAttentionPanel } from "./NeedsAttentionPanel";
@@ -43,7 +44,7 @@ export class AgentCockpitView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Agent Cockpit";
+    return PRODUCT_NAME;
   }
 
   override getIcon(): string {
@@ -186,7 +187,7 @@ export class AgentCockpitView extends ItemView {
 
     const tabs = container.createDiv({
       cls: "agent-cockpit-mode-tabs",
-      attr: { role: "tablist", "aria-label": "Agent Cockpit sections" }
+      attr: { role: "tablist", "aria-label": `${PRODUCT_NAME} sections` }
     });
     for (const section of COCKPIT_SECTIONS) {
       const selected = section === this.activeSection;
@@ -247,7 +248,7 @@ export class AgentCockpitView extends ItemView {
       panel.hidden = !selected;
       if (selected) activePanel = panel;
     }
-    if (activePanel === null) throw new Error("Agent Cockpit could not resolve its active section.");
+    if (activePanel === null) throw new Error(`${PRODUCT_NAME} could not resolve its active section.`);
     return activePanel;
   }
 
@@ -266,7 +267,7 @@ function renderHeader(
   const header = container.createEl("header", { cls: "agent-cockpit-header" });
   const identity = header.createDiv({ cls: "agent-cockpit-heading-group" });
   const titleLine = identity.createDiv({ cls: "agent-cockpit-heading-line" });
-  titleLine.createEl("h1", { text: "Agent Cockpit" });
+  titleLine.createEl("h1", { text: PRODUCT_NAME });
   renderConnectionBadge(titleLine, state.connection);
   const actions = header.createDiv({ cls: "agent-cockpit-header-actions" });
   const create = actions.createEl("button", { attr: { type: "button", "aria-label": "Create task" } });
@@ -276,7 +277,7 @@ function renderHeader(
   const refresh = actions.createEl("button", {
     attr: {
       type: "button",
-      "aria-label": state.refreshing ? "Refreshing Agent Cockpit" : "Refresh Agent Cockpit",
+      "aria-label": state.refreshing ? `Refreshing ${PRODUCT_NAME}` : `Refresh ${PRODUCT_NAME}`,
       title: "Refresh topology, notifications, and bounded session evidence"
     }
   });
