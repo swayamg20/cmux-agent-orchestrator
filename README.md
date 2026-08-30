@@ -4,6 +4,10 @@ cmux Agent Orchestrator is a desktop-only Obsidian community plugin for coordina
 
 The repository currently targets Obsidian 1.10.x and the installed cmux 0.62.2 command surface. It has no runtime npm dependencies, telemetry, hosted service, or external network requirement.
 
+## Install
+
+Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](https://community.obsidian.md/plugins/cmux-agent-orchestrator), or [open it directly in Obsidian](obsidian://show-plugin?id=cmux-agent-orchestrator).
+
 ## Screenshots
 
 ### Work
