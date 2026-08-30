@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1] - 2026-08-31
+
+### Fixed
+
+- Remove the redundant platform name from the Community directory description.
+- Limit durable-task discovery to the configured task folder instead of enumerating the whole vault.
+- Replace partially supported and over-broad CSS overrides while preserving sticky navigation and reduced-motion behavior.
+
+### Security
+
+- Generate signed GitHub artifact provenance attestations for every release asset.
+
 ## [0.1.0] - 2026-08-25
 
 ### Added

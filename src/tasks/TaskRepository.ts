@@ -31,10 +31,7 @@ export class TaskRepository {
   }
 
   list(): TaskRecord[] {
-    const prefix = `${normalizePath(this.taskFolder)}/`;
-    const indexed = this.app.vault
-      .getMarkdownFiles()
-      .filter((file) => file.path.startsWith(prefix))
+    const indexed = this.taskFiles()
       .map((file) => parseTaskRecord(file, this.app.metadataCache.getFileCache(file)?.frontmatter))
       .filter((task): task is TaskRecord => task !== null);
     const byId = new Map(indexed.map((task) => [task.taskId, task]));
@@ -43,6 +40,21 @@ export class TaskRepository {
       else if (!byId.has(taskId)) byId.set(taskId, task);
     }
     return [...byId.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  private taskFiles(): TFile[] {
+    const root = this.app.vault.getAbstractFileByPath(normalizePath(this.taskFolder));
+    if (!(root instanceof TFolder)) return [];
+    const files: TFile[] = [];
+    const pending = [root];
+    while (pending.length > 0) {
+      const folder = pending.pop()!;
+      for (const child of folder.children) {
+        if (child instanceof TFolder) pending.push(child);
+        else if (child instanceof TFile && child.extension === "md") files.push(child);
+      }
+    }
+    return files;
   }
 
   findById(taskId: string): TaskRecord {

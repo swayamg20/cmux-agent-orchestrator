@@ -73,7 +73,7 @@ export class AgentCockpitView extends ItemView {
     const root = this.contentEl.createDiv({ cls: "agent-cockpit" });
     this.headerSlot = root.createDiv({ cls: "agent-cockpit-stable-slot" });
     this.connectionSlot = root.createDiv({ cls: "agent-cockpit-stable-slot" });
-    this.tabsSlot = root.createDiv({ cls: "agent-cockpit-stable-slot" });
+    this.tabsSlot = root.createDiv({ cls: "agent-cockpit-stable-slot agent-cockpit-tabs-slot" });
     this.panelSlot = root.createDiv({ cls: "agent-cockpit-stable-slot agent-cockpit-panel-slot" });
   }
 

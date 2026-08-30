@@ -1,9 +1,9 @@
 {
   "id": "cmux-agent-orchestrator",
   "name": "cmux Agent Orchestrator",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.10.0",
-  "description": "Coordinate Claude Code and Codex sessions running in cmux from Obsidian.",
+  "description": "Coordinate Claude Code and Codex sessions running in cmux.",
   "author": "Swayam Gupta",
   "authorUrl": "https://github.com/swayamg20",
   "isDesktopOnly": true

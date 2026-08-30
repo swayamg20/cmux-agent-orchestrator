@@ -72,6 +72,9 @@ export async function validateRelease(root, expectedTag = null) {
     if (description.length > 250 || !description.endsWith(".")) {
       errors.push("manifest.description must be at most 250 characters and end with a period.");
     }
+    if (/\bobsidian\b/i.test(description)) {
+      errors.push("manifest.description must not contain the redundant word Obsidian.");
+    }
     if (manifest.isDesktopOnly !== true) {
       errors.push("manifest.isDesktopOnly must be true because the plugin uses Node.js APIs.");
     }

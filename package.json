@@ -1,7 +1,7 @@
 {
   "name": "obsidian-cmux-agent-orchestrator",
-  "version": "0.1.0",
-  "description": "A human-in-the-loop coding agent orchestrator for cmux inside Obsidian.",
+  "version": "0.1.1",
+  "description": "A human-in-the-loop coding agent orchestrator for cmux.",
   "author": "Swayam Gupta",
   "license": "MIT",
   "private": true,

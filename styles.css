@@ -1,5 +1,5 @@
-.agent-cockpit-view-content {
-  padding: 0 !important;
+.workspace-leaf-content .view-content.agent-cockpit-view-content {
+  padding: 0;
   overflow: auto;
 }
 
@@ -18,7 +18,13 @@
 }
 
 .agent-cockpit-stable-slot {
-  display: contents;
+  min-width: 0;
+}
+
+.agent-cockpit-tabs-slot {
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 .agent-cockpit-source-health {
@@ -229,9 +235,6 @@
 }
 
 .agent-cockpit-mode-tabs {
-  position: sticky;
-  top: 0;
-  z-index: 10;
   display: flex;
   align-items: center;
   gap: var(--ac-space-1);
@@ -1106,12 +1109,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-cockpit *,
-  .agent-cockpit *::before,
-  .agent-cockpit *::after {
-    scroll-behavior: auto !important;
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+  .agent-cockpit.agent-cockpit *,
+  .agent-cockpit.agent-cockpit *::before,
+  .agent-cockpit.agent-cockpit *::after {
+    scroll-behavior: auto;
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+    transition-duration: 0.01ms;
   }
 }

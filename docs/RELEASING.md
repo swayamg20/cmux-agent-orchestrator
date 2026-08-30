@@ -17,7 +17,7 @@ Run from the repository root:
 npm ci
 npm run check
 CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX=1 npm test -- tests/smoke/cmux.live.test.ts
-npm run validate:release -- --tag 0.1.0
+npm run validate:release -- --tag 0.1.1
 ```
 
 The live smoke test is read-only. It resolves the current cmux topology, reads notifications, validates canonical UUIDs, and loads three bounded lines from one selected surface. It does not focus a surface or send terminal input.
@@ -45,6 +45,6 @@ Verify manually:
 
 ## 4. Publish
 
-Merge the verified release branch into the default branch. Create and push a tag matching the manifest version exactly, without a `v` prefix. The release workflow rebuilds, reruns checks, validates metadata, and uploads `main.js`, `manifest.json`, and `styles.css` to the GitHub release.
+Merge the verified release branch into the default branch. Create and push a tag matching the manifest version exactly, without a `v` prefix. The release workflow rebuilds, reruns checks, validates metadata, signs GitHub provenance attestations for `main.js`, `manifest.json`, and `styles.css`, and uploads those assets to the GitHub release.
 
 For the initial release, link the public GitHub repository in the Obsidian Community directory and run its preview scan before publishing the listing. Address errors and warnings with an incremented plugin version and a new GitHub release.

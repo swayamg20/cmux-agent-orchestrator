@@ -58,7 +58,7 @@ describe("AgentCockpitController connection failures", () => {
   it("preserves an initial access-blocked error during later manual refresh attempts", async () => {
     const app = {
       vault: {
-        getMarkdownFiles: () => []
+        getAbstractFileByPath: () => null
       }
     } as unknown as App;
     const plugin = {
@@ -119,7 +119,7 @@ describe("AgentCockpitController connection failures", () => {
     };
     const app = {
       vault: {
-        getMarkdownFiles: () => []
+        getAbstractFileByPath: () => null
       }
     } as unknown as App;
     const plugin = {
@@ -173,7 +173,7 @@ describe("AgentCockpitController connection failures", () => {
     };
     const app = {
       vault: {
-        getMarkdownFiles: () => []
+        getAbstractFileByPath: () => null
       }
     } as unknown as App;
     const plugin = {
@@ -230,7 +230,7 @@ describe("AgentCockpitController connection failures", () => {
     };
     const app = {
       vault: {
-        getMarkdownFiles: () => []
+        getAbstractFileByPath: () => null
       }
     } as unknown as App;
     const plugin = {
@@ -297,7 +297,7 @@ describe("AgentCockpitController connection failures", () => {
       focus: async () => undefined,
       dispose: () => undefined
     };
-    const app = { vault: { getMarkdownFiles: () => [] } } as unknown as App;
+    const app = { vault: { getAbstractFileByPath: () => null } } as unknown as App;
     const plugin = {
       loadData: async () => undefined,
       saveData: async () => undefined
