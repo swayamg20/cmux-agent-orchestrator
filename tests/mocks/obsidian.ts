@@ -4,6 +4,9 @@ export function normalizePath(value: string): string {
 
 export class Notice {}
 export class Modal {}
+export class PluginSettingTab {
+  constructor(..._args: unknown[]) {}
+}
 export class Setting {}
 export class SuggestModal {}
 export class TFile {}

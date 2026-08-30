@@ -1,4 +1,16 @@
-import { Modal, Setting, type App } from "obsidian";
+import { Modal, Setting, type App, type ButtonComponent } from "obsidian";
+
+interface DestructiveButtonCompatibility {
+  setDestructive?: () => unknown;
+  setWarning: () => unknown;
+}
+
+function markDestructive(button: ButtonComponent): ButtonComponent {
+  const compatible = button as unknown as DestructiveButtonCompatibility;
+  if (compatible.setDestructive) compatible.setDestructive();
+  else compatible.setWarning();
+  return button;
+}
 
 export interface ConfirmActionDetails {
   title: string;
@@ -25,8 +37,7 @@ export class ConfirmActionModal extends Modal {
     new Setting(this.contentEl)
       .addButton((button) => button.setButtonText("Cancel").onClick(() => this.close()))
       .addButton((button) =>
-        button
-          .setWarning()
+        markDestructive(button)
           .setButtonText(this.details.confirmLabel)
           .onClick(() => {
             this.close();
@@ -39,4 +50,3 @@ export class ConfirmActionModal extends Modal {
     this.contentEl.empty();
   }
 }
-

@@ -9,6 +9,8 @@ All notable changes to this project will be documented in this file.
 - Remove the redundant platform name from the Community directory description.
 - Limit durable-task discovery to the configured task folder instead of enumerating the whole vault.
 - Replace partially supported and over-broad CSS overrides while preserving sticky navigation and reduced-motion behavior.
+- Expose searchable settings through the 1.13 declarative settings API while retaining the legacy settings-tab fallback.
+- Replace the deprecated destructive-action button API with its current equivalent.
 
 ### Security
 
