@@ -4,6 +4,20 @@ cmux Agent Orchestrator is a desktop-only Obsidian community plugin for coordina
 
 The repository currently targets Obsidian 1.10.x and the installed cmux 0.62.2 command surface. It has no runtime npm dependencies, telemetry, hosted service, or external network requirement.
 
+## Screenshots
+
+### Work
+
+![Work view with attention signals and the durable task board](screenshots/work.png)
+
+### Agent runs
+
+![Detected Claude and Codex runs ready to track on the work board](screenshots/agent-runs.png)
+
+### cmux
+
+![Live cmux workspace, pane, and terminal-surface hierarchy](screenshots/cmux.png)
+
 ## What v0.1 provides
 
 - One native Obsidian `ItemView`, opened from the ribbon or command palette.
