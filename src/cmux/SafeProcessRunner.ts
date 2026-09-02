@@ -35,6 +35,7 @@ export interface ProcessRunOptions {
   maxStdoutBytes: number;
   maxStderrBytes: number;
   signal?: AbortSignal;
+  environment?: NodeJS.ProcessEnv;
 }
 
 export class SafeProcessRunner {
@@ -56,7 +57,7 @@ export class SafeProcessRunner {
     return new Promise<ProcessResult>((resolve, reject) => {
       const startedAt = Date.now();
       const child = spawn(executable, [...args], {
-        env: process.env,
+        env: options.environment ?? process.env,
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true

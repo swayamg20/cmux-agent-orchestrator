@@ -6,7 +6,7 @@ cmux Agent Orchestrator is a production-ready desktop Obsidian view for one deve
 
 ## Primary user action
 
-Recognize the session or task that needs human judgment and focus its exact existing cmux surface with one explicit action.
+Recognize the session or task that needs human judgment and focus its exact existing cmux surface with one explicit action. When several runs share a repository and cmux title, a provider conversation title should make each run distinguishable without changing provider state.
 
 ## Design direction
 
@@ -29,11 +29,12 @@ The header establishes connection health and refresh without dominating. A compa
 - Empty attention queue, unread notification, input suspected, error suspected, review suggested, linked surface missing, and partial source failure.
 - Empty task folder, task creation, linked and orphan sessions, stale binding, and every workflow column.
 - Preview idle, loading, loaded, truncated, timed out, and unavailable.
+- Conversation title resolving, automatically exact, unmatched with explicit cmux-title fallback, picker loading/empty, manual override, metadata unavailable, changed match, and duplicate assignment rejected.
 - Focus resolving, succeeded, stale target, ambiguous target, command failure, and unverifiable postcondition.
 
 ## Interaction model
 
-The three modes use an accessible tablist with explicit hover, focus, selected, Home/End, and arrow-key behavior. Rows expand inline inside the active mode. Preview loading is explicit or visibility-triggered and never global. Kanban supports drag-and-drop plus an accessible workflow selector. Focus re-resolves canonical UUIDs before invoking cmux. Task creation and attachment use native Obsidian modals and suggestions.
+The three modes use an accessible tablist with explicit hover, focus, selected, Home/End, and arrow-key behavior. Rows expand inline inside the active mode. Preview loading is explicit or visibility-triggered and never global. Kanban supports drag-and-drop plus an accessible workflow selector. Focus re-resolves canonical UUIDs before invoking cmux. Task creation, attachment, and manual provider-conversation overrides use native Obsidian modals and suggestions. A provider title replaces the primary cmux title only after the complete canonical surface tuple and exact provider session ID are automatically proven or manually associated.
 
 ## Content requirements
 

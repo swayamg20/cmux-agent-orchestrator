@@ -43,6 +43,7 @@ function session(
     observedAt: 1_000,
     notifications: [],
     linkedTaskId,
+    conversation: null,
     preview: null
   };
 }

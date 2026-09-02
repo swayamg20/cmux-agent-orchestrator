@@ -38,6 +38,10 @@ export const cmuxCommands = {
     return ["--json", "--id-format", "uuids", "list-notifications"];
   },
 
+  listAgents(): readonly string[] {
+    return ["--json", "--id-format", "uuids", "list-agents"];
+  },
+
   identifyFocused(): readonly string[] {
     return ["--json", "--id-format", "uuids", "identify", "--no-caller"];
   },

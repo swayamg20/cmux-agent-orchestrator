@@ -7,11 +7,13 @@ import {
   type CmuxSnapshot
 } from "../cmux/types";
 import type { ProviderDetection } from "../state/types";
+import type { AutomaticLifecycleObservation } from "../providers/identity/types";
 import { EvidenceLedger } from "./EvidenceLedger";
 import type {
   ActivityKind,
   NotificationSignal,
   ProviderDetectedEvidence,
+  LifecycleEvidence,
   ScreenObservedEvidence,
   SessionEvidence
 } from "./types";
@@ -82,6 +84,24 @@ export class CmuxEvidenceService {
     this.ledger.replaceSource(key, "provider-detection", [providerEvidenceRecord(key, detection, observedAt)]);
   }
 
+  recordLifecycle(
+    liveKeys: ReadonlySet<string>,
+    observations: readonly AutomaticLifecycleObservation[]
+  ): void {
+    const byKey = new Map<string, LifecycleEvidence[]>();
+    for (const observation of observations) {
+      const key = surfaceKey(observation);
+      if (!liveKeys.has(key)) continue;
+      const evidence = lifecycleEvidenceRecord(key, observation);
+      const list = byKey.get(key) ?? [];
+      list.push(evidence);
+      byKey.set(key, list);
+    }
+    for (const key of liveKeys) {
+      this.ledger.replaceSource(key, "provider-lifecycle", byKey.get(key) ?? []);
+    }
+  }
+
   recordPreview(sessionKey: string, preview: CmuxPreview): void {
     const fingerprint = createHash("sha256").update(preview.text).digest("hex");
     const previous = this.screenFingerprints.get(sessionKey);
@@ -113,6 +133,47 @@ export class CmuxEvidenceService {
   clear(): void {
     this.ledger.clear();
     this.screenFingerprints.clear();
+  }
+}
+
+function lifecycleEvidenceRecord(
+  key: string,
+  observation: AutomaticLifecycleObservation
+): LifecycleEvidence {
+  return {
+    id: `lifecycle:${key}:${observation.source}:${observation.observedAt}`,
+    kind: "lifecycle",
+    sessionKey: key,
+    source: "provider-lifecycle",
+    authority: "structured",
+    confidence:
+      observation.source === "hook" || observation.source === "socket" ? "high" : "medium",
+    observedAt: observation.observedAt,
+    occurredAt: observation.occurredAt,
+    summary: observation.explanation.slice(0, 256),
+    signal: lifecycleSignal(observation.state),
+    activity: "unknown",
+    provider: observation.provider,
+    providerSessionId: observation.providerSessionId
+  };
+}
+
+function lifecycleSignal(
+  state: AutomaticLifecycleObservation["state"]
+): LifecycleEvidence["signal"] {
+  switch (state) {
+    case "working":
+      return "activity-started";
+    case "blocked":
+      return "input-requested";
+    case "idle":
+      return "session-idle";
+    case "done":
+      return "turn-completed";
+    case "failed":
+      return "runtime-failed";
+    case "unknown":
+      return "session-started";
   }
 }
 

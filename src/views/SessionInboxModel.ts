@@ -53,6 +53,7 @@ function inboxPriority(session: LiveSession, attentionSeverity: ReadonlyMap<stri
     waiting: 50,
     "turn-finished": 40,
     working: 30,
+    idle: 20,
     unknown: 10
   };
   const unread = session.notifications.some((notification) => !notification.isRead) ? 80 : 0;

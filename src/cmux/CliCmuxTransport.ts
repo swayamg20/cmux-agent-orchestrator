@@ -1,6 +1,7 @@
 import { cmuxCommands } from "./commandBuilders";
 import {
   decodeCapabilities,
+  decodeAgents,
   decodeFocusedTarget,
   decodeNotifications,
   decodeTree,
@@ -11,6 +12,7 @@ import { PRODUCT_NAME } from "../identity";
 import type { CmuxTransport, PreviewRequest } from "./CmuxTransport";
 import {
   CmuxError,
+  type CmuxAgentRecord,
   type CmuxNotification,
   type CmuxPreview,
   type CmuxProbe,
@@ -87,6 +89,16 @@ export class CliCmuxTransport implements CmuxTransport {
   async notifications(signal?: AbortSignal): Promise<CmuxNotification[]> {
     const result = await this.run(cmuxCommands.listNotifications(), JSON_OUTPUT_LIMIT, signal);
     return decodeNotifications(result.stdout);
+  }
+
+  async agents(signal?: AbortSignal): Promise<CmuxAgentRecord[] | null> {
+    try {
+      const result = await this.run(cmuxCommands.listAgents(), JSON_OUTPUT_LIMIT, signal);
+      return decodeAgents(result.stdout);
+    } catch (error) {
+      if (isUnsupportedListAgents(error)) return null;
+      throw error;
+    }
   }
 
   async readPreview(target: CmuxTarget, request: PreviewRequest): Promise<CmuxPreview> {
@@ -177,6 +189,14 @@ export class CliCmuxTransport implements CmuxTransport {
       throw new CmuxError("process-failed", error.stderr.trim() || error.message, error);
     }
   }
+}
+
+function isUnsupportedListAgents(error: unknown): boolean {
+  if (!(error instanceof CmuxError) || !(error.originalError instanceof ProcessExecutionError)) {
+    return false;
+  }
+  const output = `${error.originalError.stderr}\n${error.originalError.stdout}`.toLowerCase();
+  return output.includes("unknown command: list-agents") || output.includes("unknown command 'list-agents'");
 }
 
 export function truncateUtf8(value: string, maxBytes: number): { text: string; truncated: boolean } {

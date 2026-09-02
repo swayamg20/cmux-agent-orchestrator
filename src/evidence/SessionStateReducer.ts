@@ -39,7 +39,7 @@ export function reduceSessionEvidence(evidence: readonly SessionEvidence[], now:
     confidence: "low",
     source: present || missing ? "cmux-topology" : "none",
     explanation: present
-      ? "The cmux surface exists. cmux 0.62.2 does not expose agent lifecycle state."
+      ? "The cmux surface exists, but no current structured lifecycle signal is available."
       : "No current cmux surface evidence is available.",
     updatedAt: now,
     lastActivityAt: changedScreen?.observedAt ?? null,
@@ -64,6 +64,7 @@ function applyLifecycle(assessment: SessionAssessment, evidence: LifecycleEviden
   assessment.agentPresence = evidence.signal === "session-ended" ? "ended" : "attached";
   if (evidence.signal === "runtime-failed") assessment.executionPhase = "failed";
   else if (evidence.signal === "input-requested") assessment.executionPhase = "waiting";
+  else if (evidence.signal === "session-idle") assessment.executionPhase = "idle";
   else if (evidence.signal === "turn-completed") assessment.executionPhase = "turn-finished";
   else if (evidence.signal === "turn-started" || evidence.signal === "activity-started") {
     assessment.executionPhase = "working";

@@ -86,7 +86,29 @@ class PasswordModeRunner extends SafeProcessRunner {
   }
 }
 
+class UnsupportedAgentCommandRunner extends SafeProcessRunner {
+  override async run(): Promise<ProcessResult> {
+    throw new ProcessExecutionError(
+      "exit",
+      "Process exited with code 1.",
+      1,
+      "",
+      "Error: Unknown command: list-agents"
+    );
+  }
+}
+
 describe("CliCmuxTransport error classification", () => {
+  it("treats an absent list-agents command as a feature gap, not a connection failure", async () => {
+    const transport = new CliCmuxTransport(
+      "/Applications/cmux.app/Contents/Resources/bin/cmux",
+      new UnsupportedAgentCommandRunner()
+    );
+
+    await expect(transport.agents()).resolves.toBeNull();
+    transport.dispose();
+  });
+
   it("maps the installed cmux socket-write rejection to access-blocked", async () => {
     const transport = new CliCmuxTransport("/Applications/cmux.app/Contents/Resources/bin/cmux", new FailedSocketWriteRunner());
 

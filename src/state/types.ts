@@ -1,19 +1,29 @@
 import type { CmuxNotification, CmuxPreview, CmuxSnapshot, CmuxTarget } from "../cmux/types";
 import type { AgentRunRecord, BindingRecord } from "../bindings/types";
 import type { ActivityKind, EvidenceSource } from "../evidence/types";
+import type { SessionConversation } from "../providers/types";
 import type { TaskRecord, WorkflowStatus } from "../tasks/TaskSchema";
 
 export type ProviderKind = "claude" | "codex" | "shell" | "unknown";
 export type Confidence = "low" | "medium" | "high";
 export type SurfacePresence = "present" | "missing";
 export type AgentPresence = "unknown" | "attached" | "ended";
-export type ExecutionPhase = "unknown" | "working" | "waiting" | "turn-finished" | "failed";
+export type ExecutionPhase = "unknown" | "working" | "waiting" | "idle" | "turn-finished" | "failed";
 export type EvidenceCoverage = "structured" | "partial" | "fallback" | "none";
 
 export interface ProviderDetection {
   provider: ProviderKind;
   confidence: Confidence;
-  source: "surface-title" | "screen-preview" | "surface-type" | "none";
+  source:
+    | "surface-title"
+    | "screen-preview"
+    | "surface-type"
+    | "provider-session-mapping"
+    | "task-binding"
+    | "cmux-agent-registry"
+    | "claude-process-registry"
+    | "codex-writer-lock"
+    | "none";
   explanation: string;
   sessionId: string | null;
 }
@@ -46,6 +56,7 @@ export interface LiveSession extends CmuxTarget {
   observedAt: number;
   notifications: CmuxNotification[];
   linkedTaskId: string | null;
+  conversation: SessionConversation | null;
   preview: CmuxPreview | null;
 }
 

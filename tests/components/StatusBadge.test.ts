@@ -6,5 +6,6 @@ describe("phaseLabel", () => {
     expect(phaseLabel("unknown")).toBe("State unknown");
     expect(phaseLabel("waiting")).toBe("Needs input");
     expect(phaseLabel("working")).toBe("Working");
+    expect(phaseLabel("idle")).toBe("Idle");
   });
 });

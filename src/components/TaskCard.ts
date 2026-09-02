@@ -97,6 +97,7 @@ function selectPrimarySession(sessions: readonly LiveSession[]): LiveSession | n
     waiting: 4,
     "turn-finished": 3,
     working: 2,
+    idle: 1,
     unknown: 1
   };
   return [...sessions].sort(

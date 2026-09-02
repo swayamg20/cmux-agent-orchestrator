@@ -1,6 +1,9 @@
 import {
   CmuxError,
   type CmuxAccessMode,
+  type CmuxAgentRecord,
+  type CmuxAgentSource,
+  type CmuxAgentState,
   type CmuxCapabilities,
   type CmuxNotification,
   type CmuxSnapshot,
@@ -216,4 +219,55 @@ export function decodeNotifications(text: string): CmuxNotification[] {
       isRead: boolean(notification.is_read)
     };
   });
+}
+
+export function decodeAgents(text: string): CmuxAgentRecord[] {
+  const root = record(parseJson(text, "cmux agents"), "cmux agents");
+  const agents = array(root.agents, "cmux agents.agents");
+  const surfaceIds = new Set<string>();
+  return agents.map((rawAgent, index) => {
+    const agent = record(rawAgent, `cmux agents.agents[${index}]`);
+    const state = decodeAgentState(agent.state, `cmux agents.agents[${index}].state`);
+    const source = decodeAgentSource(agent.source, `cmux agents.agents[${index}].source`);
+    const updatedAt = finiteNumber(
+      agent.updated_at_ms,
+      `cmux agents.agents[${index}].updated_at_ms`
+    );
+    if (updatedAt < 0) {
+      throw new CmuxError(
+        "malformed-output",
+        `cmux agents.agents[${index}].updated_at_ms must not be negative.`
+      );
+    }
+    const sessionId = nullableString(agent.session);
+    if (sessionId !== null && (sessionId.length === 0 || sessionId.length > 512 || sessionId.includes("\0"))) {
+      throw new CmuxError(
+        "malformed-output",
+        `cmux agents.agents[${index}].session is invalid.`
+      );
+    }
+    return {
+      surfaceId: uniqueCanonicalUuid(
+        agent.surface,
+        `cmux agents.agents[${index}].surface`,
+        surfaceIds
+      ),
+      state,
+      source,
+      sessionId,
+      updatedAt
+    };
+  });
+}
+
+function decodeAgentState(value: unknown, label: string): CmuxAgentState {
+  if (value === "working" || value === "blocked" || value === "idle" || value === "done" || value === "unknown") {
+    return value;
+  }
+  throw new CmuxError("malformed-output", `${label} is unsupported.`);
+}
+
+function decodeAgentSource(value: unknown, label: string): CmuxAgentSource {
+  if (value === "detected" || value === "socket" || value === "hook") return value;
+  throw new CmuxError("malformed-output", `${label} is unsupported.`);
 }

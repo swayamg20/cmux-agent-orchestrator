@@ -17,10 +17,12 @@ Run from the repository root:
 npm ci
 npm run check
 CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX=1 npm test -- tests/smoke/cmux.live.test.ts
-npm run validate:release -- --tag 0.1.1
+CMUX_AGENT_ORCHESTRATOR_LIVE_PROVIDERS=1 npm test -- tests/smoke/provider-metadata.live.test.ts
+CMUX_AGENT_ORCHESTRATOR_LIVE_IDENTITY=1 npm test -- tests/smoke/automatic-identity.live.test.ts
+npm run validate:release -- --tag 0.2.0
 ```
 
-The live smoke test is read-only. It resolves the current cmux topology, reads notifications, validates canonical UUIDs, and loads three bounded lines from one selected surface. It does not focus a surface or send terminal input.
+The live smoke tests are read-only. They resolve current cmux topology, notifications, canonical UUIDs, three bounded lines from one selected surface, bounded local provider-title metadata, and exact automatic provider-to-surface identity where local evidence permits. They do not focus a surface, send terminal input, resume a conversation, or modify provider files.
 
 ## 3. Vault-local verification
 
@@ -38,6 +40,8 @@ Verify manually:
 - Keyboard focus, hover states, horizontal board scrolling, and narrow-window layout remain usable.
 - The live workspace, pane, and surface tree matches cmux.
 - A bounded preview loads on demand and disappears after plugin reload.
+- A detected agent can be matched to an exact local provider conversation; its title survives reload while raw title metadata remains absent from `data.json`.
+- Two same-repository surfaces can be assigned different provider conversations, and assigning one conversation to two surfaces fails closed.
 - Creating a task and attaching a session persists through reload without changing the agent.
 - Moving a task changes workflow only.
 - Focus in cmux targets a user-approved development surface and sends no text.

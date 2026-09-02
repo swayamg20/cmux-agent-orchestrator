@@ -10,6 +10,8 @@ export interface SessionCardActions {
   attachTask(session: LiveSession): void;
   createTask(session: LiveSession): void;
   detachTask(session: LiveSession): void;
+  chooseConversation(session: LiveSession): void;
+  forgetConversation(session: LiveSession): void;
   copyMetadata(session: LiveSession): void;
 }
 
@@ -45,9 +47,13 @@ export function renderSessionCard(container: HTMLElement, options: SessionCardOp
   if (options.reasons?.[0]) {
     title.createSpan({ text: options.reasons[0].label });
   } else {
-    title.createSpan({ text: session.surfaceTitle || `Surface ${session.surfaceIndex + 1}` });
+    title.createSpan({ text: sessionDisplayTitle(session) });
   }
   const metadata = identity.createDiv({ cls: "agent-cockpit-session-meta" });
+  if (options.reasons?.[0] && session.conversation) {
+    metadata.createSpan({ text: session.conversation.title });
+    metadata.createSpan({ text: " · " });
+  }
   metadata.createSpan({ text: providerLabel(session.provider.provider) });
   metadata.createSpan({ text: " · " });
   metadata.createSpan({ text: repositoryLabel(session.currentDirectory) });
@@ -55,6 +61,9 @@ export function renderSessionCard(container: HTMLElement, options: SessionCardOp
   metadata.createSpan({ text: session.workspaceTitle });
   if (options.task) {
     metadata.createSpan({ text: ` · ${options.task.title}` });
+  }
+  if (!session.conversation && (session.provider.provider === "claude" || session.provider.provider === "codex")) {
+    metadata.createSpan({ text: " · cmux title fallback" });
   }
 
   const trailing = summary.createDiv({ cls: "agent-cockpit-session-trailing" });
@@ -135,6 +144,22 @@ function renderSessionDetail(container: HTMLElement, options: SessionCardOptions
       : new Date(session.assessment.lastActivityAt).toLocaleString()
   );
   addDefinition(evidenceList, "Provider", `${providerLabel(session.provider.provider)} (${session.provider.confidence})`);
+  if (session.conversation) {
+    addDefinition(evidenceList, "Conversation title", session.conversation.title);
+    addDefinition(evidenceList, "Conversation ID", session.conversation.sessionId);
+    addDefinition(evidenceList, "Title source", session.conversation.titleSource);
+    addDefinition(
+      evidenceList,
+      "Conversation match",
+      `${session.conversation.matchSource} (${session.conversation.matchConfidence})`
+    );
+  } else if (session.provider.sessionId) {
+    addDefinition(evidenceList, "Conversation ID", session.provider.sessionId);
+    addDefinition(evidenceList, "Title metadata", "Matched, but unavailable from the local provider source");
+  } else if (session.provider.provider === "claude" || session.provider.provider === "codex") {
+    addDefinition(evidenceList, "Conversation title", "Not matched; using the cmux surface title");
+  }
+  addDefinition(evidenceList, "cmux surface title", session.surfaceTitle || "Untitled surface");
   addDefinition(evidenceList, "Repository / CWD", session.currentDirectory ?? "Unknown");
   addDefinition(evidenceList, "Workspace", `${session.workspaceTitle} · ${session.workspaceId}`);
   addDefinition(evidenceList, "Pane", session.paneId);
@@ -156,6 +181,17 @@ function renderSessionDetail(container: HTMLElement, options: SessionCardOptions
   else actionButton(actionsEl, "link", "Attach task", () => actions.attachTask(session));
   actionButton(actionsEl, "file-plus-2", "Create task", () => actions.createTask(session));
   if (task) actionButton(actionsEl, "unlink", "Detach", () => actions.detachTask(session));
+  if (session.provider.provider === "claude" || session.provider.provider === "codex") {
+    actionButton(
+      actionsEl,
+      "messages-square",
+      session.provider.source === "provider-session-mapping" ? "Change conversation" : "Choose conversation",
+      () => actions.chooseConversation(session)
+    );
+  }
+  if (session.provider.source === "provider-session-mapping") {
+    actionButton(actionsEl, "unlink", "Forget conversation", () => actions.forgetConversation(session));
+  }
   actionButton(actionsEl, "copy", "Copy metadata", () => actions.copyMetadata(session));
 }
 
@@ -209,6 +245,10 @@ export function providerLabel(provider: LiveSession["provider"]["provider"]): st
 export function repositoryLabel(directory: string | null): string {
   if (!directory) return "Unknown repository";
   return directory.split("/").filter(Boolean).pop() ?? directory;
+}
+
+export function sessionDisplayTitle(session: LiveSession): string {
+  return session.conversation?.title ?? (session.surfaceTitle || `Surface ${session.surfaceIndex + 1}`);
 }
 
 export function formatRelativeTime(timestamp: number): string {

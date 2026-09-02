@@ -1,6 +1,9 @@
 import { Notice, Plugin } from "obsidian";
 import { AgentCockpitController } from "./app/AgentCockpitController";
+import { CmuxClient } from "./cmux/CmuxClient";
 import { PRODUCT_NAME } from "./identity";
+import { ProviderMetadataService } from "./providers/ProviderMetadataService";
+import { AutomaticProviderSessionResolver } from "./providers/identity/AutomaticProviderSessionResolver";
 import { AgentCockpitSettingsTab } from "./settings/AgentCockpitSettingsTab";
 import { AGENT_COCKPIT_VIEW_TYPE, AgentCockpitView } from "./views/AgentCockpitView";
 
@@ -8,7 +11,14 @@ export default class AgentCockpitPlugin extends Plugin {
   private controller: AgentCockpitController | null = null;
 
   override async onload(): Promise<void> {
-    this.controller = new AgentCockpitController(this.app, this);
+    const providerMetadata = new ProviderMetadataService();
+    this.controller = new AgentCockpitController(
+      this.app,
+      this,
+      (explicitBinaryPath) => CmuxClient.create(explicitBinaryPath),
+      providerMetadata,
+      new AutomaticProviderSessionResolver(providerMetadata)
+    );
     this.registerView(AGENT_COCKPIT_VIEW_TYPE, (leaf) => new AgentCockpitView(leaf, this.requireController()));
     this.addRibbonIcon("layout-dashboard", `Open ${PRODUCT_NAME}`, () => void this.activateView());
     this.addCommand({
