@@ -71,6 +71,17 @@ export interface CmuxNotification {
   isRead: boolean;
 }
 
+export type CmuxAgentState = "working" | "blocked" | "idle" | "done" | "unknown";
+export type CmuxAgentSource = "detected" | "socket" | "hook";
+
+export interface CmuxAgentRecord {
+  surfaceId: string;
+  state: CmuxAgentState;
+  source: CmuxAgentSource;
+  sessionId: string | null;
+  updatedAt: number;
+}
+
 export interface CmuxPreview {
   workspaceId: string;
   surfaceId: string;

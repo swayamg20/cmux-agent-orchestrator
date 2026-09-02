@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+## [0.2.0] - 2026-09-03
+
+### Added
+
+- Automatically show distinct Codex and Claude conversation titles after exact modern-cmux or local process/session correlation, with a manual override fallback.
+- Load bounded local Codex app-server metadata and Claude title records through replaceable provider-source interfaces.
+- Persist only user-selected, machine-scoped surface-to-provider-session-ID mappings; keep automatic mappings, titles, and bounded source data in memory.
+- Feature-detect modern cmux `list-agents` lifecycle records while retaining a read-only fallback for cmux 0.62.2.
+- Represent provider Idle separately from working, waiting, review-ready output, and durable task completion.
+
+### Security
+
+- Fail closed on ambiguous provider identity, duplicate conversation assignments, changed cmux targets, and CWD mismatches.
+- Explicitly disable Codex turn hydration and bound provider subprocess time, output, file reads, concurrency, and cache size.
+- Require one foreground process, one canonical cmux surface, PID/start/CWD agreement, and exactly one root provider session; discard races and ambiguity.
+
 ## [0.1.1] - 2026-08-31
 
 ### Fixed

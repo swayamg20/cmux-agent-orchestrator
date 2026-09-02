@@ -113,6 +113,7 @@ function renderFilters(container: HTMLElement, state: Readonly<CockpitState>, ac
       { value: "unknown", label: "State unknown" },
       { value: "working", label: "Working" },
       { value: "waiting", label: "Needs input" },
+      { value: "idle", label: "Idle" },
       { value: "turn-finished", label: "Review output" },
       { value: "failed", label: "Error reported" }
     ],

@@ -12,12 +12,22 @@ import {
   type CmuxSnapshot
 } from "../cmux/types";
 import { CreateTaskModal, TaskPickerModal } from "../components/TaskModals";
+import { ConversationPickerModal } from "../components/ConversationPickerModal";
 import { CmuxEvidenceService } from "../evidence/CmuxEvidenceService";
 import { PRODUCT_NAME } from "../identity";
+import { ProviderMetadataService } from "../providers/ProviderMetadataService";
+import type { ProviderSessionMetadata, ProviderSessionReference } from "../providers/types";
+import type {
+  AutomaticProviderSessionMapping,
+  ProviderIdentityResolution,
+  ProviderSessionResolver
+} from "../providers/identity/types";
+import { NOOP_PROVIDER_SESSION_RESOLVER } from "../providers/identity/types";
 import { AttentionEngine } from "../runtime/AttentionEngine";
 import { PreviewCache } from "../runtime/PreviewCache";
 import { PreviewScheduler } from "../runtime/PreviewScheduler";
 import { projectLiveSessions } from "../runtime/SessionProjection";
+import { isCanonicalUuid } from "../security/identifiers";
 import { parseSettings, type AgentCockpitSettings } from "../settings/AgentCockpitSettings";
 import { CockpitStore } from "../state/CockpitStore";
 import type {
@@ -45,6 +55,11 @@ export class AgentCockpitController {
   private readonly evidence = new CmuxEvidenceService(this.detector);
   private readonly refreshCoordinator = new RefreshCoordinator();
   private classificationWork: Promise<void> = Promise.resolve();
+  private metadataWork: Promise<void> = Promise.resolve();
+  private identityWork: Promise<void> = Promise.resolve();
+  private identityAbortController: AbortController | null = null;
+  private identityGeneration = 0;
+  private automaticProviderMappings: AutomaticProviderSessionMapping[] = [];
   private client: CmuxClient | null = null;
   private focusAction: FocusSessionAction | null = null;
   private taskRepository: TaskRepository | null = null;
@@ -55,7 +70,9 @@ export class AgentCockpitController {
     private readonly app: App,
     private readonly plugin: Plugin,
     private readonly createClient: CmuxClientFactory = (explicitBinaryPath) =>
-      CmuxClient.create(explicitBinaryPath)
+      CmuxClient.create(explicitBinaryPath),
+    private readonly providerMetadata = new ProviderMetadataService(),
+    private readonly providerSessionResolver: ProviderSessionResolver = NOOP_PROVIDER_SESSION_RESOLVER
   ) {
     this.bindings = new BindingRepository(plugin);
   }
@@ -85,7 +102,11 @@ export class AgentCockpitController {
         notifications: (signal) => client.notifications(signal)
       });
       this.applyRefreshResult(result);
-      if (result.current && result.snapshot !== null) this.scheduleProviderClassification();
+      if (result.current && result.snapshot !== null) {
+        this.scheduleProviderClassification();
+        this.scheduleProviderMetadataRefresh();
+        this.scheduleProviderIdentityResolution(result.snapshot);
+      }
     } catch (error) {
       this.handleError(error);
     } finally {
@@ -100,6 +121,8 @@ export class AgentCockpitController {
       const snapshot = await client.snapshot(signal);
       this.applyTopology(snapshot);
       this.scheduleProviderClassification();
+      this.scheduleProviderMetadataRefresh();
+      this.scheduleProviderIdentityResolution(snapshot);
     } catch (error) {
       if (isAbort(error)) return;
       this.applyTopologyFailure(error);
@@ -119,7 +142,8 @@ export class AgentCockpitController {
   }
 
   async waitForBackgroundWork(): Promise<void> {
-    await this.classificationWork;
+    await this.identityWork;
+    await Promise.all([this.classificationWork, this.metadataWork]);
   }
 
   async loadPreview(session: LiveSession): Promise<void> {
@@ -173,6 +197,61 @@ export class AgentCockpitController {
       await this.createTask(options, session);
     });
     modal.open();
+  }
+
+  async showConversationPicker(session: LiveSession): Promise<void> {
+    if (session.provider.provider !== "claude" && session.provider.provider !== "codex") {
+      new Notice("Detect Claude or Codex before choosing a provider conversation.");
+      return;
+    }
+    if (session.currentDirectory === null) {
+      new Notice("This cmux workspace does not expose an absolute working directory.");
+      return;
+    }
+    try {
+      new Notice(
+        `Loading local ${session.provider.provider === "claude" ? "Claude" : "Codex"} conversation titles...`,
+        2_500
+      );
+      const conversations = await this.providerMetadata.list(
+        session.provider.provider,
+        session.currentDirectory
+      );
+      if (conversations.length === 0) {
+        new Notice(`No ${session.provider.provider === "claude" ? "Claude" : "Codex"} conversations were found for this repository.`);
+        return;
+      }
+      new ConversationPickerModal(this.app, conversations, (conversation) => {
+        void this.matchConversation(session, conversation).catch(() => undefined);
+      }).open();
+    } catch (error) {
+      new Notice(readableError(error));
+    }
+  }
+
+  async forgetConversation(session: LiveSession): Promise<void> {
+    try {
+      const current = this.resolveCurrentSession(session);
+      const mapping = this.bindings
+        .listProviderSessions()
+        .find(
+          (candidate) =>
+            candidate.workspaceId === current.workspaceId &&
+            candidate.paneId === current.paneId &&
+            candidate.surfaceId === current.surfaceId
+        );
+      if (!mapping) {
+        new Notice("This surface has no saved provider conversation match.");
+        return;
+      }
+      await this.bindings.forgetProviderSession(current.surfaceId);
+      this.providerMetadata.forget(mapping.provider, mapping.providerSessionId);
+      this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
+      this.recomputeSessions();
+      new Notice("Forgot the conversation match. The provider conversation and task were not deleted.");
+    } catch (error) {
+      new Notice(readableError(error));
+    }
   }
 
   async attachTask(session: LiveSession, task: TaskRecord): Promise<void> {
@@ -268,6 +347,7 @@ export class AgentCockpitController {
       surfaceTitle: session.surfaceTitle,
       repository: session.currentDirectory,
       provider: session.provider,
+      conversation: session.conversation,
       assessment: session.assessment,
       linkedTaskId: session.linkedTaskId
     };
@@ -294,6 +374,8 @@ export class AgentCockpitController {
     this.settings = parsed;
     this.requireTaskRepository().setTaskFolder(parsed.taskFolder);
     if (current.cmuxBinaryPath !== parsed.cmuxBinaryPath) {
+      this.cancelIdentityResolution();
+      this.automaticProviderMappings = [];
       this.refreshCoordinator.dispose();
       this.client?.dispose();
       this.client = null;
@@ -306,6 +388,8 @@ export class AgentCockpitController {
   async testConnection(): Promise<void> {
     if (this.disposed || this.store.getState().refreshing) return;
     this.refreshCoordinator.dispose();
+    this.cancelIdentityResolution();
+    this.automaticProviderMappings = [];
     this.client?.dispose();
     this.client = null;
     this.focusAction = null;
@@ -326,8 +410,11 @@ export class AgentCockpitController {
     this.disposed = true;
     this.refreshCoordinator.dispose();
     this.previewScheduler.dispose();
+    this.cancelIdentityResolution();
     this.client?.dispose();
     this.client = null;
+    this.providerSessionResolver.dispose();
+    this.providerMetadata.dispose();
     this.attentionEngine.clear();
     this.previewCache.clear();
     this.evidence.clear();
@@ -366,7 +453,7 @@ export class AgentCockpitController {
             status: "unavailable",
             checkedAt,
             lastSuccessAt: null,
-            message: "cmux 0.62.2 exposes topology and notifications, but no structured agent lifecycle stream."
+            message: "Agent lifecycle capability will be feature-detected during refresh."
           }
         },
         error: null
@@ -391,6 +478,7 @@ export class AgentCockpitController {
 
   private applyTopology(snapshot: CmuxSnapshot): void {
     const checkedAt = snapshot.observedAt;
+    this.automaticProviderMappings = [];
     this.store.update((state) => ({
       snapshot,
       lastRefreshAt: checkedAt,
@@ -402,10 +490,18 @@ export class AgentCockpitController {
       },
       health: {
         ...state.health,
-        topology: freshHealth(checkedAt, "cmux topology loaded.")
+        topology: freshHealth(checkedAt, "cmux topology loaded."),
+        lifecycle: {
+          status: state.health.lifecycle.lastSuccessAt === null ? "unavailable" : "stale",
+          checkedAt,
+          lastSuccessAt: state.health.lifecycle.lastSuccessAt,
+          message: "Refreshing exact provider identity and lifecycle evidence."
+        }
       },
       error: null
     }));
+    const liveKeys = this.syncCurrentEvidence(snapshot, this.store.getState().notifications);
+    this.evidence.recordLifecycle(liveKeys, []);
     this.recomputeSessions();
   }
 
@@ -463,6 +559,9 @@ export class AgentCockpitController {
       snapshot: state.snapshot,
       notifications: state.notifications,
       bindings: state.bindings,
+      providerMappings: this.bindings.listProviderSessions(),
+      automaticProviderMappings: this.automaticProviderMappings,
+      providerMetadata: this.providerMetadata.evidence,
       detector: this.detector,
       providerEvidence: this.providerClassifier.evidence,
       previewFor: (key) => this.previewCache.peek(key),
@@ -472,12 +571,16 @@ export class AgentCockpitController {
     this.store.update({ sessions, attention });
   }
 
-  private syncCurrentEvidence(snapshot: CmuxSnapshot, notifications: readonly CmuxNotification[]): void {
+  private syncCurrentEvidence(
+    snapshot: CmuxSnapshot,
+    notifications: readonly CmuxNotification[]
+  ): ReadonlySet<string> {
     const notificationObservedAt =
       this.store.getState().health.notifications.lastSuccessAt ?? snapshot.observedAt;
     const liveKeys = this.evidence.sync(snapshot, notifications, notificationObservedAt);
     this.previewCache.retain(liveKeys);
     this.providerClassifier.retain(liveKeys);
+    return liveKeys;
   }
 
   private scheduleProviderClassification(): void {
@@ -494,6 +597,180 @@ export class AgentCockpitController {
       });
     });
     this.classificationWork = Promise.all([this.classificationWork.catch(() => undefined), work]).then(() => undefined);
+  }
+
+  private scheduleProviderMetadataRefresh(): void {
+    if (this.disposed) return;
+    const mappings = this.effectiveProviderMappings();
+    if (mappings.length === 0) return;
+    const work = this.providerMetadata
+      .refreshMapped(mappings, this.store.getState().sessions)
+      .then(() => {
+        if (!this.disposed) this.recomputeSessions();
+      });
+    this.metadataWork = Promise.all([this.metadataWork.catch(() => undefined), work]).then(() => undefined);
+  }
+
+  private scheduleProviderIdentityResolution(snapshot: CmuxSnapshot): void {
+    const client = this.client;
+    if (this.disposed || client === null) return;
+    this.cancelIdentityResolution();
+    const controller = new AbortController();
+    const generation = ++this.identityGeneration;
+    this.identityAbortController = controller;
+    const work = this.providerSessionResolver
+      .resolve(snapshot, client, controller.signal)
+      .then((resolution) => {
+        if (
+          this.disposed ||
+          controller.signal.aborted ||
+          generation !== this.identityGeneration ||
+          this.store.getState().snapshot?.observedAt !== snapshot.observedAt
+        ) {
+          return;
+        }
+        this.applyIdentityResolution(snapshot, resolution);
+        this.scheduleProviderMetadataRefresh();
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || this.disposed) return;
+        const checkedAt = Date.now();
+        this.store.update((state) => ({
+          health: {
+            ...state.health,
+            lifecycle: failedHealth(
+              state.health.lifecycle,
+              checkedAt,
+              `Agent identity refresh failed: ${readableError(error)}`,
+              state.health.lifecycle.lastSuccessAt !== null
+            )
+          }
+        }));
+      })
+      .finally(() => {
+        if (this.identityAbortController === controller) this.identityAbortController = null;
+      });
+    this.identityWork = work;
+  }
+
+  private applyIdentityResolution(
+    snapshot: CmuxSnapshot,
+    resolution: ProviderIdentityResolution
+  ): void {
+    this.automaticProviderMappings = resolution.mappings;
+    const liveKeys = this.evidence.sync(
+      snapshot,
+      this.store.getState().notifications,
+      this.store.getState().health.notifications.lastSuccessAt ?? snapshot.observedAt
+    );
+    this.evidence.recordLifecycle(liveKeys, resolution.lifecycle);
+    const issueSuffix = resolution.issues.length > 0 ? ` ${resolution.issues.join(" ")}` : "";
+    const lifecycle = resolution.nativeLifecycleAvailable
+      ? freshHealth(
+          resolution.checkedAt,
+          `Structured cmux agent lifecycle is available.${issueSuffix}`.trim()
+        )
+      : resolution.lifecycle.length > 0
+        ? freshHealth(
+            resolution.checkedAt,
+            `Local provider lifecycle metadata is available; cmux native lifecycle is unavailable.${issueSuffix}`.trim()
+          )
+        : {
+            status: "unavailable" as const,
+            checkedAt: resolution.checkedAt,
+            lastSuccessAt: null,
+            message: `This cmux build does not expose structured agent lifecycle. Automatic exact conversation matching remains available when local process evidence permits.${issueSuffix}`.trim()
+          };
+    this.store.update((state) => ({
+      health: { ...state.health, lifecycle }
+    }));
+    this.recomputeSessions();
+  }
+
+  private cancelIdentityResolution(): void {
+    this.identityGeneration += 1;
+    this.identityAbortController?.abort();
+    this.identityAbortController = null;
+  }
+
+  private effectiveProviderMappings(): ProviderSessionReference[] {
+    const mappings = new Map<string, ProviderSessionReference>();
+    const claimedProviderSessions = new Set<string>();
+    for (const mapping of this.bindings.listProviderSessions()) {
+      mappings.set(mapping.surfaceId, mapping);
+      claimedProviderSessions.add(`${mapping.provider}:${mapping.providerSessionId}`);
+    }
+    for (const mapping of this.automaticProviderMappings) {
+      const providerSessionKey = `${mapping.provider}:${mapping.providerSessionId}`;
+      if (mappings.has(mapping.surfaceId) || claimedProviderSessions.has(providerSessionKey)) continue;
+      mappings.set(mapping.surfaceId, mapping);
+      claimedProviderSessions.add(providerSessionKey);
+    }
+    for (const binding of this.bindings.list()) {
+      const providerSessionKey = `${binding.provider}:${binding.providerSessionId ?? ""}`;
+      if (
+        mappings.has(binding.surfaceId) ||
+        (binding.provider !== "claude" && binding.provider !== "codex") ||
+        binding.providerSessionId === null ||
+        !isCanonicalUuid(binding.providerSessionId) ||
+        claimedProviderSessions.has(providerSessionKey)
+      ) {
+        continue;
+      }
+      mappings.set(binding.surfaceId, {
+        workspaceId: binding.workspaceId,
+        paneId: binding.paneId,
+        surfaceId: binding.surfaceId,
+        provider: binding.provider,
+        providerSessionId: binding.providerSessionId,
+        matchedAt: binding.attachedAt
+      });
+      claimedProviderSessions.add(providerSessionKey);
+    }
+    return [...mappings.values()];
+  }
+
+  private async matchConversation(
+    original: LiveSession,
+    conversation: ProviderSessionMetadata
+  ): Promise<void> {
+    try {
+      const current = this.resolveCurrentSession(original);
+      if (
+        current.currentDirectory === null ||
+        current.currentDirectory !== conversation.cwd ||
+        current.provider.provider !== conversation.provider
+      ) {
+        throw new Error("The cmux surface no longer matches the selected provider conversation.");
+      }
+      await this.bindings.mapProviderSession({
+        workspaceId: current.workspaceId,
+        paneId: current.paneId,
+        surfaceId: current.surfaceId,
+        provider: conversation.provider,
+        providerSessionId: conversation.sessionId,
+        matchedAt: new Date().toISOString()
+      });
+      this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
+      this.recomputeSessions();
+      new Notice(`Matched this cmux surface to “${conversation.title}”.`);
+    } catch (error) {
+      new Notice(readableError(error));
+      throw error;
+    }
+  }
+
+  private resolveCurrentSession(original: LiveSession): LiveSession {
+    const current = this.store
+      .getState()
+      .sessions.find(
+        (candidate) =>
+          candidate.workspaceId === original.workspaceId &&
+          candidate.paneId === original.paneId &&
+          candidate.surfaceId === original.surfaceId
+      );
+    if (!current) throw new Error("The exact cmux surface no longer exists. Refresh and try again.");
+    return current;
   }
 
   private handleError(error: unknown, connectionFailure = true): void {

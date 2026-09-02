@@ -101,4 +101,31 @@ describe("reduceSessionEvidence", () => {
       confidence: "high"
     });
   });
+
+  it("keeps provider idle separate from workflow completion", () => {
+    const result = reduceSessionEvidence([
+      present(),
+      {
+        id: "idle",
+        kind: "lifecycle",
+        sessionKey: key,
+        source: "provider-lifecycle",
+        authority: "structured",
+        confidence: "high",
+        observedAt: 1_400,
+        occurredAt: 1_350,
+        summary: "provider idle",
+        signal: "session-idle",
+        activity: "unknown",
+        provider: "codex",
+        providerSessionId: "thread"
+      }
+    ], 1_400);
+
+    expect(result).toMatchObject({
+      agentPresence: "attached",
+      executionPhase: "idle",
+      coverage: "structured"
+    });
+  });
 });

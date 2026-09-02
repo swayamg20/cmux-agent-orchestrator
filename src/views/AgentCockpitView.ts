@@ -158,6 +158,8 @@ export class AgentCockpitView extends ItemView {
       attachTask: (session) => this.controller.showTaskPicker(session),
       createTask: (session) => this.controller.showCreateTask(session),
       detachTask: (session) => void this.controller.detachTask(session),
+      chooseConversation: (session) => void this.controller.showConversationPicker(session),
+      forgetConversation: (session) => void this.controller.forgetConversation(session),
       copyMetadata: (session) => void this.controller.copyMetadata(session)
     };
   }

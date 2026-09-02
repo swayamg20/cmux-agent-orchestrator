@@ -1,4 +1,5 @@
 import type {
+  CmuxAgentRecord,
   CmuxNotification,
   CmuxPreview,
   CmuxProbe,
@@ -16,6 +17,7 @@ export interface CmuxTransport {
   probe(signal?: AbortSignal): Promise<CmuxProbe>;
   snapshot(signal?: AbortSignal): Promise<CmuxSnapshot>;
   notifications(signal?: AbortSignal): Promise<CmuxNotification[]>;
+  agents?(signal?: AbortSignal): Promise<CmuxAgentRecord[] | null>;
   readPreview(target: CmuxTarget, request: PreviewRequest): Promise<CmuxPreview>;
   focusedTarget(signal?: AbortSignal): Promise<CmuxTarget | null>;
   focus(target: CmuxTarget, signal?: AbortSignal): Promise<void>;

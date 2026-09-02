@@ -1,9 +1,13 @@
 import type { App, Plugin } from "obsidian";
 import { describe, expect, it } from "vitest";
 import { AgentCockpitController } from "../../src/app/AgentCockpitController";
+import { BindingRepository } from "../../src/bindings/BindingRepository";
 import { CmuxClient } from "../../src/cmux/CmuxClient";
 import type { CmuxTransport } from "../../src/cmux/CmuxTransport";
 import { CmuxError, type CmuxSnapshot } from "../../src/cmux/types";
+import { ProviderMetadataService } from "../../src/providers/ProviderMetadataService";
+import type { ProviderSessionResolver } from "../../src/providers/identity/types";
+import type { ProviderSessionSource } from "../../src/providers/types";
 
 function snapshot(observedAt: number): CmuxSnapshot {
   return {
@@ -318,6 +322,197 @@ describe("AgentCockpitController connection failures", () => {
         lifecycle: { status: "unavailable" }
       }
     });
+    controller.dispose();
+  });
+
+  it("restores a persisted exact conversation match and loads its title read-only", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    await repository.mapProviderSession({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      matchedAt: "2026-09-02T00:00:00.000Z"
+    });
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [
+        {
+          provider: "codex",
+          sessionId: "55555555-5555-4555-8555-555555555555",
+          title: "Fix Flight Detail timeout handling",
+          titleSource: "explicit-name",
+          cwd: "/repository",
+          updatedAt: 1_000,
+          status: "idle"
+        }
+      ],
+      get: async () => null,
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      probe: async () => ({
+        binaryPath: "/cmux",
+        versionText: "cmux 0.62.2",
+        capabilities: {
+          version: 2,
+          protocol: "cmux-socket",
+          accessMode: "password",
+          methods: new Set()
+        },
+        latencyMs: 1
+      }),
+      snapshot: async () => snapshot(1_000),
+      notifications: async () => [],
+      readPreview: async (target) => ({ ...target, text: "", observedAt: 1_000, truncated: false }),
+      focusedTarget: async () => null,
+      focus: async () => undefined,
+      dispose: () => undefined
+    };
+    const app = { vault: { getAbstractFileByPath: () => null } } as unknown as App;
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([source])
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().sessions[0]).toMatchObject({
+      provider: {
+        provider: "codex",
+        source: "provider-session-mapping",
+        sessionId: "55555555-5555-4555-8555-555555555555"
+      },
+      conversation: {
+        title: "Fix Flight Detail timeout handling",
+        matchSource: "manual",
+        matchConfidence: "high"
+      }
+    });
+    controller.dispose();
+  });
+
+  it("projects an automatic exact conversation title and lifecycle without persisting the match", async () => {
+    let saved = false;
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => {
+        saved = true;
+      }
+    } as unknown as Plugin;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [
+        {
+          provider: "codex",
+          sessionId: "55555555-5555-4555-8555-555555555555",
+          title: "Implement plug-and-play conversation identity",
+          titleSource: "explicit-name",
+          cwd: "/repository",
+          updatedAt: 1_000,
+          status: "idle",
+          parentSessionId: null,
+          sourceKind: "cli"
+        }
+      ],
+      get: async () => null,
+      dispose: () => undefined
+    };
+    const resolver: ProviderSessionResolver = {
+      resolve: async () => ({
+        checkedAt: 1_100,
+        nativeLifecycleAvailable: true,
+        issues: [],
+        mappings: [
+          {
+            workspaceId: "22222222-2222-4222-8222-222222222222",
+            paneId: "33333333-3333-4333-8333-333333333333",
+            surfaceId: "44444444-4444-4444-8444-444444444444",
+            provider: "codex",
+            providerSessionId: "55555555-5555-4555-8555-555555555555",
+            matchSource: "codex-writer-lock",
+            confidence: "high",
+            explanation: "Verified exact writer identity.",
+            observedAt: 1_100
+          }
+        ],
+        lifecycle: [
+          {
+            workspaceId: "22222222-2222-4222-8222-222222222222",
+            paneId: "33333333-3333-4333-8333-333333333333",
+            surfaceId: "44444444-4444-4444-8444-444444444444",
+            state: "idle",
+            source: "hook",
+            provider: "codex",
+            providerSessionId: "55555555-5555-4555-8555-555555555555",
+            observedAt: 1_100,
+            occurredAt: 1_050,
+            explanation: "cmux reports idle."
+          }
+        ]
+      }),
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      probe: async () => ({
+        binaryPath: "/cmux",
+        versionText: "cmux future",
+        capabilities: {
+          version: 6,
+          protocol: "cmux-socket",
+          accessMode: "password",
+          methods: new Set()
+        },
+        latencyMs: 1
+      }),
+      snapshot: async () => snapshot(1_000),
+      notifications: async () => [],
+      readPreview: async (target) => ({ ...target, text: "", observedAt: 1_000, truncated: false }),
+      focusedTarget: async () => null,
+      focus: async () => undefined,
+      dispose: () => undefined
+    };
+    const app = { vault: { getAbstractFileByPath: () => null } } as unknown as App;
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([source]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().sessions[0]).toMatchObject({
+      provider: {
+        provider: "codex",
+        source: "codex-writer-lock",
+        sessionId: "55555555-5555-4555-8555-555555555555"
+      },
+      conversation: {
+        title: "Implement plug-and-play conversation identity",
+        matchSource: "codex-writer-lock"
+      },
+      assessment: {
+        executionPhase: "idle",
+        coverage: "structured"
+      }
+    });
+    expect(controller.store.getState().health.lifecycle.status).toBe("fresh");
+    expect(saved).toBe(false);
     controller.dispose();
   });
 });

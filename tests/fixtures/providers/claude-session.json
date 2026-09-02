@@ -1,0 +1,10 @@
+{
+  "pid": 12345,
+  "sessionId": "44444444-4444-4444-8444-444444444444",
+  "cwd": "/workspace/project",
+  "name": "project-title",
+  "nameSource": "derived",
+  "status": "waiting",
+  "startedAt": 1788292500000,
+  "lastActivityAt": null
+}

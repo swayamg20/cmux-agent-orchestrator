@@ -112,7 +112,7 @@ export class CreateTaskModal extends Modal {
   }
 }
 
-function taskTitleFromSession(session: LiveSession): string {
+export function taskTitleFromSession(session: LiveSession): string {
   const repository = session.currentDirectory?.split("/").filter(Boolean).pop();
   return repository ? `${repository}: ${session.surfaceTitle}` : session.surfaceTitle;
 }

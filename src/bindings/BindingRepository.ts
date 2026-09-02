@@ -10,6 +10,7 @@ import type {
   BindingRecord,
   MachineBindings,
   NewBindingRecord,
+  ProviderSessionMapping,
   RunRelation
 } from "./types";
 import { loadLegacyPluginData } from "./LegacyDataImporter";
@@ -17,10 +18,11 @@ import { loadLegacyPluginData } from "./LegacyDataImporter";
 const MAX_MACHINES = 100;
 const MAX_BINDINGS_PER_MACHINE = 5_000;
 const MAX_RUNS_PER_MACHINE = 20_000;
+const MAX_PROVIDER_SESSIONS_PER_MACHINE = 5_000;
 const MACHINE_ID_PATTERN = /^[0-9a-f]{20}$/;
 
 interface PersistedPluginData {
-  schemaVersion: 2;
+  schemaVersion: 3;
   settings: AgentCockpitSettings;
   machines: Record<string, MachineBindings>;
 }
@@ -89,6 +91,19 @@ function isRun(value: unknown): value is AgentRunRecord {
   );
 }
 
+function isProviderSessionMapping(value: unknown): value is ProviderSessionMapping {
+  if (typeof value !== "object" || value === null) return false;
+  const raw = value as Record<string, unknown>;
+  return (
+    typeof raw.workspaceId === "string" && isCanonicalUuid(raw.workspaceId) &&
+    typeof raw.paneId === "string" && isCanonicalUuid(raw.paneId) &&
+    typeof raw.surfaceId === "string" && isCanonicalUuid(raw.surfaceId) &&
+    (raw.provider === "claude" || raw.provider === "codex") &&
+    typeof raw.providerSessionId === "string" && isCanonicalUuid(raw.providerSessionId) &&
+    validDate(raw.matchedAt)
+  );
+}
+
 function decodeMachine(value: unknown, id: string): MachineBindings {
   const raw = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
   const rawBindings = Array.isArray(raw.bindings) ? raw.bindings : [];
@@ -129,7 +144,29 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
   for (const [runId, run] of migratedRuns) {
     if (!runsById.has(runId)) runsById.set(runId, run);
   }
-  return { bindings: [...bindingsBySurface.values()], runs: [...runsById.values()] };
+  const providerSessionsBySurface = new Map<string, ProviderSessionMapping>();
+  const claimedProviderSessions = new Set<string>();
+  if (Array.isArray(raw.providerSessions)) {
+    for (const candidate of raw.providerSessions) {
+      if (isProviderSessionMapping(candidate)) {
+        const providerSessionKey = `${candidate.provider}:${candidate.providerSessionId}`;
+        if (
+          claimedProviderSessions.has(providerSessionKey) ||
+          providerSessionsBySurface.has(candidate.surfaceId)
+        ) {
+          continue;
+        }
+        providerSessionsBySurface.set(candidate.surfaceId, { ...candidate });
+        claimedProviderSessions.add(providerSessionKey);
+      }
+      if (providerSessionsBySurface.size >= MAX_PROVIDER_SESSIONS_PER_MACHINE) break;
+    }
+  }
+  return {
+    bindings: [...bindingsBySurface.values()],
+    runs: [...runsById.values()],
+    providerSessions: [...providerSessionsBySurface.values()]
+  };
 }
 
 export class BindingRepository {
@@ -162,9 +199,9 @@ export class BindingRepository {
       if (!MACHINE_ID_PATTERN.test(id)) continue;
       machines[id] = decodeMachine(value, id);
     }
-    machines[this.currentMachineId] ??= { bindings: [], runs: [] };
+    machines[this.currentMachineId] ??= { bindings: [], runs: [], providerSessions: [] };
     this.data = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       settings: parseSettings(raw.settings),
       machines
     };
@@ -191,6 +228,88 @@ export class BindingRepository {
       .filter((run) => taskId === undefined || run.taskId === taskId)
       .map((run) => ({ ...run }))
       .sort((left, right) => right.lastAttachedAt.localeCompare(left.lastAttachedAt));
+  }
+
+  listProviderSessions(): ProviderSessionMapping[] {
+    return this.currentMachine().providerSessions.map((mapping) => ({ ...mapping }));
+  }
+
+  async mapProviderSession(mapping: ProviderSessionMapping): Promise<void> {
+    if (!isProviderSessionMapping(mapping)) {
+      throw new Error("Provider session mapping contains an invalid canonical identity or value.");
+    }
+    await this.commit((data) => {
+      const machine = this.machineFor(data);
+      const conflicting = machine.providerSessions.find(
+        (candidate) =>
+          candidate.provider === mapping.provider &&
+          candidate.providerSessionId === mapping.providerSessionId &&
+          candidate.surfaceId !== mapping.surfaceId
+      );
+      const conflictingBinding = machine.bindings.find(
+        (candidate) =>
+          candidate.provider === mapping.provider &&
+          candidate.providerSessionId === mapping.providerSessionId &&
+          candidate.surfaceId !== mapping.surfaceId
+      );
+      if (conflicting || conflictingBinding) {
+        throw new Error("That provider conversation is already matched to another cmux surface.");
+      }
+      const replacing = machine.providerSessions.some(
+        (candidate) => candidate.surfaceId === mapping.surfaceId
+      );
+      if (!replacing && machine.providerSessions.length >= MAX_PROVIDER_SESSIONS_PER_MACHINE) {
+        throw new Error(`${PRODUCT_NAME} has reached the provider-session mapping limit for this machine.`);
+      }
+      machine.providerSessions = machine.providerSessions.filter(
+        (candidate) => candidate.surfaceId !== mapping.surfaceId
+      );
+      machine.providerSessions.push({ ...mapping });
+
+      const binding = machine.bindings.find(
+        (candidate) =>
+          candidate.workspaceId === mapping.workspaceId &&
+          candidate.paneId === mapping.paneId &&
+          candidate.surfaceId === mapping.surfaceId
+      );
+      if (binding) {
+        binding.provider = mapping.provider;
+        binding.providerSessionId = mapping.providerSessionId;
+        const run = machine.runs.find((candidate) => candidate.runId === binding.runId);
+        if (run) {
+          run.provider = mapping.provider;
+          run.providerSessionId = mapping.providerSessionId;
+        }
+      }
+    });
+  }
+
+  async forgetProviderSession(surfaceId: string): Promise<void> {
+    if (!isCanonicalUuid(surfaceId)) throw new Error("Surface ID is not a canonical UUID.");
+    await this.commit((data) => {
+      const machine = this.machineFor(data);
+      const removed = machine.providerSessions.find(
+        (mapping) => mapping.surfaceId === surfaceId
+      );
+      machine.providerSessions = machine.providerSessions.filter(
+        (mapping) => mapping.surfaceId !== surfaceId
+      );
+      const binding = machine.bindings.find((candidate) => candidate.surfaceId === surfaceId);
+      if (
+        removed &&
+        binding?.provider === removed.provider &&
+        binding.providerSessionId === removed.providerSessionId
+      ) {
+        binding.providerSessionId = null;
+        const run = machine.runs.find((candidate) => candidate.runId === binding.runId);
+        if (
+          run?.provider === removed.provider &&
+          run.providerSessionId === removed.providerSessionId
+        ) {
+          run.providerSessionId = null;
+        }
+      }
+    });
   }
 
   findBySurface(surfaceId: string): BindingRecord | null {
@@ -262,7 +381,7 @@ export class BindingRepository {
   }
 
   private machineFor(data: PersistedPluginData): MachineBindings {
-    data.machines[this.currentMachineId] ??= { bindings: [], runs: [] };
+    data.machines[this.currentMachineId] ??= { bindings: [], runs: [], providerSessions: [] };
     return data.machines[this.currentMachineId]!;
   }
 

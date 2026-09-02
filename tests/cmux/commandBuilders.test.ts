@@ -16,6 +16,12 @@ describe("cmux command construction", () => {
       "uuids",
       "list-notifications"
     ]);
+    expect(cmuxCommands.listAgents()).toEqual([
+      "--json",
+      "--id-format",
+      "uuids",
+      "list-agents"
+    ]);
     expect(cmuxCommands.identifyFocused()).toEqual([
       "--json",
       "--id-format",

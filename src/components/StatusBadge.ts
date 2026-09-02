@@ -49,6 +49,7 @@ export function phaseLabel(phase: ExecutionPhase): string {
     unknown: "State unknown",
     working: "Working",
     waiting: "Needs input",
+    idle: "Idle",
     "turn-finished": "Review output",
     failed: "Error reported"
   };

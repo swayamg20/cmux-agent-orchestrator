@@ -1,14 +1,26 @@
 import type { AgentDetector } from "../agents/AgentDetector";
-import type { BindingRecord } from "../bindings/types";
+import type { BindingRecord, ProviderSessionMapping } from "../bindings/types";
 import { surfaceKey, type CmuxNotification, type CmuxPreview, type CmuxSnapshot } from "../cmux/types";
 import { reduceSessionEvidence } from "../evidence/SessionStateReducer";
 import type { SessionEvidence } from "../evidence/types";
+import { providerMetadataKey } from "../providers/ProviderMetadataService";
+import type { AutomaticProviderSessionMapping } from "../providers/identity/types";
+import type {
+  ProviderMatchSource,
+  ProviderSessionKind,
+  ProviderSessionMetadata,
+  SessionConversation
+} from "../providers/types";
+import { isCanonicalUuid } from "../security/identifiers";
 import type { LiveSession, ProviderDetection } from "../state/types";
 
 export interface SessionProjectionInput {
   snapshot: CmuxSnapshot;
   notifications: readonly CmuxNotification[];
   bindings: readonly BindingRecord[];
+  providerMappings: readonly ProviderSessionMapping[];
+  automaticProviderMappings?: readonly AutomaticProviderSessionMapping[];
+  providerMetadata: ReadonlyMap<string, ProviderSessionMetadata>;
   detector: AgentDetector;
   providerEvidence: ReadonlyMap<string, ProviderDetection>;
   previewFor(key: string): CmuxPreview | null;
@@ -26,6 +38,63 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
   const bindingIndex = new Map(
     input.bindings.map((binding) => [surfaceKey(binding), binding] as const)
   );
+  const providerMappingIndex = new Map<string, ExactProviderMapping>();
+  const bindingProviderSurfaceIds = new Set<string>();
+  const claimedProviderSessions = new Set<string>();
+  for (const mapping of input.providerMappings) {
+    const providerSessionKey = `${mapping.provider}:${mapping.providerSessionId}`;
+    if (
+      providerMappingIndex.has(mapping.surfaceId) ||
+      claimedProviderSessions.has(providerSessionKey)
+    ) {
+      continue;
+    }
+    providerMappingIndex.set(mapping.surfaceId, {
+      workspaceId: mapping.workspaceId,
+      paneId: mapping.paneId,
+      surfaceId: mapping.surfaceId,
+      provider: mapping.provider,
+      providerSessionId: mapping.providerSessionId,
+      matchSource: "manual",
+      matchConfidence: "high",
+      explanation: "The user explicitly matched this exact cmux surface to a provider conversation."
+    });
+    claimedProviderSessions.add(providerSessionKey);
+  }
+  for (const mapping of input.automaticProviderMappings ?? []) {
+    const providerSessionKey = `${mapping.provider}:${mapping.providerSessionId}`;
+    if (
+      providerMappingIndex.has(mapping.surfaceId) ||
+      claimedProviderSessions.has(providerSessionKey)
+    ) {
+      continue;
+    }
+    providerMappingIndex.set(mapping.surfaceId, {
+      workspaceId: mapping.workspaceId,
+      paneId: mapping.paneId,
+      surfaceId: mapping.surfaceId,
+      provider: mapping.provider,
+      providerSessionId: mapping.providerSessionId,
+      matchSource: mapping.matchSource,
+      matchConfidence: mapping.confidence,
+      explanation: mapping.explanation
+    });
+    claimedProviderSessions.add(providerSessionKey);
+  }
+  for (const binding of input.bindings) {
+    if (
+      providerMappingIndex.has(binding.surfaceId) ||
+      (binding.provider !== "claude" && binding.provider !== "codex") ||
+      binding.providerSessionId === null ||
+      !isCanonicalUuid(binding.providerSessionId)
+    ) {
+      continue;
+    }
+    const providerSessionKey = `${binding.provider}:${binding.providerSessionId}`;
+    if (claimedProviderSessions.has(providerSessionKey)) continue;
+    claimedProviderSessions.add(providerSessionKey);
+    bindingProviderSurfaceIds.add(binding.surfaceId);
+  }
 
   const sessions: LiveSession[] = [];
   for (const window of input.snapshot.windows) {
@@ -35,10 +104,28 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
           const key = surfaceKey({ workspaceId: workspace.id, surfaceId: surface.id });
           const preview = input.previewFor(key);
           const titleDetection = input.detector.detect(surface, null);
-          const provider =
+          const detectedProvider =
             titleDetection.provider === "unknown"
               ? input.providerEvidence.get(key) ?? titleDetection
               : titleDetection;
+          const binding = bindingIndex.get(key) ?? null;
+          const exactMapping = exactProviderMapping(
+            providerMappingIndex.get(surface.id) ?? null,
+            workspace.id,
+            pane.id,
+            surface.id
+          );
+          const bindingMapping = bindingProviderSurfaceIds.has(surface.id)
+            ? exactBindingMapping(binding, workspace.id, pane.id, surface.id)
+            : null;
+          const mapping = exactMapping ?? bindingMapping;
+          const provider = mapping
+            ? mappedProvider(mapping)
+            : detectedProvider;
+          const metadata = mapping
+            ? input.providerMetadata.get(providerMetadataKey(mapping.provider, mapping.providerSessionId)) ?? null
+            : null;
+          const conversation = conversationFor(metadata, mapping, workspace.currentDirectory);
           sessions.push({
             key,
             workspaceId: workspace.id,
@@ -55,7 +142,8 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
             assessment: reduceSessionEvidence(input.evidenceFor(key), input.snapshot.observedAt),
             observedAt: input.snapshot.observedAt,
             notifications: notificationIndex.get(key) ?? [],
-            linkedTaskId: bindingIndex.get(key)?.taskId ?? null,
+            linkedTaskId: binding?.taskId ?? null,
+            conversation,
             preview
           });
         }
@@ -68,4 +156,97 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
       left.paneIndex - right.paneIndex ||
       left.surfaceIndex - right.surfaceIndex
   );
+}
+
+interface ExactProviderMapping {
+  workspaceId: string;
+  paneId: string;
+  surfaceId: string;
+  provider: ProviderSessionKind;
+  providerSessionId: string;
+  matchSource: ProviderMatchSource;
+  matchConfidence: "low" | "medium" | "high";
+  explanation: string;
+}
+
+function exactProviderMapping(
+  mapping: ExactProviderMapping | null,
+  workspaceId: string,
+  paneId: string,
+  surfaceId: string
+): ExactProviderMapping | null {
+  if (
+    mapping?.workspaceId !== workspaceId ||
+    mapping.paneId !== paneId ||
+    mapping.surfaceId !== surfaceId
+  ) {
+    return null;
+  }
+  return mapping;
+}
+
+function exactBindingMapping(
+  binding: BindingRecord | null,
+  workspaceId: string,
+  paneId: string,
+  surfaceId: string
+): ExactProviderMapping | null {
+  if (
+    binding?.workspaceId !== workspaceId ||
+    binding.paneId !== paneId ||
+    binding.surfaceId !== surfaceId ||
+    (binding.provider !== "claude" && binding.provider !== "codex") ||
+    binding.providerSessionId === null ||
+    !isCanonicalUuid(binding.providerSessionId)
+  ) {
+    return null;
+  }
+  return {
+    workspaceId,
+    paneId,
+    surfaceId,
+    provider: binding.provider,
+    providerSessionId: binding.providerSessionId,
+    matchSource: "task-binding",
+    matchConfidence: "medium",
+    explanation: "The attached task records this provider conversation ID for the exact cmux surface."
+  };
+}
+
+function mappedProvider(mapping: ExactProviderMapping): ProviderDetection {
+  return {
+    provider: mapping.provider,
+    confidence: mapping.matchConfidence,
+    source: providerDetectionSource(mapping.matchSource),
+    explanation: mapping.explanation,
+    sessionId: mapping.providerSessionId
+  };
+}
+
+function providerDetectionSource(
+  source: ProviderMatchSource
+): ProviderDetection["source"] {
+  return source === "manual" ? "provider-session-mapping" : source;
+}
+
+function conversationFor(
+  metadata: ProviderSessionMetadata | null,
+  mapping: ExactProviderMapping | null,
+  currentDirectory: string | null
+): SessionConversation | null {
+  if (
+    !metadata ||
+    !mapping ||
+    currentDirectory === null ||
+    metadata.provider !== mapping.provider ||
+    metadata.sessionId !== mapping.providerSessionId ||
+    metadata.cwd !== currentDirectory
+  ) {
+    return null;
+  }
+  return {
+    ...metadata,
+    matchSource: mapping.matchSource,
+    matchConfidence: mapping.matchConfidence
+  };
 }

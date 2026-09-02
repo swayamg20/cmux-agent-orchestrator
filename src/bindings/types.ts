@@ -23,6 +23,15 @@ export interface AgentRunRecord {
   lastAttachedAt: string;
 }
 
+export interface ProviderSessionMapping {
+  workspaceId: string;
+  paneId: string;
+  surfaceId: string;
+  provider: "claude" | "codex";
+  providerSessionId: string;
+  matchedAt: string;
+}
+
 export type NewBindingRecord = Omit<BindingRecord, "bindingId" | "runId">;
 
 export interface AttachBindingResult {
@@ -34,4 +43,5 @@ export interface AttachBindingResult {
 export interface MachineBindings {
   bindings: BindingRecord[];
   runs: AgentRunRecord[];
+  providerSessions: ProviderSessionMapping[];
 }

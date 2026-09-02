@@ -1,0 +1,4 @@
+{"type":"user","message":{"content":"This transcript content must not become a title."},"sessionId":"44444444-4444-4444-8444-444444444444"}
+{"type":"ai-title","aiTitle":"Investigate cmux title mapping","sessionId":"44444444-4444-4444-8444-444444444444"}
+{"type":"ai-title","aiTitle":"Wrong conversation title","sessionId":"55555555-5555-4555-8555-555555555555"}
+{"type":"custom-title","customTitle":"Provider conversation titles","sessionId":"44444444-4444-4444-8444-444444444444"}

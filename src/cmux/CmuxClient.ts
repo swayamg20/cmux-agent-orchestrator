@@ -7,6 +7,7 @@ import { CliCmuxTransport } from "./CliCmuxTransport";
 import type { CmuxTransport, PreviewRequest } from "./CmuxTransport";
 import {
   CmuxError,
+  type CmuxAgentRecord,
   type CmuxNotification,
   type CmuxPreview,
   type CmuxProbe,
@@ -45,6 +46,10 @@ export class CmuxClient {
 
   notifications(signal?: AbortSignal): Promise<CmuxNotification[]> {
     return this.transport.notifications(signal);
+  }
+
+  agents(signal?: AbortSignal): Promise<CmuxAgentRecord[] | null> {
+    return this.transport.agents?.(signal) ?? Promise.resolve(null);
   }
 
   readPreview(target: CmuxTarget, request: PreviewRequest): Promise<CmuxPreview> {

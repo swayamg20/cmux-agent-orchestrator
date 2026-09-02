@@ -67,6 +67,7 @@ export type LifecycleSignal =
   | "activity-completed"
   | "input-requested"
   | "input-resolved"
+  | "session-idle"
   | "turn-completed"
   | "session-ended"
   | "runtime-failed";

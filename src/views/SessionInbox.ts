@@ -1,12 +1,15 @@
 import { Menu, setIcon } from "obsidian";
 import type { SessionCardActions } from "../components/SessionCard";
-import { providerLabel, repositoryLabel } from "../components/SessionCard";
+import { providerLabel, repositoryLabel, sessionDisplayTitle } from "../components/SessionCard";
 import { renderRuntimeBadge } from "../components/StatusBadge";
 import type { CockpitState, LiveSession } from "../state/types";
 import { DEFAULT_SESSION_INBOX_LIMIT, selectSessionInbox } from "./SessionInboxModel";
 
 export interface SessionInboxActions
-  extends Pick<SessionCardActions, "focus" | "attachTask" | "createTask"> {
+  extends Pick<
+    SessionCardActions,
+    "focus" | "attachTask" | "createTask" | "chooseConversation" | "forgetConversation"
+  > {
   setShowAll(showAll: boolean): void;
 }
 
@@ -72,11 +75,11 @@ function renderInboxRow(container: HTMLElement, session: LiveSession, actions: S
   const identity = row.createDiv({ cls: "agent-cockpit-inbox-identity" });
   identity.createDiv({
     cls: "agent-cockpit-session-title",
-    text: session.surfaceTitle || repositoryLabel(session.currentDirectory)
+    text: sessionDisplayTitle(session)
   });
   identity.createDiv({
     cls: "agent-cockpit-session-meta",
-    text: `${providerLabel(session.provider.provider)} · ${repositoryLabel(session.currentDirectory)} · ${session.workspaceTitle}`
+    text: `${providerLabel(session.provider.provider)} · ${repositoryLabel(session.currentDirectory)} · ${session.workspaceTitle}${session.conversation ? "" : " · cmux title fallback"}`
   });
 
   const runtime = row.createDiv({ cls: "agent-cockpit-inbox-runtime" });
@@ -130,6 +133,26 @@ function renderMoreButton(container: HTMLElement, session: LiveSession, actions:
         .setIcon("link")
         .onClick(() => actions.attachTask(session))
     );
+    if (session.provider.provider === "claude" || session.provider.provider === "codex") {
+      menu.addItem((item) =>
+        item
+          .setTitle(
+            session.provider.source === "provider-session-mapping"
+              ? "Change provider conversation"
+              : "Choose provider conversation"
+          )
+          .setIcon("messages-square")
+          .onClick(() => actions.chooseConversation(session))
+      );
+    }
+    if (session.provider.source === "provider-session-mapping") {
+      menu.addItem((item) =>
+        item
+          .setTitle("Forget conversation match")
+          .setIcon("unlink")
+          .onClick(() => actions.forgetConversation(session))
+      );
+    }
     const bounds = button.getBoundingClientRect();
     menu.showAtPosition({ x: bounds.right, y: bounds.bottom, left: true }, button.ownerDocument);
   });

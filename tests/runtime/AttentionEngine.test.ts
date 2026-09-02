@@ -57,6 +57,7 @@ describe("AttentionEngine", () => {
       provider: { provider: "unknown", confidence: "low", source: "none", explanation: "unknown", sessionId: null },
       observedAt: 1_000,
       linkedTaskId: null,
+      conversation: null,
       preview: null
     };
     const sessions: LiveSession[] = [
