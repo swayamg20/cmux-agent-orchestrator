@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Automatically create one neutral Active Work task for each newly discovered, uniquely resolved Claude or Codex provider session.
+- Show the memory-only provider conversation title on its live Work card while keeping automatically written Markdown free of conversation and terminal titles.
+- Add a default-on setting to disable creation of new automatic tasks without changing existing tasks or running agents.
+
+### Security
+
+- Re-resolve the complete live cmux tuple and exact provider identity before persisting each automatic binding.
+- Fail closed for ambiguous, duplicate, heuristic-only, invalid, shell, and unknown identities, and retain detached run history as a durable no-recreate marker.
+- Serialize automatic tracking and derive stable task IDs so refreshes, reloads, and recoverable partial writes cannot duplicate a provider run.
+
 ## [0.2.0] - 2026-09-03
 
 ### Added

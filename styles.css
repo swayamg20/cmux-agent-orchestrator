@@ -932,6 +932,16 @@
   white-space: nowrap;
 }
 
+.agent-cockpit-task-run-title {
+  margin-top: var(--ac-space-2);
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-cockpit-task-pending {
   margin-top: var(--ac-space-2);
   padding: var(--ac-space-2);

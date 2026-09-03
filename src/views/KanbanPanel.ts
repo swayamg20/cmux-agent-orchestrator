@@ -36,7 +36,7 @@ export function renderKanbanPanel(
   if (state.tasks.length === 0) {
     panel.createDiv({
       cls: "agent-cockpit-board-empty-note",
-      text: "No tracked work yet. Open Agent runs and choose Track in board, or create a task manually."
+      text: "No tracked work yet. With automatic tracking enabled, exact Claude and Codex sessions are added after startup or Refresh. Ambiguous runs remain under Agent runs."
     });
   }
 

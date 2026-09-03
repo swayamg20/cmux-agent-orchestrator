@@ -34,7 +34,7 @@ export function renderSessionInbox(
     attr: { "aria-label": `${selection.total} untracked agent runs` }
   });
   title.createEl("p", {
-    text: "Detected automatically from cmux. Track a run to create an active card without controlling the agent."
+    text: "Unlinked Claude and Codex runs stay here for manual review. Exact sessions are added to the work board automatically when enabled."
   });
 
   if (selection.total === 0) {
@@ -43,7 +43,7 @@ export function renderSessionInbox(
     setIcon(icon, "check-check");
     empty.createSpan({
       text: hasDetectedAgentRun(state.sessions)
-        ? "Every detected Claude or Codex run is attached to durable work."
+        ? "Every confidently detected Claude or Codex run is represented on the work board."
         : "No unassigned Claude or Codex runs are confidently detected right now."
     });
     return;

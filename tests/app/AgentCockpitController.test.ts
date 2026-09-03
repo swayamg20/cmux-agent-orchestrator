@@ -677,6 +677,7 @@ describe("AgentCockpitController connection failures", () => {
     expect(controller.store.getState().runs).toHaveLength(1);
     expect(markdownWrites).toHaveLength(1);
     expect(markdownWrites[0]).not.toContain("Private: repair the production payment pipeline");
+    expect(JSON.stringify(persisted)).not.toContain("Private: repair the production payment pipeline");
     expect(controller.store.getState().sessions[0]?.conversation?.title).toBe(
       "Private: repair the production payment pipeline"
     );

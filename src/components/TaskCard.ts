@@ -43,6 +43,16 @@ export function renderTaskCard(
 
   const session = selectPrimarySession(sessions);
   if (session) {
+    const conversationTitle = session.conversation?.title.trim();
+    if (conversationTitle && conversationTitle.toLocaleLowerCase() !== task.title.toLocaleLowerCase()) {
+      card.createDiv({
+        cls: "agent-cockpit-task-run-title",
+        text: conversationTitle,
+        attr: {
+          title: `Current ${providerLabel(session.provider.provider)} conversation: ${conversationTitle}`
+        }
+      });
+    }
     const runtime = card.createDiv({ cls: "agent-cockpit-task-runtime" });
     runtime.createSpan({ text: providerLabel(session.provider.provider) });
     renderRuntimeBadge(runtime, session.assessment);
