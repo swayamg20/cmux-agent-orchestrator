@@ -85,10 +85,18 @@ describe("automatic task tracking policy", () => {
       "66666666-6666-4666-8666-666666666666",
       exactProvider("claude", CLAUDE_SESSION_ID, "claude-process-registry")
     );
+    const modern = session(
+      "77777777-7777-4777-8777-777777777777",
+      exactProvider("codex", "77777777-7777-4777-8777-777777777778", "cmux-agent-registry")
+    );
+    const manual = session(
+      "88888888-8888-4888-8888-888888888888",
+      exactProvider("claude", "88888888-8888-4888-8888-888888888889")
+    );
 
-    const candidates = selectAutomaticTrackCandidates([codex, claude], []);
+    const candidates = selectAutomaticTrackCandidates([codex, claude, modern, manual], []);
 
-    expect(candidates).toHaveLength(2);
+    expect(candidates).toHaveLength(4);
     expect(candidates).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

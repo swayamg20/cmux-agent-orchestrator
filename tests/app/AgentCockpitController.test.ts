@@ -550,7 +550,7 @@ describe("AgentCockpitController connection failures", () => {
       focus: async () => undefined,
       dispose: () => undefined
     };
-    const app = { vault: { getAbstractFileByPath: () => null } } as unknown as App;
+    const { app, markdownWrites } = memoryTaskApp();
     const controller = new AgentCockpitController(
       app,
       plugin,
@@ -579,6 +579,8 @@ describe("AgentCockpitController connection failures", () => {
     });
     expect(controller.store.getState().health.lifecycle.status).toBe("fresh");
     expect(saved).toBe(false);
+    expect(markdownWrites).toEqual([]);
+    expect(controller.store.getState().tasks).toEqual([]);
     controller.dispose();
   });
 
