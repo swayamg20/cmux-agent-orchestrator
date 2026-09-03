@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizePath, TFile, TFolder, type App } from "obsidian";
+import { isCanonicalUuid } from "../security/identifiers";
 import { createTaskMarkdown, type NewTaskInput } from "./TaskTemplate";
 import {
   assertWorkflowTransition,
@@ -16,6 +17,15 @@ export interface CreateTaskOptions {
   repository?: string | null;
   branch?: string | null;
   worktree?: string | null;
+}
+
+export interface EnsureTaskOptions extends CreateTaskOptions {
+  taskId: string;
+}
+
+export interface EnsureTaskResult {
+  task: TaskRecord;
+  created: boolean;
 }
 
 export class TaskRepository {
@@ -66,14 +76,27 @@ export class TaskRepository {
   }
 
   async create(options: CreateTaskOptions): Promise<TaskRecord> {
+    return this.createWithId(options, randomUUID());
+  }
+
+  async ensure(options: EnsureTaskOptions): Promise<EnsureTaskResult> {
+    if (!isCanonicalUuid(options.taskId)) throw new Error("Task ID is not a canonical UUID.");
+    const matches = this.list().filter((task) => task.taskId === options.taskId);
+    if (matches.length > 1) throw new Error("The automatic task ID is duplicated in the vault.");
+    if (matches[0]) return { task: matches[0], created: false };
+    return { task: await this.createWithId(options, options.taskId), created: true };
+  }
+
+  private async createWithId(options: CreateTaskOptions, taskId: string): Promise<TaskRecord> {
     const title = options.title.replace(/[\r\n]+/g, " ").trim();
     if (!title) throw new Error("Task title is required.");
     if (title.length > 512) throw new Error("Task title must be 512 characters or fewer.");
+    if (!isCanonicalUuid(taskId)) throw new Error("Task ID is not a canonical UUID.");
     await this.ensureFolder(this.taskFolder);
     const now = new Date().toISOString();
     const input: NewTaskInput = {
       title,
-      taskId: randomUUID(),
+      taskId,
       workflowStatus: options.workflowStatus ?? "active",
       priority: options.priority ?? "normal",
       repository: taskContext(options.repository, "Repository", 4_096),
@@ -104,16 +127,19 @@ export class TaskRepository {
   async updateWorkflow(task: TaskRecord, workflowStatus: WorkflowStatus): Promise<void> {
     assertWorkflowTransition(task.workflowStatus, workflowStatus);
     const latest = this.findById(task.taskId);
+    const updatedAt = new Date().toISOString();
     await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
       if (frontmatter["task-id"] !== task.taskId) throw new Error("Task identity changed before the update.");
       frontmatter["workflow-status"] = workflowStatus;
-      frontmatter["updated-at"] = new Date().toISOString();
+      frontmatter["updated-at"] = updatedAt;
     });
+    this.recentTasks.set(task.taskId, { ...latest, workflowStatus, updatedAt });
   }
 
   async incrementRunCount(task: TaskRecord): Promise<number> {
     const latest = this.findById(task.taskId);
     let nextCount = task.runCount + 1;
+    const updatedAt = new Date().toISOString();
     await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
       if (frontmatter["task-id"] !== task.taskId) throw new Error("Task identity changed before the update.");
       const current =
@@ -124,8 +150,9 @@ export class TaskRepository {
           : 0;
       nextCount = current + 1;
       frontmatter["run-count"] = nextCount;
-      frontmatter["updated-at"] = new Date().toISOString();
+      frontmatter["updated-at"] = updatedAt;
     });
+    this.recentTasks.set(task.taskId, { ...latest, runCount: nextCount, updatedAt });
     return nextCount;
   }
 

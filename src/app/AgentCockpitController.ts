@@ -39,6 +39,13 @@ import type {
 import type { CreateTaskOptions } from "../tasks/TaskRepository";
 import { TaskRepository } from "../tasks/TaskRepository";
 import type { TaskRecord, WorkflowStatus } from "../tasks/TaskSchema";
+import {
+  automaticTaskTitle,
+  exactTrackableIdentity,
+  providerSessionKey,
+  selectAutomaticTrackCandidates,
+  type AutomaticTrackCandidate
+} from "../tracking/AutomaticTaskTracking";
 import { RefreshCoordinator, type RefreshResult } from "./RefreshCoordinator";
 
 export type CmuxClientFactory = (explicitBinaryPath: string) => Promise<CmuxClient>;
@@ -57,6 +64,8 @@ export class AgentCockpitController {
   private classificationWork: Promise<void> = Promise.resolve();
   private metadataWork: Promise<void> = Promise.resolve();
   private identityWork: Promise<void> = Promise.resolve();
+  private automaticTrackingWork: Promise<void> = Promise.resolve();
+  private readonly reportedAutomaticTrackingIssues = new Set<string>();
   private identityAbortController: AbortController | null = null;
   private identityGeneration = 0;
   private automaticProviderMappings: AutomaticProviderSessionMapping[] = [];
@@ -144,6 +153,7 @@ export class AgentCockpitController {
   async waitForBackgroundWork(): Promise<void> {
     await this.identityWork;
     await Promise.all([this.classificationWork, this.metadataWork]);
+    await this.automaticTrackingWork;
   }
 
   async loadPreview(session: LiveSession): Promise<void> {
@@ -383,6 +393,7 @@ export class AgentCockpitController {
       await this.connect();
     }
     await this.reloadTasks();
+    if (parsed.autoTrackAgentRuns) this.scheduleAutomaticTaskTracking();
   }
 
   async testConnection(): Promise<void> {
@@ -419,6 +430,7 @@ export class AgentCockpitController {
     this.previewCache.clear();
     this.evidence.clear();
     this.providerClassifier.clear();
+    this.reportedAutomaticTrackingIssues.clear();
     this.store.clear();
   }
 
@@ -606,9 +618,160 @@ export class AgentCockpitController {
     const work = this.providerMetadata
       .refreshMapped(mappings, this.store.getState().sessions)
       .then(() => {
-        if (!this.disposed) this.recomputeSessions();
+        if (!this.disposed) {
+          this.recomputeSessions();
+          this.scheduleAutomaticTaskTracking();
+        }
       });
     this.metadataWork = Promise.all([this.metadataWork.catch(() => undefined), work]).then(() => undefined);
+  }
+
+  private scheduleAutomaticTaskTracking(): void {
+    if (this.disposed || this.settings?.autoTrackAgentRuns !== true) return;
+    this.automaticTrackingWork = this.automaticTrackingWork
+      .catch(() => undefined)
+      .then(() => this.reconcileAutomaticTasks())
+      .catch((error: unknown) => {
+        if (this.disposed) return;
+        this.reportAutomaticTrackingIssue("automatic-tracking", error);
+      });
+  }
+
+  private async reconcileAutomaticTasks(): Promise<void> {
+    if (
+      this.disposed ||
+      this.settings?.autoTrackAgentRuns !== true ||
+      this.taskRepository === null
+    ) {
+      return;
+    }
+
+    const candidates = selectAutomaticTrackCandidates(
+      this.store.getState().sessions,
+      this.bindings.listRuns()
+    );
+    if (candidates.length === 0) return;
+
+    let changed = false;
+    let tracked = 0;
+    for (const candidate of candidates) {
+      if (this.disposed || this.settings?.autoTrackAgentRuns !== true) break;
+      const issueKey = providerSessionKey(candidate.provider, candidate.providerSessionId);
+      try {
+        let current = this.resolveCurrentAutomaticCandidate(candidate);
+        if (current === null || this.hasProviderRun(candidate)) continue;
+
+        const ensured = await this.taskRepository.ensure({
+          taskId: candidate.taskId,
+          title: automaticTaskTitle(current, candidate.provider),
+          workflowStatus: "active",
+          priority: "normal",
+          repository: current.currentDirectory,
+          branch: null,
+          worktree: null
+        });
+        changed ||= ensured.created;
+
+        // Vault writes are asynchronous. Resolve the exact target again before
+        // persisting a machine-local cmux binding.
+        current = this.resolveCurrentAutomaticCandidate(candidate);
+        if (current === null || this.hasProviderRun(candidate)) continue;
+        validateBindingIdentity(ensured.task.taskId, current);
+
+        const attachedAt = new Date().toISOString();
+        const result = await this.bindings.attach({
+          taskId: ensured.task.taskId,
+          workspaceId: current.workspaceId,
+          paneId: current.paneId,
+          surfaceId: current.surfaceId,
+          provider: candidate.provider,
+          providerSessionId: candidate.providerSessionId,
+          attachedAt
+        });
+        changed = true;
+        if (result.isNewRun) {
+          try {
+            await this.taskRepository.incrementRunCount(ensured.task);
+          } catch (error) {
+            this.reportAutomaticTrackingIssue(
+              `${issueKey}:run-count`,
+              new Error(`The run was tracked, but its task count was not updated: ${readableError(error)}`)
+            );
+          }
+        }
+        tracked += 1;
+        this.clearAutomaticTrackingIssues(issueKey);
+      } catch (error) {
+        this.reportAutomaticTrackingIssue(issueKey, error);
+      }
+    }
+
+    if (changed) {
+      this.store.update({
+        tasks: this.taskRepository.list(),
+        bindings: this.bindings.list(),
+        runs: this.bindings.listRuns()
+      });
+      this.recomputeSessions();
+    }
+    if (tracked > 0) {
+      new Notice(
+        `Automatically tracked ${String(tracked)} exact agent ${tracked === 1 ? "run" : "runs"} on the Work board.`
+      );
+    }
+  }
+
+  private resolveCurrentAutomaticCandidate(candidate: AutomaticTrackCandidate): LiveSession | null {
+    const state = this.store.getState();
+    const current = state.sessions.find(
+      (session) =>
+        session.workspaceId === candidate.session.workspaceId &&
+        session.paneId === candidate.session.paneId &&
+        session.surfaceId === candidate.session.surfaceId
+    );
+    if (current === undefined || current.linkedTaskId !== null) return null;
+
+    const identity = exactTrackableIdentity(current);
+    if (
+      identity === null ||
+      identity.provider !== candidate.provider ||
+      identity.sessionId !== candidate.providerSessionId
+    ) {
+      return null;
+    }
+
+    const matchingSurfaces = state.sessions.filter((session) => {
+      const other = exactTrackableIdentity(session);
+      return (
+        other?.provider === candidate.provider &&
+        other.sessionId === candidate.providerSessionId
+      );
+    });
+    return matchingSurfaces.length === 1 ? current : null;
+  }
+
+  private hasProviderRun(candidate: AutomaticTrackCandidate): boolean {
+    const key = providerSessionKey(candidate.provider, candidate.providerSessionId);
+    return this.bindings.listRuns().some(
+      (run) =>
+        (run.provider === "claude" || run.provider === "codex") &&
+        run.providerSessionId !== null &&
+        providerSessionKey(run.provider, run.providerSessionId) === key
+    );
+  }
+
+  private reportAutomaticTrackingIssue(key: string, error: unknown): void {
+    const message = readableError(error);
+    const signature = `${key}:${message}`;
+    if (this.reportedAutomaticTrackingIssues.has(signature)) return;
+    this.reportedAutomaticTrackingIssues.add(signature);
+    new Notice(`Automatic task tracking could not finish: ${message}`);
+  }
+
+  private clearAutomaticTrackingIssues(key: string): void {
+    for (const signature of this.reportedAutomaticTrackingIssues) {
+      if (signature.startsWith(`${key}:`)) this.reportedAutomaticTrackingIssues.delete(signature);
+    }
   }
 
   private scheduleProviderIdentityResolution(snapshot: CmuxSnapshot): void {
@@ -753,6 +916,7 @@ export class AgentCockpitController {
       });
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
       this.recomputeSessions();
+      this.scheduleAutomaticTaskTracking();
       new Notice(`Matched this cmux surface to “${conversation.title}”.`);
     } catch (error) {
       new Notice(readableError(error));

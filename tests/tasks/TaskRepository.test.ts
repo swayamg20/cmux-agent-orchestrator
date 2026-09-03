@@ -51,4 +51,60 @@ describe("TaskRepository", () => {
     expect(tasks[0]).toMatchObject({ title: "Scoped task", workflowStatus: "active" });
     expect(getMarkdownFiles).not.toHaveBeenCalled();
   });
+
+  it("creates a deterministic task once and reuses it after the vault index catches up", async () => {
+    const entries = new Map<string, TFile | TFolder>();
+    const frontmatter = new Map<TFile, Record<string, unknown>>();
+    const writes: string[] = [];
+    const createFolder = async (path: string): Promise<void> => {
+      const created = folder(path, []);
+      entries.set(path, created);
+      const parentPath = path.split("/").slice(0, -1).join("/");
+      const parent = entries.get(parentPath);
+      if (parent instanceof TFolder) parent.children.push(created);
+    };
+    const app = {
+      vault: {
+        getAbstractFileByPath: (path: string) => entries.get(path) ?? null,
+        createFolder,
+        create: async (path: string, markdown: string) => {
+          writes.push(markdown);
+          const created = file(path);
+          entries.set(path, created);
+          const parent = entries.get(path.split("/").slice(0, -1).join("/"));
+          if (parent instanceof TFolder) parent.children.push(created);
+          frontmatter.set(created, {
+            "agent-cockpit": "task",
+            "schema-version": 1,
+            "task-id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            title: "Codex run · repository",
+            "workflow-status": "active",
+            priority: "normal",
+            repository: "/repository",
+            "run-count": 0,
+            "created-at": "2026-09-04T00:00:00.000Z",
+            "updated-at": "2026-09-04T00:00:00.000Z"
+          });
+          return created;
+        }
+      },
+      metadataCache: {
+        getFileCache: (candidate: TFile) => ({ frontmatter: frontmatter.get(candidate) })
+      }
+    } as unknown as App;
+    const repository = new TaskRepository(app, "Agent Cockpit/Tasks");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+
+    const first = await repository.ensure(options);
+    const second = await repository.ensure(options);
+
+    expect(first).toMatchObject({ created: true, task: { taskId: options.taskId } });
+    expect(second).toMatchObject({ created: false, task: { taskId: options.taskId } });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain(`task-id: "${options.taskId}"`);
+  });
 });

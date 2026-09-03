@@ -48,6 +48,12 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
             render: (setting) => this.addTaskFolderInput(setting, getDraft())
           },
           {
+            name: "Automatically track agent runs",
+            desc: "Create one active Markdown task for each newly discovered, exact Claude or Codex session. Ambiguous sessions remain available for manual tracking.",
+            aliases: ["automatic tasks", "auto track", "work board"],
+            render: (setting) => this.addAutomaticTrackingToggle(setting, getDraft())
+          },
+          {
             name: "Preview lines",
             desc: "Displayed preview size for startup, explicit refresh, and expanded sessions. Preview text is never persisted.",
             aliases: ["terminal preview", "screen lines"],
@@ -88,6 +94,15 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
       draft
     );
 
+    this.addAutomaticTrackingToggle(
+      new Setting(this.containerEl)
+        .setName("Automatically track agent runs")
+        .setDesc(
+          "Create one active Markdown task for each newly discovered, exact Claude or Codex session. Ambiguous sessions remain available for manual tracking."
+        ),
+      draft
+    );
+
     this.addPreviewLinesDropdown(
       new Setting(this.containerEl)
         .setName("Preview lines")
@@ -122,6 +137,14 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
     setting.addText((text) =>
       text.setValue(draft.taskFolder).onChange((value) => {
         draft.taskFolder = value;
+      })
+    );
+  }
+
+  private addAutomaticTrackingToggle(setting: Setting, draft: AgentCockpitSettings): void {
+    setting.addToggle((toggle) =>
+      toggle.setValue(draft.autoTrackAgentRuns).onChange((value) => {
+        draft.autoTrackAgentRuns = value;
       })
     );
   }

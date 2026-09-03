@@ -28,6 +28,7 @@ describe("AgentCockpitSettingsTab", () => {
           { name: "cmux connection" },
           { name: "cmux binary" },
           { name: "Task folder" },
+          { name: "Automatically track agent runs" },
           { name: "Preview lines" },
           { name: "Save settings", searchable: false }
         ]

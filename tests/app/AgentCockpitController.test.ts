@@ -1,4 +1,4 @@
-import type { App, Plugin } from "obsidian";
+import { TFile, TFolder, type App, type Plugin } from "obsidian";
 import { describe, expect, it } from "vitest";
 import { AgentCockpitController } from "../../src/app/AgentCockpitController";
 import { BindingRepository } from "../../src/bindings/BindingRepository";
@@ -8,6 +8,72 @@ import { CmuxError, type CmuxSnapshot } from "../../src/cmux/types";
 import { ProviderMetadataService } from "../../src/providers/ProviderMetadataService";
 import type { ProviderSessionResolver } from "../../src/providers/identity/types";
 import type { ProviderSessionSource } from "../../src/providers/types";
+
+function memoryTaskApp(): { app: App; markdownWrites: string[] } {
+  const entries = new Map<string, TFile | TFolder>();
+  const cachedFrontmatter = new Map<TFile, Record<string, unknown>>();
+  const markdownWrites: string[] = [];
+  const line = (markdown: string, key: string): string => {
+    const match = markdown.match(new RegExp(`^${key}: (.+)$`, "m"));
+    if (!match?.[1]) throw new Error(`Missing ${key} in task fixture.`);
+    return match[1];
+  };
+  const jsonLine = (markdown: string, key: string): unknown => JSON.parse(line(markdown, key));
+  const createFolder = async (path: string): Promise<void> => {
+    const created = Object.assign(new TFolder(), { path, children: [] as Array<TFile | TFolder> });
+    entries.set(path, created);
+    const parent = entries.get(path.split("/").slice(0, -1).join("/"));
+    if (parent instanceof TFolder) parent.children.push(created);
+  };
+  const app = {
+    vault: {
+      getAbstractFileByPath: (path: string) => entries.get(path) ?? null,
+      createFolder,
+      create: async (path: string, markdown: string) => {
+        markdownWrites.push(markdown);
+        const name = path.split("/").pop() ?? path;
+        const created = Object.assign(new TFile(), {
+          path,
+          extension: "md",
+          basename: name.replace(/\.md$/, ""),
+          stat: { ctime: Date.now(), mtime: Date.now() }
+        });
+        entries.set(path, created);
+        const parent = entries.get(path.split("/").slice(0, -1).join("/"));
+        if (parent instanceof TFolder) parent.children.push(created);
+        cachedFrontmatter.set(created, {
+          "agent-cockpit": "task",
+          "schema-version": 1,
+          "task-id": jsonLine(markdown, "task-id"),
+          title: jsonLine(markdown, "title"),
+          "workflow-status": line(markdown, "workflow-status"),
+          priority: line(markdown, "priority"),
+          repository: jsonLine(markdown, "repository"),
+          branch: jsonLine(markdown, "branch"),
+          worktree: jsonLine(markdown, "worktree"),
+          "run-count": Number(line(markdown, "run-count")),
+          "created-at": jsonLine(markdown, "created-at"),
+          "updated-at": jsonLine(markdown, "updated-at")
+        });
+        return created;
+      }
+    },
+    metadataCache: {
+      getFileCache: (file: TFile) => ({ frontmatter: cachedFrontmatter.get(file) })
+    },
+    fileManager: {
+      processFrontMatter: async (
+        file: TFile,
+        update: (frontmatter: Record<string, unknown>) => void
+      ) => {
+        const frontmatter = cachedFrontmatter.get(file);
+        if (!frontmatter) throw new Error("Missing task frontmatter fixture.");
+        update(frontmatter);
+      }
+    }
+  } as unknown as App;
+  return { app, markdownWrites };
+}
 
 function snapshot(observedAt: number): CmuxSnapshot {
   return {
@@ -407,7 +473,7 @@ describe("AgentCockpitController connection failures", () => {
   it("projects an automatic exact conversation title and lifecycle without persisting the match", async () => {
     let saved = false;
     const plugin = {
-      loadData: async () => undefined,
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
       saveData: async () => {
         saved = true;
       }
@@ -513,6 +579,127 @@ describe("AgentCockpitController connection failures", () => {
     });
     expect(controller.store.getState().health.lifecycle.status).toBe("fresh");
     expect(saved).toBe(false);
+    controller.dispose();
+  });
+
+  it("automatically creates one neutral active task for an exact session and never recreates it", async () => {
+    let persisted: unknown;
+    let observedAt = 1_000;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [
+        {
+          provider: "codex",
+          sessionId: "55555555-5555-4555-8555-555555555555",
+          title: "Private: repair the production payment pipeline",
+          titleSource: "explicit-name",
+          cwd: "/repository",
+          updatedAt: 1_000,
+          status: "active"
+        }
+      ],
+      get: async () => null,
+      dispose: () => undefined
+    };
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        checkedAt: currentSnapshot.observedAt + 1,
+        nativeLifecycleAvailable: false,
+        issues: [],
+        mappings: [
+          {
+            workspaceId: "22222222-2222-4222-8222-222222222222",
+            paneId: "33333333-3333-4333-8333-333333333333",
+            surfaceId: "44444444-4444-4444-8444-444444444444",
+            provider: "codex",
+            providerSessionId: "55555555-5555-4555-8555-555555555555",
+            matchSource: "codex-writer-lock",
+            confidence: "high",
+            explanation: "Verified exact writer identity.",
+            observedAt: currentSnapshot.observedAt + 1
+          }
+        ],
+        lifecycle: []
+      }),
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      probe: async () => ({
+        binaryPath: "/cmux",
+        versionText: "cmux 0.62.2",
+        capabilities: {
+          version: 2,
+          protocol: "cmux-socket",
+          accessMode: "password",
+          methods: new Set()
+        },
+        latencyMs: 1
+      }),
+      snapshot: async () => snapshot(++observedAt),
+      notifications: async () => [],
+      readPreview: async (target) => ({ ...target, text: "", observedAt, truncated: false }),
+      focusedTarget: async () => null,
+      focus: async () => undefined,
+      dispose: () => undefined
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([source]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().tasks).toMatchObject([
+      {
+        title: "Codex run · repository",
+        workflowStatus: "active",
+        repository: "/repository",
+        runCount: 1
+      }
+    ]);
+    expect(controller.store.getState().bindings).toMatchObject([
+      {
+        provider: "codex",
+        providerSessionId: "55555555-5555-4555-8555-555555555555"
+      }
+    ]);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(markdownWrites).toHaveLength(1);
+    expect(markdownWrites[0]).not.toContain("Private: repair the production payment pipeline");
+    expect(controller.store.getState().sessions[0]?.conversation?.title).toBe(
+      "Private: repair the production payment pipeline"
+    );
+
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().tasks).toHaveLength(1);
+    expect(controller.store.getState().bindings).toHaveLength(1);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(markdownWrites).toHaveLength(1);
+
+    const task = controller.store.getState().tasks[0]!;
+    await controller.updateWorkflow(task, "done");
+    await controller.detachTask(controller.store.getState().sessions[0]!);
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, workflowStatus: "done", runCount: 1 }
+    ]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(markdownWrites).toHaveLength(1);
     controller.dispose();
   });
 });

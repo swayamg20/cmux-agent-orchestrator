@@ -33,4 +33,9 @@ describe("cmux Agent Orchestrator settings", () => {
     expect(settings).not.toHaveProperty("visibleTreePollMs");
     expect(settings).not.toHaveProperty("visibleNotificationPollMs");
   });
+
+  it("enables exact automatic task tracking by default and preserves an explicit opt-out", () => {
+    expect(parseSettings(undefined).autoTrackAgentRuns).toBe(true);
+    expect(parseSettings({ autoTrackAgentRuns: false }).autoTrackAgentRuns).toBe(false);
+  });
 });
