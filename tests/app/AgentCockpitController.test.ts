@@ -607,7 +607,7 @@ describe("AgentCockpitController connection failures", () => {
       get: async () => null,
       dispose: () => undefined
     };
-    const resolver: ProviderSessionResolver = {
+    const createResolver = (): ProviderSessionResolver => ({
       resolve: async (currentSnapshot) => ({
         checkedAt: currentSnapshot.observedAt + 1,
         nativeLifecycleAvailable: false,
@@ -628,7 +628,7 @@ describe("AgentCockpitController connection failures", () => {
         lifecycle: []
       }),
       dispose: () => undefined
-    };
+    });
     const transport: CmuxTransport = {
       probe: async () => ({
         binaryPath: "/cmux",
@@ -649,13 +649,15 @@ describe("AgentCockpitController connection failures", () => {
       dispose: () => undefined
     };
     const { app, markdownWrites } = memoryTaskApp();
-    const controller = new AgentCockpitController(
-      app,
-      plugin,
-      async () => new CmuxClient(transport),
-      new ProviderMetadataService([source]),
-      resolver
-    );
+    const createController = (): AgentCockpitController =>
+      new AgentCockpitController(
+        app,
+        plugin,
+        async () => new CmuxClient(transport),
+        new ProviderMetadataService([source]),
+        createResolver()
+      );
+    let controller = createController();
 
     await controller.initialize();
     await controller.waitForBackgroundWork();
@@ -689,12 +691,32 @@ describe("AgentCockpitController connection failures", () => {
     expect(controller.store.getState().runs).toHaveLength(1);
     expect(markdownWrites).toHaveLength(1);
 
+    controller.dispose();
+    controller = createController();
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().tasks).toHaveLength(1);
+    expect(controller.store.getState().bindings).toHaveLength(1);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(markdownWrites).toHaveLength(1);
+
     const task = controller.store.getState().tasks[0]!;
     await controller.updateWorkflow(task, "done");
     await controller.detachTask(controller.store.getState().sessions[0]!);
     await controller.refreshNow();
     await controller.waitForBackgroundWork();
 
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, workflowStatus: "done", runCount: 1 }
+    ]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(markdownWrites).toHaveLength(1);
+
+    controller.dispose();
+    controller = createController();
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
     expect(controller.store.getState().tasks).toMatchObject([
       { taskId: task.taskId, workflowStatus: "done", runCount: 1 }
     ]);
