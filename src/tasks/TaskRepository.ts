@@ -152,7 +152,7 @@ export class TaskRepository {
     if (normalizedTaskId === null) throw new Error("Task ID is not a canonical UUID.");
     const taskFolder = this.taskFolder;
     if (canMutate && !canMutate()) return null;
-    await this.ensureFolder(taskFolder);
+    if (!(await this.ensureFolder(taskFolder, canMutate))) return null;
     if (canMutate && !canMutate()) return null;
     const now = new Date().toISOString();
     const input: NewTaskInput = {
@@ -313,16 +313,21 @@ export class TaskRepository {
     return path;
   }
 
-  private async ensureFolder(folderPath: string): Promise<void> {
+  private async ensureFolder(folderPath: string, canMutate?: MutationGuard): Promise<boolean> {
     const normalized = normalizePath(folderPath);
     let current = "";
     for (const segment of normalized.split("/")) {
+      if (canMutate && !canMutate()) return false;
       current = current ? `${current}/${segment}` : segment;
       const existing = this.app.vault.getAbstractFileByPath(current);
       if (existing instanceof TFile) throw new Error(`${current} is a file, not a folder.`);
-      if (existing === null) await this.app.vault.createFolder(current);
+      if (existing === null) {
+        await this.app.vault.createFolder(current);
+        if (canMutate && !canMutate()) return false;
+      }
       else if (!(existing instanceof TFolder)) throw new Error(`${current} is not a folder.`);
     }
+    return true;
   }
 
   private indexedTasks(): TaskRecord[] {

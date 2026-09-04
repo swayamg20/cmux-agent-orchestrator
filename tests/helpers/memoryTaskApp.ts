@@ -5,6 +5,7 @@ export interface MemoryTaskAppOptions {
   failFrontmatterWritesAfterMutation?: number;
   failCreatesAfterMutation?: number;
   beforeCreate?: () => Promise<void>;
+  beforeCreateFolder?: (path: string) => Promise<void>;
   beforeFrontmatter?: () => Promise<void>;
   beforeLookup?: (path: string) => void;
   removeAfterCreate?: boolean;
@@ -12,6 +13,7 @@ export interface MemoryTaskAppOptions {
 
 export interface MemoryTaskApp {
   app: App;
+  createdFolderPaths: string[];
   markdownWrites: string[];
   createdPaths: string[];
   frontmatterWriteAttempts: () => number;
@@ -28,6 +30,7 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
   const markdownByFile = new Map<TFile, string>();
   const markdownWrites: string[] = [];
   const createdPaths: string[] = [];
+  const createdFolderPaths: string[] = [];
   let createAttempts = 0;
   let frontmatterWriteAttempts = 0;
   const line = (markdown: string, key: string): string => {
@@ -37,6 +40,8 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
   };
   const jsonLine = (markdown: string, key: string): unknown => JSON.parse(line(markdown, key));
   const createFolder = async (path: string): Promise<void> => {
+    await options.beforeCreateFolder?.(path);
+    createdFolderPaths.push(path);
     const created = Object.assign(new TFolder(), { path, children: [] as Array<TFile | TFolder> });
     entries.set(path, created);
     const parent = entries.get(path.split("/").slice(0, -1).join("/"));
@@ -117,6 +122,7 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
   } as unknown as App;
   return {
     app,
+    createdFolderPaths,
     markdownWrites,
     createdPaths,
     frontmatterWriteAttempts: () => frontmatterWriteAttempts,

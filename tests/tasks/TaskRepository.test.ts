@@ -188,6 +188,42 @@ describe("TaskRepository", () => {
     expect(memory.createdPaths).toEqual(["Agent Cockpit/Tasks/first-codex-run.md"]);
   });
 
+  it("stops creating a nested task folder when guarded creation is cancelled", async () => {
+    let markRootFolderStarted!: () => void;
+    const rootFolderStarted = new Promise<void>((resolve) => {
+      markRootFolderStarted = resolve;
+    });
+    let releaseRootFolder!: () => void;
+    const rootFolderGate = new Promise<void>((resolve) => {
+      releaseRootFolder = resolve;
+    });
+    const memory = createMemoryTaskApp({
+      beforeCreateFolder: async (path) => {
+        if (path !== "Agent Cockpit") return;
+        markRootFolderStarted();
+        await rootFolderGate;
+      }
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    let allowed = true;
+
+    const creation = repository.ensure(
+      {
+        taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        title: "Cancelled Codex run",
+        repository: "/repository"
+      },
+      () => allowed
+    );
+    await rootFolderStarted;
+    allowed = false;
+    releaseRootFolder();
+
+    await expect(creation).resolves.toBeNull();
+    expect(memory.createdFolderPaths).toEqual(["Agent Cockpit"]);
+    expect(memory.createdPaths).toEqual([]);
+  });
+
   it("cancels a queued guarded run-count repair before frontmatter changes", async () => {
     let blockCreate = false;
     let markCreateStarted!: () => void;
