@@ -67,8 +67,15 @@ export class TaskRepository {
         !this.isInTaskFolder(task.file.path)
       ) {
         this.recentTasks.delete(taskId);
-      } else if (!byId.has(taskId)) {
-        byId.set(taskId, task);
+      } else if (
+        !byId.has(taskId) ||
+        byId.get(taskId)?.file.path === task.file.path
+      ) {
+        const indexedTask = byId.get(taskId);
+        byId.set(
+          taskId,
+          indexedTask === undefined ? task : reconcileTaskSnapshots(indexedTask, task)
+        );
       }
     }
     return [...byId.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -275,9 +282,11 @@ export class TaskRepository {
       this.recentTasks.delete(normalizedTaskId);
       return matches;
     }
-    return matches.some((task) => task.file.path === recent.file.path)
-      ? matches
-      : [...matches, recent];
+    const indexedMatch = matches.findIndex((task) => task.file.path === recent.file.path);
+    if (indexedMatch === -1) return [...matches, recent];
+    const withRecentState = [...matches];
+    withRecentState[indexedMatch] = reconcileTaskSnapshots(matches[indexedMatch]!, recent);
+    return withRecentState;
   }
 
   private isInTaskFolder(path: string): boolean {
@@ -292,6 +301,14 @@ export class TaskRepository {
     );
     return operation;
   }
+}
+
+function reconcileTaskSnapshots(indexed: TaskRecord, recent: TaskRecord): TaskRecord {
+  if (indexed.updatedAt > recent.updatedAt) return indexed;
+  if (recent.updatedAt > indexed.updatedAt) return recent;
+  return recent.runCount >= indexed.runCount
+    ? recent
+    : { ...recent, runCount: indexed.runCount };
 }
 
 function frontmatterTaskIdMatches(value: unknown, taskId: string): boolean {

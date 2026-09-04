@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 - Treat an exact read-back of an ambiguously failed plugin-data save as committed, preventing retries from creating duplicate run records.
 - Refuse to reuse a persisted run that belongs to another task, repairing the binding with a new task-owned run while retaining history.
 - Ignore task-note vault events until plugin settings finish loading, preventing startup races from throwing before initialization.
+- Keep a successful task-note write authoritative while Obsidian's metadata index catches up, preventing Kanban state or run counts from snapping backward.
 - Discard cached or in-flight terminal previews when a surface identity, exact provider conversation, or cmux connection changes.
 - Invalidate heuristic provider labels when a live cmux UUID changes title, surface type, or working directory, and ignore late preview evidence captured before that change.
 - Invalidate short-lived task write-through records on vault change, rename, or delete events so manual Markdown schema or identity edits become authoritative immediately.

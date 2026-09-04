@@ -174,6 +174,48 @@ describe("TaskRepository", () => {
     expect(repository.list()).toEqual([]);
   });
 
+  it("keeps a successful write authoritative until Obsidian invalidates its stale index", async () => {
+    const taskFile = file("Agent Cockpit/Tasks/task.md");
+    const root = folder("Agent Cockpit/Tasks", [taskFile]);
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const indexedFrontmatter: Record<string, unknown> = {
+      "agent-cockpit": "task",
+      "schema-version": 1,
+      "task-id": taskId,
+      title: "Cached task",
+      "workflow-status": "active",
+      "run-count": 0
+    };
+    const writableFrontmatter = { ...indexedFrontmatter };
+    const app = {
+      vault: {
+        getAbstractFileByPath: (path: string) =>
+          path === root.path ? root : path === taskFile.path ? taskFile : null
+      },
+      metadataCache: {
+        getFileCache: () => ({ frontmatter: indexedFrontmatter })
+      },
+      fileManager: {
+        processFrontMatter: async (
+          _file: TFile,
+          update: (frontmatter: Record<string, unknown>) => void
+        ) => update(writableFrontmatter)
+      }
+    } as unknown as App;
+    const repository = new TaskRepository(app, root.path);
+    const task = repository.findById(taskId);
+
+    await repository.updateWorkflow(task, "review");
+
+    expect(indexedFrontmatter["workflow-status"]).toBe("active");
+    expect(writableFrontmatter["workflow-status"]).toBe("review");
+    expect(repository.list()[0]?.workflowStatus).toBe("review");
+    expect(repository.findById(taskId).workflowStatus).toBe("review");
+
+    repository.invalidatePaths([taskFile.path]);
+    expect(repository.list()[0]?.workflowStatus).toBe("active");
+  });
+
   it("fails closed when two Markdown notes claim the same task ID", async () => {
     const first = file("Agent Cockpit/Tasks/first.md");
     const second = file("Agent Cockpit/Tasks/second.md");
