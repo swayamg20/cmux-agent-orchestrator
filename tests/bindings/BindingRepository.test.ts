@@ -1410,6 +1410,53 @@ describe("BindingRepository", () => {
     expect(repository.listRuns()).toHaveLength(1);
   });
 
+  it("does not let a stale unidentified attachment bypass a newer exact surface mapping", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => structuredClone(data),
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const exact = new BindingRepository(plugin);
+    const stale = new BindingRepository(plugin);
+    await exact.load();
+    await stale.load();
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444"
+    };
+    const providerSessionId = "55555555-5555-4555-8555-555555555555";
+    await exact.mapProviderSession({
+      ...target,
+      provider: "codex",
+      providerSessionId,
+      matchedAt: "2026-09-04T00:00:01.000Z"
+    });
+
+    await expect(
+      stale.attachIfSurfaceUnchanged(
+        {
+          ...target,
+          taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          provider: "codex",
+          providerSessionId: null,
+          attachedAt: "2026-09-04T00:00:00.000Z"
+        },
+        null
+      )
+    ).rejects.toThrow(/saved provider conversation.*changed before attachment/);
+
+    const verifier = new BindingRepository(plugin);
+    await verifier.load();
+    expect(verifier.list()).toEqual([]);
+    expect(verifier.listRuns()).toEqual([]);
+    expect(verifier.listProviderSessions()).toEqual([
+      expect.objectContaining({ ...target, providerSessionId })
+    ]);
+  });
+
   it("cancels a queued conditional attachment when its authority expires", async () => {
     let data: unknown;
     let releaseFirstSave: (() => void) | undefined;

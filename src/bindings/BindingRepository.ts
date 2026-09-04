@@ -1410,6 +1410,16 @@ function assertProviderSessionAvailable(
   machine: MachineBindings,
   input: NewBindingRecord
 ): void {
+  const mappingForSurface = machine.providerSessions.find(
+    (candidate) => candidate.surfaceId === input.surfaceId
+  );
+  if (
+    mappingForSurface !== undefined &&
+    (mappingForSurface.provider !== input.provider ||
+      mappingForSurface.providerSessionId !== input.providerSessionId)
+  ) {
+    throw new Error("The saved provider conversation for this cmux surface changed before attachment.");
+  }
   if (
     (input.provider !== "claude" && input.provider !== "codex") ||
     input.providerSessionId === null ||
@@ -1430,19 +1440,9 @@ function assertProviderSessionAvailable(
       candidate.providerSessionId === input.providerSessionId &&
       candidate.surfaceId !== input.surfaceId
   );
-  const mappingForSurface = machine.providerSessions.find(
-    (candidate) => candidate.surfaceId === input.surfaceId
-  );
-  const mappingChanged =
-    mappingForSurface !== undefined &&
-    (mappingForSurface.provider !== input.provider ||
-      mappingForSurface.providerSessionId !== input.providerSessionId);
 
   if (conflictingMapping || conflictingBinding) {
     throw new Error("That provider conversation is already matched to another cmux surface.");
-  }
-  if (mappingChanged) {
-    throw new Error("The saved provider conversation for this cmux surface changed before attachment.");
   }
 }
 
