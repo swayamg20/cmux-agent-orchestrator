@@ -11,11 +11,14 @@ import type {
 
 const METADATA_CONCURRENCY = 2;
 const MAX_METADATA_ENTRIES = 1_000;
+const MAX_REQUEST_REVISIONS = 2_000;
 
 export class ProviderMetadataService {
   private readonly sources: ReadonlyMap<ProviderSessionKind, ProviderSessionSource>;
   private readonly metadata = new Map<string, ProviderSessionMetadata>();
+  private readonly requestRevisions = new Map<string, number>();
   private readonly controllers = new Set<AbortController>();
+  private requestSequence = 0;
   private disposed = false;
 
   constructor(
@@ -39,7 +42,7 @@ export class ProviderMetadataService {
         .map((session) => normalizeMetadata(session, provider, cwd))
         .filter((session): session is ProviderSessionMetadata => session !== null);
       if (this.disposed) return [];
-      for (const session of sessions) this.cache(session);
+      for (const session of sessions) this.cache(session, request.revision);
       return sessions.map((session) => ({ ...session }));
     } finally {
       request.close();
@@ -56,6 +59,8 @@ export class ProviderMetadataService {
     try {
       const canonicalSessionId = normalizeCanonicalUuid(sessionId);
       if (canonicalSessionId === null) return null;
+      const key = providerMetadataKey(provider, canonicalSessionId);
+      this.markRequest(key, request.revision);
       const loaded = await this.requireSource(provider).get(
         canonicalSessionId,
         cwd,
@@ -63,9 +68,8 @@ export class ProviderMetadataService {
       );
       if (this.disposed) return null;
       const session = loaded === null ? null : normalizeMetadata(loaded, provider, cwd);
-      const key = providerMetadataKey(provider, canonicalSessionId);
-      if (session) this.cache(session);
-      else this.metadata.delete(key);
+      if (session) this.cache(session, request.revision);
+      else if (this.isLatestRequest(key, request.revision)) this.metadata.delete(key);
       return session ? { ...session } : null;
     } finally {
       request.close();
@@ -138,7 +142,9 @@ export class ProviderMetadataService {
   }
 
   forget(provider: ProviderSessionKind, sessionId: string): void {
-    this.metadata.delete(providerMetadataKey(provider, sessionId));
+    const key = providerMetadataKey(provider, sessionId);
+    this.markRequest(key, ++this.requestSequence);
+    this.metadata.delete(key);
   }
 
   dispose(): void {
@@ -147,10 +153,12 @@ export class ProviderMetadataService {
     this.controllers.clear();
     for (const source of this.sources.values()) source.dispose();
     this.metadata.clear();
+    this.requestRevisions.clear();
   }
 
   private beginRequest(externalSignal?: AbortSignal): {
     controller: AbortController;
+    revision: number;
     close(): void;
   } {
     if (this.disposed) throw new Error("Provider metadata service has been disposed.");
@@ -161,6 +169,7 @@ export class ProviderMetadataService {
     else externalSignal?.addEventListener("abort", abort, { once: true });
     return {
       controller,
+      revision: ++this.requestSequence,
       close: () => {
         externalSignal?.removeEventListener("abort", abort);
         this.controllers.delete(controller);
@@ -174,14 +183,31 @@ export class ProviderMetadataService {
     return source;
   }
 
-  private cache(session: ProviderSessionMetadata): void {
+  private cache(session: ProviderSessionMetadata, revision: number): void {
     const key = providerMetadataKey(session.provider, session.sessionId);
+    const latest = this.requestRevisions.get(key);
+    if (latest !== undefined && revision < latest) return;
+    this.markRequest(key, revision);
     this.metadata.delete(key);
     this.metadata.set(key, { ...session });
     while (this.metadata.size > MAX_METADATA_ENTRIES) {
       const oldest = this.metadata.keys().next();
       if (oldest.done) break;
       this.metadata.delete(oldest.value);
+    }
+  }
+
+  private isLatestRequest(key: string, revision: number): boolean {
+    return (this.requestRevisions.get(key) ?? revision) === revision;
+  }
+
+  private markRequest(key: string, revision: number): void {
+    this.requestRevisions.delete(key);
+    this.requestRevisions.set(key, revision);
+    while (this.requestRevisions.size > MAX_REQUEST_REVISIONS) {
+      const oldest = this.requestRevisions.keys().next();
+      if (oldest.done) break;
+      this.requestRevisions.delete(oldest.value);
     }
   }
 }

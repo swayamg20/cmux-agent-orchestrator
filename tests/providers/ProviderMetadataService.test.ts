@@ -177,4 +177,70 @@ describe("ProviderMetadataService", () => {
     expect(providerSignal?.aborted).toBe(true);
     service.dispose();
   });
+
+  it("does not let an older list response overwrite newer conversation metadata", async () => {
+    const resolvers: Array<(value: ProviderSessionMetadata[]) => void> = [];
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => new Promise<ProviderSessionMetadata[]>((resolve) => resolvers.push(resolve)),
+      get: async () => null,
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const older = service.list("codex", metadata.cwd);
+    const newer = service.list("codex", metadata.cwd);
+
+    resolvers[1]!([{ ...metadata, title: "New title", updatedAt: 2_000 }]);
+    await newer;
+    resolvers[0]!([{ ...metadata, title: "Old title", updatedAt: 1_000 }]);
+    await older;
+
+    expect(service.evidence.get(`codex:${metadata.sessionId}`)).toMatchObject({
+      title: "New title",
+      updatedAt: 2_000
+    });
+    service.dispose();
+  });
+
+  it("does not let an older exact read restore metadata after a newer miss", async () => {
+    const resolvers: Array<(value: ProviderSessionMetadata | null) => void> = [];
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async () => new Promise<ProviderSessionMetadata | null>((resolve) => resolvers.push(resolve)),
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const older = service.get("codex", metadata.sessionId, metadata.cwd);
+    const newer = service.get("codex", metadata.sessionId, metadata.cwd);
+
+    resolvers[1]!(null);
+    await newer;
+    resolvers[0]!(metadata);
+    await older;
+
+    expect(service.evidence.has(`codex:${metadata.sessionId}`)).toBe(false);
+    service.dispose();
+  });
+
+  it("keeps an explicit forget newer than an in-flight metadata read", async () => {
+    let resolveGet!: (value: ProviderSessionMetadata | null) => void;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async () => new Promise<ProviderSessionMetadata | null>((resolve) => {
+        resolveGet = resolve;
+      }),
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const pending = service.get("codex", metadata.sessionId, metadata.cwd);
+
+    service.forget("codex", metadata.sessionId);
+    resolveGet(metadata);
+    await pending;
+
+    expect(service.evidence.has(`codex:${metadata.sessionId}`)).toBe(false);
+    service.dispose();
+  });
 });
