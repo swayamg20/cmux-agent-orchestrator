@@ -155,33 +155,57 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
   for (const [runId, run] of migratedRuns) {
     if (!runsById.has(runId)) runsById.set(runId, run);
   }
-  const providerSessionsBySurface = new Map<string, ProviderSessionMapping>();
-  const claimedProviderSessions = new Set<string>();
-  if (Array.isArray(raw.providerSessions)) {
-    for (const candidate of raw.providerSessions) {
-      if (isProviderSessionMapping(candidate)) {
-        const normalized = {
-          ...candidate,
-          providerSessionId: normalizeCanonicalUuid(candidate.providerSessionId)!
-        };
-        const providerSessionKey = `${normalized.provider}:${normalized.providerSessionId}`;
-        if (
-          claimedProviderSessions.has(providerSessionKey) ||
-          providerSessionsBySurface.has(candidate.surfaceId)
-        ) {
-          continue;
-        }
-        providerSessionsBySurface.set(candidate.surfaceId, normalized);
-        claimedProviderSessions.add(providerSessionKey);
-      }
-      if (providerSessionsBySurface.size >= MAX_PROVIDER_SESSIONS_PER_MACHINE) break;
-    }
-  }
+  const providerSessions = decodeProviderSessions(raw.providerSessions);
   return {
     bindings: [...bindingsBySurface.values()],
     runs: [...runsById.values()],
-    providerSessions: [...providerSessionsBySurface.values()]
+    providerSessions
   };
+}
+
+function decodeProviderSessions(value: unknown): ProviderSessionMapping[] {
+  if (!Array.isArray(value)) return [];
+  const candidates: ProviderSessionMapping[] = [];
+  for (const candidate of value) {
+    if (isProviderSessionMapping(candidate)) {
+      candidates.push({
+        ...candidate,
+        providerSessionId: normalizeCanonicalUuid(candidate.providerSessionId)!
+      });
+    }
+    if (candidates.length >= MAX_PROVIDER_SESSIONS_PER_MACHINE) break;
+  }
+  const identitiesBySurface = new Map<string, Set<string>>();
+  const surfacesByIdentity = new Map<string, Set<string>>();
+  for (const candidate of candidates) {
+    const identity = `${candidate.provider}:${candidate.providerSessionId}`;
+    const surfaceIdentities = identitiesBySurface.get(candidate.surfaceId) ?? new Set<string>();
+    surfaceIdentities.add(identity);
+    identitiesBySurface.set(candidate.surfaceId, surfaceIdentities);
+    const identitySurfaces = surfacesByIdentity.get(identity) ?? new Set<string>();
+    identitySurfaces.add(candidate.surfaceId);
+    surfacesByIdentity.set(identity, identitySurfaces);
+  }
+
+  const ambiguousSurfaces = new Set(
+    [...identitiesBySurface].filter(([, identities]) => identities.size > 1).map(([surfaceId]) => surfaceId)
+  );
+  const ambiguousIdentities = new Set(
+    [...surfacesByIdentity].filter(([, surfaces]) => surfaces.size > 1).map(([identity]) => identity)
+  );
+  const bySurface = new Map<string, ProviderSessionMapping>();
+  for (const candidate of candidates) {
+    const identity = `${candidate.provider}:${candidate.providerSessionId}`;
+    if (
+      ambiguousSurfaces.has(candidate.surfaceId) ||
+      ambiguousIdentities.has(identity) ||
+      bySurface.has(candidate.surfaceId)
+    ) {
+      continue;
+    }
+    bySurface.set(candidate.surfaceId, candidate);
+  }
+  return [...bySurface.values()];
 }
 
 export class BindingRepository {

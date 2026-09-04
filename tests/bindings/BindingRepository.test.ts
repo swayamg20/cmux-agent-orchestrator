@@ -262,6 +262,76 @@ describe("BindingRepository", () => {
     expect(repository.listProviderSessions()).toEqual([mapping]);
   });
 
+  it("drops every ambiguous persisted provider conversation claim", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const mapping = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex" as const,
+      providerSessionId: "55555555-5555-4555-8555-55555555555a",
+      matchedAt: "2026-09-02T00:00:00.000Z"
+    };
+    const first = new BindingRepository(plugin);
+    await first.load();
+    await first.mapProviderSession(mapping);
+
+    const machine = Object.values(
+      (data as { machines: Record<string, { providerSessions: unknown[] }> }).machines
+    )[0]!;
+    machine.providerSessions.push({
+      ...mapping,
+      surfaceId: "66666666-6666-4666-8666-666666666666",
+      providerSessionId: mapping.providerSessionId.toUpperCase()
+    });
+
+    const second = new BindingRepository(plugin);
+    await second.load();
+
+    expect(second.listProviderSessions()).toEqual([]);
+  });
+
+  it("drops every persisted identity when one surface has conflicting conversations", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const mapping = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "claude" as const,
+      providerSessionId: "55555555-5555-4555-8555-55555555555a",
+      matchedAt: "2026-09-02T00:00:00.000Z"
+    };
+    const first = new BindingRepository(plugin);
+    await first.load();
+    await first.mapProviderSession(mapping);
+
+    const machine = Object.values(
+      (data as { machines: Record<string, { providerSessions: unknown[] }> }).machines
+    )[0]!;
+    machine.providerSessions.push({
+      ...mapping,
+      provider: "codex",
+      providerSessionId: "66666666-6666-4666-8666-666666666666"
+    });
+
+    const second = new BindingRepository(plugin);
+    await second.load();
+
+    expect(second.listProviderSessions()).toEqual([]);
+  });
+
   it("rejects a provider conversation already claimed by another task binding", async () => {
     const plugin = {
       loadData: async () => undefined,
