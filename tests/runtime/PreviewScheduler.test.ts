@@ -48,4 +48,32 @@ describe("PreviewScheduler", () => {
     ).rejects.toThrow("Preview scheduler was disposed.");
     expect(loads).toBe(0);
   });
+
+  it("rejects an active request on disposal even when its loader never settles", async () => {
+    const scheduler = new PreviewScheduler(1);
+    let started = false;
+    let settled = false;
+    const pending = scheduler.schedule(
+      "active",
+      () => new Promise(() => {
+        started = true;
+      })
+    );
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+
+    await Promise.resolve();
+    expect(started).toBe(true);
+    scheduler.dispose();
+    await Promise.resolve();
+
+    expect(settled).toBe(true);
+    await expect(pending).rejects.toThrow("Preview scheduler was disposed.");
+  });
 });

@@ -9,6 +9,7 @@ interface QueueItem {
 
 export class PreviewScheduler {
   private readonly queue: QueueItem[] = [];
+  private readonly activeItems = new Set<QueueItem>();
   private readonly promises = new Map<string, Promise<CmuxPreview>>();
   private active = 0;
   private disposed = false;
@@ -29,7 +30,10 @@ export class PreviewScheduler {
 
   dispose(): void {
     this.disposed = true;
-    for (const item of this.queue.splice(0)) item.reject(new Error("Preview scheduler was disposed."));
+    const error = new Error("Preview scheduler was disposed.");
+    for (const item of this.queue.splice(0)) item.reject(error);
+    for (const item of this.activeItems) item.reject(error);
+    this.activeItems.clear();
     this.promises.clear();
   }
 
@@ -37,10 +41,12 @@ export class PreviewScheduler {
     while (!this.disposed && this.active < this.concurrency && this.queue.length > 0) {
       const item = this.queue.shift()!;
       this.active += 1;
+      this.activeItems.add(item);
       void Promise.resolve()
         .then(item.load)
         .then(item.resolve, item.reject)
         .finally(() => {
+          this.activeItems.delete(item);
           this.active -= 1;
           this.promises.delete(item.key);
           this.drain();
