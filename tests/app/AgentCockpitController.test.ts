@@ -2530,6 +2530,51 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not let a manual conversation choice contradict exact live identity", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_395)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const exactSession = controller.store.getState().sessions[0]!;
+    const matchingController = controller as unknown as {
+      matchConversation(
+        original: typeof exactSession,
+        conversation: ProviderSessionMetadata
+      ): Promise<void>;
+      bindings: BindingRepository;
+    };
+
+    await expect(matchingController.matchConversation(exactSession, {
+      provider: "codex",
+      sessionId: "66666666-6666-4666-8666-666666666666",
+      title: "Different repository conversation",
+      titleSource: "explicit-name",
+      cwd: "/repository",
+      updatedAt: 5_395,
+      status: "idle"
+    })).rejects.toThrow(/conflicts with the exact live provider session/);
+
+    expect(persisted).toBeUndefined();
+    expect(matchingController.bindings.listProviderSessions()).toEqual([]);
+    expect(controller.store.getState().sessions[0]?.provider).toMatchObject({
+      source: "codex-writer-lock",
+      sessionId: "55555555-5555-4555-8555-555555555555"
+    });
+    controller.dispose();
+  });
+
   it("rejects a stale manual attachment after the provider conversation changes", async () => {
     let observedAt = 5_400;
     let providerSessionId = "55555555-5555-4555-8555-55555555555a";

@@ -1279,6 +1279,15 @@ export class AgentCockpitController {
       ) {
         throw new Error("The cmux surface no longer matches the selected provider conversation.");
       }
+      const exactLiveIdentity = current.provider.source === "provider-session-mapping"
+        ? null
+        : exactTrackableIdentity(current);
+      if (
+        exactLiveIdentity !== null &&
+        normalizeCanonicalUuid(conversation.sessionId) !== exactLiveIdentity.sessionId
+      ) {
+        throw new Error("The selected conversation conflicts with the exact live provider session.");
+      }
       const mapping = {
         workspaceId: current.workspaceId,
         paneId: current.paneId,
