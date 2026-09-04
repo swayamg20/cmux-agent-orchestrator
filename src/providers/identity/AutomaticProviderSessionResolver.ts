@@ -37,6 +37,12 @@ interface ProcessResolution {
   process: ProviderProcess;
   mapping: AutomaticProviderSessionMapping;
   lifecycle: AutomaticLifecycleObservation | null;
+  codexWriterIds: readonly string[] | null;
+}
+
+interface ProcessRevalidation {
+  resolutions: ProcessResolution[];
+  rejectedSurfaceIds: ReadonlySet<string>;
 }
 
 type ExactMetadataReader = (
@@ -87,10 +93,18 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
       signal,
       issues
     );
+    const processRevalidation = await this.revalidateCodexWriterSets(
+      processResolutions,
+      signal
+    );
+    if (this.disposed || signal?.aborted) return emptyResolution(checkedAt);
+    const publishableNativeMappings = nativeMappings.filter(
+      (mapping) => !processRevalidation.rejectedSurfaceIds.has(mapping.surfaceId)
+    );
     const mappings = normalizeMappings(
       [
-        ...nativeMappings,
-        ...processResolutions.map((resolution) => resolution.mapping)
+        ...publishableNativeMappings,
+        ...processRevalidation.resolutions.map((resolution) => resolution.mapping)
       ],
       issues
     );
@@ -119,7 +133,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     const nativeSurfaceIds = new Set(
       nativeLifecycle.map((observation) => normalizeCanonicalUuid(observation.surfaceId)!)
     );
-    const localLifecycle = processResolutions.flatMap((resolution) =>
+    const localLifecycle = processRevalidation.resolutions.flatMap((resolution) =>
       resolution.lifecycle &&
       !nativeSurfaceIds.has(normalizeCanonicalUuid(resolution.lifecycle.surfaceId)!)
         ? [resolution.lifecycle]
@@ -223,7 +237,8 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
           candidate.surface,
           providerSessionId,
           checkedAt
-        )
+        ),
+        codexWriterIds: null
       };
     }
 
@@ -257,7 +272,53 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
           "Matched the foreground Codex process to this exact cmux surface and verified that every open writer lock belongs to its single rooted Codex thread tree.",
         observedAt: checkedAt
       },
-      lifecycle: null
+      lifecycle: null,
+      codexWriterIds: [...writerThreads.keys()]
+    };
+  }
+
+  private async revalidateCodexWriterSets(
+    resolutions: readonly ProcessResolution[],
+    signal?: AbortSignal
+  ): Promise<ProcessRevalidation> {
+    const checks = await mapLimited(
+      resolutions,
+      RESOLUTION_CONCURRENCY,
+      async (resolution) => {
+        if (resolution.codexWriterIds === null) {
+          return { resolution, rejectedSurfaceId: null };
+        }
+        if (signal?.aborted || this.disposed) {
+          return { resolution: null, rejectedSurfaceId: resolution.mapping.surfaceId };
+        }
+        let currentWriterIds: string[];
+        try {
+          currentWriterIds = await this.processes.readCodexWriterSessionIds(
+            resolution.process.pid,
+            signal
+          );
+        } catch {
+          return { resolution: null, rejectedSurfaceId: resolution.mapping.surfaceId };
+        }
+        if (
+          signal?.aborted ||
+          this.disposed ||
+          !sameCanonicalWriterSet(resolution.codexWriterIds, currentWriterIds)
+        ) {
+          return { resolution: null, rejectedSurfaceId: resolution.mapping.surfaceId };
+        }
+        return { resolution, rejectedSurfaceId: null };
+      }
+    );
+    return {
+      resolutions: checks.flatMap(({ resolution }) =>
+        resolution === null ? [] : [resolution]
+      ),
+      rejectedSurfaceIds: new Set(
+        checks.flatMap(({ rejectedSurfaceId }) =>
+          rejectedSurfaceId === null ? [] : [rejectedSurfaceId]
+        )
+      )
     };
   }
 
@@ -348,6 +409,24 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
       return { records: [], available: false };
     }
   }
+}
+
+function sameCanonicalWriterSet(
+  expectedIds: Iterable<string>,
+  observedIds: readonly string[]
+): boolean {
+  if (observedIds.length > MAX_CODEX_WRITER_LOCKS) return false;
+  const expected = new Set(expectedIds);
+  const observed = new Set<string>();
+  for (const observedId of observedIds) {
+    const canonicalId = normalizeCanonicalUuid(observedId);
+    if (canonicalId === null || observed.has(canonicalId)) return false;
+    observed.add(canonicalId);
+  }
+  return (
+    expected.size === observed.size &&
+    [...expected].every((expectedId) => observed.has(expectedId))
+  );
 }
 
 function memoizeExactMetadataReads(metadata: ProviderMetadataService): ExactMetadataReader {

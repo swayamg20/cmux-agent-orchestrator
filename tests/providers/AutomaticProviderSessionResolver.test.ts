@@ -235,6 +235,64 @@ describe("AutomaticProviderSessionResolver", () => {
     metadata.dispose();
   });
 
+  it("fails closed when Codex writer locks change while exact metadata is loading", async () => {
+    let markMetadataStarted: (() => void) | undefined;
+    const metadataStarted = new Promise<void>((resolve) => {
+      markMetadataStarted = resolve;
+    });
+    let finishMetadataRead: (() => void) | undefined;
+    const metadataRead = new Promise<void>((resolve) => {
+      finishMetadataRead = resolve;
+    });
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async (requestedId, cwd) => {
+        markMetadataStarted?.();
+        await metadataRead;
+        return {
+          provider: "codex",
+          sessionId: requestedId,
+          title: "Writer that was replaced",
+          titleSource: "explicit-name",
+          cwd,
+          updatedAt: 900,
+          status: "idle",
+          parentSessionId: null,
+          sourceKind: "cli"
+        };
+      },
+      dispose: () => undefined
+    };
+    const metadata = new ProviderMetadataService([source]);
+    const processes = new FakeProcessSource([processRecord()]);
+    let writerIds = [sessionId];
+    processes.readLocks.mockImplementation(async () => [...writerIds]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const resolving = resolver.resolve(
+      snapshot(),
+      client([
+        {
+          surfaceId,
+          state: "working",
+          source: "hook",
+          sessionId,
+          updatedAt: 1_900
+        }
+      ])
+    );
+    await metadataStarted;
+    writerIds = [secondSessionId];
+    finishMetadataRead?.();
+    const result = await resolving;
+
+    expect(processes.readLocks).toHaveBeenCalledTimes(2);
+    expect(result.mappings).toEqual([]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
   it("fails closed before metadata reads when a Codex process holds excessive writer locks", async () => {
     const get = vi.fn(async () => null);
     const metadata = new ProviderMetadataService([{
@@ -506,7 +564,7 @@ describe("AutomaticProviderSessionResolver", () => {
     expect(result.issues).toContain(
       "Conflicting provider conversation identities were discarded for safety."
     );
-    expect(processes.readLocks).toHaveBeenCalledTimes(2);
+    expect(processes.readLocks).toHaveBeenCalledTimes(4);
     resolver.dispose();
     metadata.dispose();
   });
@@ -521,6 +579,41 @@ describe("AutomaticProviderSessionResolver", () => {
     const result = await resolver.resolve(snapshot(), client());
 
     expect(processes.readLocks).toHaveBeenCalledWith(101);
+    expect(result.mappings).toEqual([]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("discards a Codex mapping when writer locks change during process stabilization", async () => {
+    let markInventoryStarted: (() => void) | undefined;
+    const inventoryStarted = new Promise<void>((resolve) => {
+      markInventoryStarted = resolve;
+    });
+    let finishInventoryRead: (() => void) | undefined;
+    const inventoryRead = new Promise<void>((resolve) => {
+      finishInventoryRead = resolve;
+    });
+    const metadata = new ProviderMetadataService([codexSource()]);
+    const process = processRecord();
+    const processes = new FakeProcessSource([process]);
+    let inventoryReads = 0;
+    vi.spyOn(processes, "listForegroundProviderProcesses").mockImplementation(async () => {
+      if (inventoryReads++ === 0) return [{ ...process }];
+      markInventoryStarted?.();
+      await inventoryRead;
+      return [{ ...process }];
+    });
+    let writerIds = [sessionId];
+    processes.readLocks.mockImplementation(async () => [...writerIds]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const resolving = resolver.resolve(snapshot(), client());
+    await inventoryStarted;
+    writerIds = [secondSessionId];
+    finishInventoryRead?.();
+    const result = await resolving;
+
+    expect(processes.readLocks).toHaveBeenCalledTimes(2);
     expect(result.mappings).toEqual([]);
     resolver.dispose();
     metadata.dispose();
