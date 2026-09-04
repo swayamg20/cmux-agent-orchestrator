@@ -23,7 +23,7 @@ const REGISTRY_FILE_LIMIT = 64 * 1024;
 const FORCE_KILL_AFTER_MS = 250;
 
 export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
-  private readonly pipelineChildren = new Set<ChildProcess>();
+  private readonly cancelPipelineByChild = new Map<ChildProcess, () => void>();
   private disposed = false;
 
   constructor(
@@ -110,8 +110,8 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
   dispose(): void {
     this.disposed = true;
     this.runner.dispose();
-    for (const child of this.pipelineChildren) terminateOwnedChild(child);
-    this.pipelineChildren.clear();
+    for (const cancel of new Set(this.cancelPipelineByChild.values())) cancel();
+    this.cancelPipelineByChild.clear();
   }
 
   private readSurfaceIdPipeline(pid: number, signal?: AbortSignal): Promise<string | null> {
@@ -132,27 +132,35 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
           windowsHide: true
         }
       );
-      this.pipelineChildren.add(ps);
-      this.pipelineChildren.add(grep);
-
       const chunks: Buffer[] = [];
       let bytes = 0;
       let settled = false;
+      let timer: ReturnType<typeof startTimer> | null = null;
       const finish = (value: string | null): void => {
         if (settled) return;
         settled = true;
-        cancelTimer(timer);
+        if (timer !== null) cancelTimer(timer);
         signal?.removeEventListener("abort", abort);
+        if (ps.stdout && grep.stdin) ps.stdout.unpipe(grep.stdin);
+        ps.stdout?.destroy();
+        grep.stdin?.destroy();
+        grep.stdout?.destroy();
         terminateOwnedChild(ps);
         terminateOwnedChild(grep);
-        this.pipelineChildren.delete(ps);
-        this.pipelineChildren.delete(grep);
+        this.cancelPipelineByChild.delete(ps);
+        this.cancelPipelineByChild.delete(grep);
         resolve(value);
       };
       const abort = (): void => finish(null);
-      const timer = startTimer(() => finish(null), PROCESS_TIMEOUT_MS);
-      if (signal?.aborted) finish(null);
-      else signal?.addEventListener("abort", abort, { once: true });
+      const cancel = (): void => finish(null);
+      timer = startTimer(() => finish(null), PROCESS_TIMEOUT_MS);
+      this.cancelPipelineByChild.set(ps, cancel);
+      this.cancelPipelineByChild.set(grep, cancel);
+      if (signal?.aborted) {
+        finish(null);
+        return;
+      }
+      signal?.addEventListener("abort", abort, { once: true });
       grep.stdout?.on("data", (chunk: Buffer) => {
         bytes += chunk.byteLength;
         if (bytes > 4_096) {
