@@ -2,11 +2,25 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
+  CodexAppServerClient,
   CodexAppServerSource,
   codexAppServerCommand,
   decodeCodexThreadList,
   type CodexAppServerRequester
 } from "../../src/providers/CodexAppServerSource";
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 const fixture = (): Promise<string> =>
   readFile(fileURLToPath(new URL("../fixtures/providers/codex-thread-list.json", import.meta.url)), "utf8");
@@ -64,5 +78,16 @@ describe("CodexAppServerSource", () => {
       },
       undefined
     );
+  });
+
+  it("does not start an app-server after disposal while binary discovery is pending", async () => {
+    const discovery = deferred<string>();
+    const client = new CodexAppServerClient(() => discovery.promise);
+
+    const request = client.request("thread/list", {});
+    client.dispose();
+    discovery.resolve("/usr/bin/true");
+
+    await expect(request).rejects.toThrow("disposed");
   });
 });

@@ -77,6 +77,8 @@ export class CodexAppServerClient implements CodexAppServerRequester {
   private binaryPath: Promise<string> | null = null;
   private disposed = false;
 
+  constructor(private readonly discoverBinary: () => Promise<string> = discoverCodexBinary) {}
+
   async request(
     method: "thread/list" | "thread/read",
     params: Record<string, unknown>,
@@ -84,8 +86,11 @@ export class CodexAppServerClient implements CodexAppServerRequester {
   ): Promise<unknown> {
     if (this.disposed) throw new ProviderMetadataError("Codex metadata access has been disposed.");
     if (signal?.aborted) throw new ProviderMetadataError("Codex metadata request was cancelled.");
-    this.binaryPath ??= discoverCodexBinary();
-    return this.exchange(await this.binaryPath, method, params, signal);
+    this.binaryPath ??= this.discoverBinary();
+    const binaryPath = await this.binaryPath;
+    if (this.disposed) throw new ProviderMetadataError("Codex metadata access has been disposed.");
+    if (signal?.aborted) throw new ProviderMetadataError("Codex metadata request was cancelled.");
+    return this.exchange(binaryPath, method, params, signal);
   }
 
   dispose(): void {
