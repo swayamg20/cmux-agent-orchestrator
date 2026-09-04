@@ -822,6 +822,18 @@ function mapProviderSessionToMachine(
   if (conflicting || conflictingBinding) {
     throw new Error("That provider conversation is already matched to another cmux surface.");
   }
+  const binding = machine.bindings.find(
+    (candidate) =>
+      candidate.workspaceId === normalized.workspaceId &&
+      candidate.paneId === normalized.paneId &&
+      candidate.surfaceId === normalized.surfaceId
+  );
+  const run = binding === undefined
+    ? undefined
+    : machine.runs.find((candidate) => candidate.runId === binding.runId);
+  if (binding !== undefined && (run === undefined || run.taskId !== binding.taskId)) {
+    throw new Error("The linked run record does not match this task binding.");
+  }
   const replacing = machine.providerSessions.some(
     (candidate) => candidate.surfaceId === normalized.surfaceId
   );
@@ -833,20 +845,11 @@ function mapProviderSessionToMachine(
   );
   machine.providerSessions.push(normalized);
 
-  const binding = machine.bindings.find(
-    (candidate) =>
-      candidate.workspaceId === normalized.workspaceId &&
-      candidate.paneId === normalized.paneId &&
-      candidate.surfaceId === normalized.surfaceId
-  );
-  if (binding) {
+  if (binding !== undefined) {
     binding.provider = normalized.provider;
     binding.providerSessionId = normalized.providerSessionId;
-    const run = machine.runs.find((candidate) => candidate.runId === binding.runId);
-    if (run) {
-      run.provider = normalized.provider;
-      run.providerSessionId = normalized.providerSessionId;
-    }
+    run!.provider = normalized.provider;
+    run!.providerSessionId = normalized.providerSessionId;
   }
 }
 
@@ -870,6 +873,7 @@ function forgetProviderSessionFromMachine(
     binding.providerSessionId = null;
     const run = machine.runs.find((candidate) => candidate.runId === binding.runId);
     if (
+      run?.taskId === binding.taskId &&
       run?.provider === removed.provider &&
       run.providerSessionId === removed.providerSessionId
     ) {

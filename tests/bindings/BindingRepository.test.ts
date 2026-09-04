@@ -796,6 +796,110 @@ describe("BindingRepository", () => {
     expect(repository.listRuns()[0]?.providerSessionId).toBeNull();
   });
 
+  it("does not rewrite another task's run through a malformed binding", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const taskA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const taskB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444"
+    };
+    const seed = new BindingRepository(plugin);
+    await seed.load();
+    const original = await seed.attach({
+      ...target,
+      taskId: taskB,
+      provider: "codex",
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+    const machine = Object.values(
+      (data as {
+        machines: Record<string, {
+          bindings: Array<{ taskId: string }>;
+        }>;
+      }).machines
+    )[0]!;
+    machine.bindings[0]!.taskId = taskA;
+
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    await expect(repository.mapProviderSession({
+      ...target,
+      provider: "codex",
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      matchedAt: "2026-09-04T00:01:00.000Z"
+    })).rejects.toThrow(/run record does not match/);
+
+    expect(repository.listProviderSessions()).toEqual([]);
+    expect(repository.findBySurface(target.surfaceId)).toMatchObject({
+      taskId: taskA,
+      providerSessionId: null
+    });
+    expect(repository.listRuns(taskB)).toEqual([original.run]);
+  });
+
+  it("forgets a malformed binding match without clearing another task's run", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const taskA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const taskB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const providerSessionId = "55555555-5555-4555-8555-555555555555";
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444"
+    };
+    const seed = new BindingRepository(plugin);
+    await seed.load();
+    const original = await seed.attach({
+      ...target,
+      taskId: taskB,
+      provider: "codex",
+      providerSessionId,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+    await seed.mapProviderSession({
+      ...target,
+      provider: "codex",
+      providerSessionId,
+      matchedAt: "2026-09-04T00:01:00.000Z"
+    });
+    const machine = Object.values(
+      (data as {
+        machines: Record<string, {
+          bindings: Array<{ taskId: string }>;
+        }>;
+      }).machines
+    )[0]!;
+    machine.bindings[0]!.taskId = taskA;
+
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    await repository.forgetProviderSession(target.surfaceId);
+
+    expect(repository.listProviderSessions()).toEqual([]);
+    expect(repository.findBySurface(target.surfaceId)).toMatchObject({
+      taskId: taskA,
+      providerSessionId: null
+    });
+    expect(repository.listRuns(taskB)).toEqual([
+      { ...original.run, providerSessionId }
+    ]);
+  });
+
   it("does not let a stale conditional forget remove a queued replacement conversation", async () => {
     let data: unknown;
     let releaseReplacementSave: (() => void) | undefined;
