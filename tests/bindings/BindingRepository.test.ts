@@ -1626,6 +1626,53 @@ describe("BindingRepository", () => {
     expect(repository.listProviderSessions()).toEqual([]);
   });
 
+  it("rejects remapping a bound surface through a different workspace or pane", async () => {
+    let data: unknown;
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => structuredClone(data),
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const providerSessionId = "55555555-5555-4555-8555-555555555555";
+    const original = await repository.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId,
+      attachedAt: "2026-09-02T00:00:00.000Z"
+    });
+    const persistedBeforeRemap = structuredClone(data);
+
+    await expect(
+      repository.mapProviderSession({
+        workspaceId: "66666666-6666-4666-8666-666666666666",
+        paneId: "77777777-7777-4777-8777-777777777777",
+        surfaceId: original.binding.surfaceId,
+        provider: "codex",
+        providerSessionId,
+        matchedAt: "2026-09-02T00:01:00.000Z"
+      })
+    ).rejects.toThrow(/relocated/);
+
+    expect(saveCount).toBe(1);
+    expect(data).toEqual(persistedBeforeRemap);
+    expect(repository.list()).toEqual([original.binding]);
+    expect(repository.listProviderSessions()).toEqual([]);
+
+    const reloaded = new BindingRepository(plugin);
+    await reloaded.load();
+    expect(reloaded.list()).toEqual([original.binding]);
+    expect(reloaded.listRuns()).toEqual([original.run]);
+    expect(reloaded.listProviderSessions()).toEqual([]);
+  });
+
   it("rejects attaching a provider conversation already claimed by another surface", async () => {
     let data: unknown;
     const plugin = {

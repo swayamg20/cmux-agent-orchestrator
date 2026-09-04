@@ -1100,6 +1100,10 @@ export class BindingRepository {
   }
 
   private async persistDraft(draft: PersistedPluginData): Promise<void> {
+    assertPluginDataCanBeSaved(
+      draft as unknown as Record<string, unknown>,
+      this.currentMachineId
+    );
     try {
       await this.plugin.saveData(draft);
     } catch (saveError) {
@@ -1398,11 +1402,16 @@ function mapProviderSessionToMachine(
     throw new Error("That provider conversation is already matched to another cmux surface.");
   }
   const binding = machine.bindings.find(
-    (candidate) =>
-      candidate.workspaceId === normalized.workspaceId &&
-      candidate.paneId === normalized.paneId &&
-      candidate.surfaceId === normalized.surfaceId
+    (candidate) => candidate.surfaceId === normalized.surfaceId
   );
+  if (
+    binding !== undefined &&
+    (binding.workspaceId !== normalized.workspaceId || binding.paneId !== normalized.paneId)
+  ) {
+    throw new Error(
+      "The bound cmux surface changed workspace or pane and must be relocated atomically."
+    );
+  }
   const run = binding === undefined
     ? undefined
     : machine.runs.find((candidate) => candidate.runId === binding.runId);
