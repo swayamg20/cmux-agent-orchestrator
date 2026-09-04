@@ -4,6 +4,7 @@ import path from "node:path";
 import { clearTimeout as cancelTimer, setTimeout as startTimer } from "node:timers";
 import { ProcessExecutionError, SafeProcessRunner } from "../../cmux/SafeProcessRunner";
 import { isCanonicalUuid } from "../../security/identifiers";
+import { resolveProviderDataRoot } from "../providerDataRoot";
 import { readBoundedUtf8File } from "../readBoundedFile";
 import { sanitizeProviderTitle } from "../titleSanitizer";
 import type {
@@ -24,6 +25,7 @@ const FORCE_KILL_AFTER_MS = 250;
 
 export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
   private readonly cancelPipelineByChild = new Map<ChildProcess, () => void>();
+  private readonly claudeRoot: string;
   private readonly codexHome: string;
   private disposed = false;
 
@@ -32,7 +34,11 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
     private readonly userHome = homedir(),
     private readonly isProcessLive: (pid: number) => boolean = processIsLive
   ) {
-    this.codexHome = resolveProviderHome(
+    this.claudeRoot = resolveProviderDataRoot(
+      process.env.CLAUDE_CONFIG_DIR,
+      path.join(this.userHome, ".claude")
+    );
+    this.codexHome = resolveProviderDataRoot(
       process.env.CODEX_HOME,
       path.join(this.userHome, ".codex")
     );
@@ -68,7 +74,7 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
     if (processRecord.provider !== "claude") return null;
     if (!path.isAbsolute(cwd) || cwd.includes("\0")) return null;
     if (this.disposed) return null;
-    const filename = path.join(this.userHome, ".claude", "sessions", `${processRecord.pid}.json`);
+    const filename = path.join(this.claudeRoot, "sessions", `${processRecord.pid}.json`);
     try {
       const snapshot = await readBoundedUtf8File(filename, REGISTRY_FILE_LIMIT, signal);
       if (!snapshot || this.disposed) return null;
@@ -302,12 +308,6 @@ function localIdentityEnvironment(overrides: NodeJS.ProcessEnv): NodeJS.ProcessE
     ),
     ...overrides
   };
-}
-
-function resolveProviderHome(configured: string | undefined, fallback: string): string {
-  return configured && path.isAbsolute(configured) && !configured.includes("\0")
-    ? path.normalize(configured)
-    : fallback;
 }
 
 function terminateOwnedChild(child: ChildProcess): void {

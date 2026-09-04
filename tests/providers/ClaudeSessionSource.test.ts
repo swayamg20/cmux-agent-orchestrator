@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ClaudeSessionSource,
   claudeProjectDirectory,
@@ -67,6 +67,40 @@ describe("ClaudeSessionSource", () => {
         title: "Exact Claude title"
       });
     } finally {
+      await rm(claudeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("uses CLAUDE_CONFIG_DIR for default session discovery", async () => {
+    const claudeRoot = await mkdtemp(path.join(tmpdir(), "claude-config-dir-"));
+    const cwd = "/workspace/custom-config";
+    const sessionId = "44444444-4444-4444-8444-444444444444";
+    try {
+      await mkdir(path.join(claudeRoot, "sessions"), { recursive: true });
+      await writeFile(
+        path.join(claudeRoot, "sessions", "6064.json"),
+        JSON.stringify({
+          pid: 6064,
+          procStart: "Wed Sep 2 09:49:53 2026",
+          sessionId,
+          cwd,
+          name: "Custom Claude directory"
+        }),
+        "utf8"
+      );
+      vi.stubEnv("CLAUDE_CONFIG_DIR", claudeRoot);
+      const source = new ClaudeSessionSource();
+
+      await expect(source.list(cwd)).resolves.toEqual([
+        expect.objectContaining({
+          provider: "claude",
+          sessionId,
+          cwd,
+          title: "Custom Claude directory"
+        })
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
       await rm(claudeRoot, { recursive: true, force: true });
     }
   });

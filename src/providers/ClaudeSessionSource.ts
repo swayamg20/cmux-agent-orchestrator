@@ -3,6 +3,7 @@ import path from "node:path";
 import { open, opendir, stat } from "node:fs/promises";
 import { isCanonicalUuid } from "../security/identifiers";
 import { readBoundedUtf8File } from "./readBoundedFile";
+import { resolveProviderDataRoot } from "./providerDataRoot";
 import { sanitizeProviderTitle } from "./titleSanitizer";
 import {
   ProviderMetadataError,
@@ -25,7 +26,12 @@ interface ClaudeTitleMetadata {
 export class ClaudeSessionSource implements ProviderSessionSource {
   readonly provider = "claude" as const;
 
-  constructor(private readonly claudeRoot = path.join(homedir(), ".claude")) {}
+  constructor(
+    private readonly claudeRoot = resolveProviderDataRoot(
+      process.env.CLAUDE_CONFIG_DIR,
+      path.join(homedir(), ".claude")
+    )
+  ) {}
 
   async list(cwd: string, signal?: AbortSignal): Promise<ProviderSessionMetadata[]> {
     assertAbsoluteCwd(cwd);

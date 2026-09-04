@@ -138,7 +138,7 @@ Repository equality is not an identity signal, so the plugin never assigns a con
 1. Read fixed `ps` fields and consider only foreground processes whose executable basename is exactly `claude` or `codex`.
 2. Pipe that PID's environment from `/bin/ps` directly into fixed `/usr/bin/grep`; JavaScript receives only a canonical `CMUX_SURFACE_ID`, never the full environment.
 3. For Claude, require the local registry entry to match PID, UTC process start time, exact CWD, and canonical session ID.
-4. For Codex, require one open lock inside `~/.codex/thread-writer-locks/`, then verify through metadata-only Codex app-server access that it is exactly one root CLI thread for the same CWD.
+4. For Codex, require one open lock inside the active Codex data directory (`$CODEX_HOME/thread-writer-locks/`, defaulting to `~/.codex/thread-writer-locks/`), then verify through metadata-only Codex app-server access that it is exactly one root CLI thread for the same CWD.
 5. Re-read the process inventory and discard matches if PID/start/executable identity changed during resolution.
 
 Any missing, duplicate, stale, or conflicting evidence fails closed and leaves the cmux title visible. The row's **Choose provider conversation** action remains a manual fallback and override.
@@ -148,7 +148,7 @@ After an exact match, the provider title becomes the primary row label. The infe
 The provider metadata boundary is deliberately narrow:
 
 - Codex: starts the locally installed `codex app-server --listen stdio://` with `spawn`, `shell: false`, a five-second deadline, and byte ceilings. It sends only the local `initialize`, repository-filtered `thread/list` (maximum 50), and exact-ID metadata-only `thread/read` (`includeTurns: false`) protocol messages. The owned child is terminated after each bounded exchange.
-- Claude Code: reads at most 200 small files from `~/.claude/sessions/`, each capped at 64 KiB, to find exact session IDs for the requested CWD. For a selected ID it reads only bounded 128 KiB edge windows from the exact provider-owned JSONL and parses only `custom-title` and `ai-title` records.
+- Claude Code: reads at most 200 small files from the active Claude configuration directory (`$CLAUDE_CONFIG_DIR/sessions/`, defaulting to `~/.claude/sessions/`), each capped at 64 KiB, to find exact session IDs for the requested CWD. For a selected ID it reads only bounded 128 KiB edge windows from the exact provider-owned JSONL and parses only `custom-title` and `ai-title` records.
 - The in-memory provider metadata cache is capped at 1,000 entries. Raw responses, title records, previews, and transcript bytes are never written to Markdown or `data.json`.
 
 These adapters sit behind a `ProviderSessionSource` interface because both local formats are version-sensitive. No global provider hook is installed or modified.
@@ -224,7 +224,7 @@ The setup panel can retest the connection and then load the complete orchestrato
 
 ## System access and privacy
 
-The plugin accesses the local `cmux` executable and running cmux instance to discover topology, notifications, optional structured agent metadata, bounded terminal previews, and to focus an exact surface after an explicit click. For automatic conversation labels on macOS, it reads bounded process fields, extracts only `CMUX_SURFACE_ID` through a fixed pipe, inspects open files only inside the Codex writer-lock directory, starts a bounded local Codex app-server child, and reads bounded Claude metadata under `~/.claude`. It makes no plugin-originated network requests, collects no telemetry, and transmits no vault, terminal, process, or provider metadata. Inferred mappings, provider titles, and bounded source responses remain in memory. Exact provider session IDs are persisted only in a user-selected mapping or in the machine-scoped binding/run record created by automatic Work tracking.
+The plugin accesses the local `cmux` executable and running cmux instance to discover topology, notifications, optional structured agent metadata, bounded terminal previews, and to focus an exact surface after an explicit click. For automatic conversation labels on macOS, it reads bounded process fields, extracts only `CMUX_SURFACE_ID` through a fixed pipe, inspects open files only inside the configured Codex writer-lock directory, starts a bounded local Codex app-server child, and reads bounded Claude metadata under the configured Claude data directory. Absolute, bounded `$CODEX_HOME` and `$CLAUDE_CONFIG_DIR` values inherited by Obsidian are honored; invalid values fall back to the provider defaults. It makes no plugin-originated network requests, collects no telemetry, and transmits no vault, terminal, process, or provider metadata. Inferred mappings, provider titles, and bounded source responses remain in memory. Exact provider session IDs are persisted only in a user-selected mapping or in the machine-scoped binding/run record created by automatic Work tracking.
 
 ## Security limits
 

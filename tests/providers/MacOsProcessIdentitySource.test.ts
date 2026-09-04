@@ -126,6 +126,41 @@ describe("macOS provider identity decoding", () => {
     }
   });
 
+  it("reads the Claude process registry from CLAUDE_CONFIG_DIR", async () => {
+    const userHome = await mkdtemp(path.join(tmpdir(), "cmux-agent-identity-"));
+    const claudeRoot = path.join(userHome, "custom-claude");
+    const registryDirectory = path.join(claudeRoot, "sessions");
+    await mkdir(registryDirectory, { recursive: true });
+    await writeFile(
+      path.join(registryDirectory, `${claudeProcess.pid}.json`),
+      JSON.stringify({
+        pid: claudeProcess.pid,
+        procStart: claudeProcess.startedAt,
+        sessionId: "44444444-4444-4444-8444-444444444444",
+        cwd: "/workspace/project",
+        status: "running"
+      })
+    );
+    vi.stubEnv("CLAUDE_CONFIG_DIR", claudeRoot);
+    const source = new MacOsProcessIdentitySource(
+      new SafeProcessRunner(),
+      userHome,
+      () => true
+    );
+
+    try {
+      await expect(source.readClaudeSession(claudeProcess, "/workspace/project")).resolves.toEqual({
+        sessionId: "44444444-4444-4444-8444-444444444444",
+        cwd: "/workspace/project",
+        status: "running"
+      });
+    } finally {
+      source.dispose();
+      vi.unstubAllEnvs();
+      await rm(userHome, { recursive: true, force: true });
+    }
+  });
+
   it("does not pass cmux connection context to local identity commands", async () => {
     const runner = new SafeProcessRunner();
     const run = vi.spyOn(runner, "run").mockResolvedValue({
