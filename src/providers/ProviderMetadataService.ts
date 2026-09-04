@@ -1,4 +1,5 @@
 import type { LiveSession } from "../state/types";
+import { normalizeCanonicalUuid } from "../security/identifiers";
 import { ClaudeSessionSource } from "./ClaudeSessionSource";
 import { CodexAppServerSource } from "./CodexAppServerSource";
 import type {
@@ -34,7 +35,9 @@ export class ProviderMetadataService {
   ): Promise<ProviderSessionMetadata[]> {
     const request = this.beginRequest(signal);
     try {
-      const sessions = await this.requireSource(provider).list(cwd, request.controller.signal);
+      const sessions = (await this.requireSource(provider).list(cwd, request.controller.signal))
+        .map((session) => normalizeMetadata(session, provider, cwd))
+        .filter((session): session is ProviderSessionMetadata => session !== null);
       if (this.disposed) return [];
       for (const session of sessions) this.cache(session);
       return sessions.map((session) => ({ ...session }));
@@ -51,13 +54,16 @@ export class ProviderMetadataService {
   ): Promise<ProviderSessionMetadata | null> {
     const request = this.beginRequest(signal);
     try {
-      const session = await this.requireSource(provider).get(
-        sessionId,
+      const canonicalSessionId = normalizeCanonicalUuid(sessionId);
+      if (canonicalSessionId === null) return null;
+      const loaded = await this.requireSource(provider).get(
+        canonicalSessionId,
         cwd,
         request.controller.signal
       );
       if (this.disposed) return null;
-      const key = providerMetadataKey(provider, sessionId);
+      const session = loaded === null ? null : normalizeMetadata(loaded, provider, cwd);
+      const key = providerMetadataKey(provider, canonicalSessionId);
       if (session) this.cache(session);
       else this.metadata.delete(key);
       return session ? { ...session } : null;
@@ -110,9 +116,10 @@ export class ProviderMetadataService {
           // Exact metadata reads below can still work when list discovery is unavailable.
         }
         for (const mapping of group.mappings) {
-          if (!listedIds.has(mapping.providerSessionId)) {
+          const canonicalSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
+          if (canonicalSessionId !== null && !listedIds.has(canonicalSessionId)) {
             try {
-              await this.get(mapping.provider, mapping.providerSessionId, group.cwd);
+              await this.get(mapping.provider, canonicalSessionId, group.cwd);
             } catch {
               // A transient provider metadata failure must not break cmux discovery or erase a known title.
             }
@@ -175,5 +182,15 @@ export class ProviderMetadataService {
 }
 
 export function providerMetadataKey(provider: ProviderSessionKind, sessionId: string): string {
-  return `${provider}:${sessionId}`;
+  return `${provider}:${normalizeCanonicalUuid(sessionId) ?? sessionId}`;
+}
+
+function normalizeMetadata(
+  session: ProviderSessionMetadata,
+  provider: ProviderSessionKind,
+  cwd: string
+): ProviderSessionMetadata | null {
+  const sessionId = normalizeCanonicalUuid(session.sessionId);
+  if (sessionId === null || session.provider !== provider || session.cwd !== cwd) return null;
+  return { ...session, sessionId };
 }

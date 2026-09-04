@@ -6,7 +6,7 @@ import {
   type CmuxSnapshot,
   type CmuxTarget
 } from "../../cmux/types";
-import { isCanonicalUuid } from "../../security/identifiers";
+import { isCanonicalUuid, normalizeCanonicalUuid } from "../../security/identifiers";
 import type { Confidence } from "../../state/types";
 import type { ProviderMetadataService } from "../ProviderMetadataService";
 import type { ProviderSessionKind, ProviderSessionMetadata } from "../types";
@@ -165,10 +165,12 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     if (candidate.process.provider === "claude") {
       const session = await this.processes.readClaudeSession(candidate.process, cwd, signal);
       if (!session) return null;
+      const providerSessionId = normalizeCanonicalUuid(session.sessionId);
+      if (providerSessionId === null) return null;
       const mapping: AutomaticProviderSessionMapping = {
         ...candidate.surface,
         provider: "claude",
-        providerSessionId: session.sessionId,
+        providerSessionId,
         matchSource: "claude-process-registry",
         confidence: "high",
         explanation:
@@ -181,7 +183,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
         lifecycle: claudeLifecycleObservation(
           session.status,
           candidate.surface,
-          session.sessionId,
+          providerSessionId,
           checkedAt
         )
       };
@@ -235,18 +237,20 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
       await mapLimited(candidates, RESOLUTION_CONCURRENCY, async (record) => {
         const surface = surfaces.get(record.surfaceId);
         if (!surface?.currentDirectory || !record.sessionId) return null;
+        const providerSessionId = normalizeCanonicalUuid(record.sessionId);
+        if (providerSessionId === null) return null;
         const processMapping = processBySurface.get(record.surfaceId);
-        if (processMapping && processMapping.providerSessionId !== record.sessionId) return null;
+        if (processMapping && processMapping.providerSessionId !== providerSessionId) return null;
         let provider: ProviderSessionKind | null =
-          processMapping?.providerSessionId === record.sessionId ? processMapping.provider : null;
+          processMapping?.providerSessionId === providerSessionId ? processMapping.provider : null;
         if (!provider) {
-          provider = await this.identifyNativeProvider(record.sessionId, surface.currentDirectory, signal);
+          provider = await this.identifyNativeProvider(providerSessionId, surface.currentDirectory, signal);
         }
         if (!provider) return null;
         return {
           ...surface,
           provider,
-          providerSessionId: record.sessionId,
+          providerSessionId,
           matchSource: "cmux-agent-registry" as const,
           confidence: confidenceForNativeSource(record.source),
           explanation: `cmux reported this canonical provider session ID for the exact surface via its ${record.source} agent source.`,
@@ -326,9 +330,11 @@ function normalizeMappings(
   const bySurface = new Map<string, AutomaticProviderSessionMapping>();
   const claimedSessions = new Set<string>();
   for (const mapping of mappings) {
-    const sessionKey = `${mapping.provider}:${mapping.providerSessionId}`;
+    const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
+    if (providerSessionId === null) continue;
+    const sessionKey = `${mapping.provider}:${providerSessionId}`;
     if (bySurface.has(mapping.surfaceId) || claimedSessions.has(sessionKey)) continue;
-    bySurface.set(mapping.surfaceId, mapping);
+    bySurface.set(mapping.surfaceId, { ...mapping, providerSessionId });
     claimedSessions.add(sessionKey);
   }
   return [...bySurface.values()];

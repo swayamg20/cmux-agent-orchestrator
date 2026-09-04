@@ -8,7 +8,7 @@ import { projectLiveSessions } from "../../src/runtime/SessionProjection";
 const workspaceId = "22222222-2222-4222-8222-222222222222";
 const paneId = "33333333-3333-4333-8333-333333333333";
 const surfaceId = "44444444-4444-4444-8444-444444444444";
-const providerSessionId = "55555555-5555-4555-8555-555555555555";
+const providerSessionId = "55555555-5555-4555-8555-55555555555a";
 
 function snapshot(): CmuxSnapshot {
   return {
@@ -80,7 +80,7 @@ function project(pane = paneId, providerMetadata = metadata) {
         paneId: pane,
         surfaceId,
         provider: "codex",
-        providerSessionId,
+        providerSessionId: providerSessionId.toUpperCase(),
         matchedAt: "2026-09-02T00:00:00.000Z"
       }
     ],
@@ -181,7 +181,7 @@ describe("projectLiveSessions provider conversations", () => {
       paneId,
       surfaceId,
       provider: "codex" as const,
-      providerSessionId,
+      providerSessionId: providerSessionId.toUpperCase(),
       matchSource: "codex-writer-lock" as const,
       confidence: "high" as const,
       explanation: "Verified foreground process and root writer lock.",

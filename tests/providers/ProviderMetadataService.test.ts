@@ -8,7 +8,7 @@ import type { LiveSession } from "../../src/state/types";
 
 const metadata: ProviderSessionMetadata = {
   provider: "codex",
-  sessionId: "55555555-5555-4555-8555-555555555555",
+  sessionId: "55555555-5555-4555-8555-55555555555a",
   title: "Exact mapped conversation",
   titleSource: "explicit-name",
   cwd: "/workspace/project",
@@ -60,7 +60,9 @@ function liveSession(): LiveSession {
 describe("ProviderMetadataService", () => {
   it("refreshes metadata only for a mapping that resolves to the exact live target", async () => {
     const get = vi.fn(async () => metadata);
-    const list = vi.fn(async () => [metadata]);
+    const list = vi.fn(async () => [
+      { ...metadata, sessionId: metadata.sessionId.toUpperCase() }
+    ]);
     const source: ProviderSessionSource = {
       provider: "codex",
       list,
@@ -106,7 +108,7 @@ describe("ProviderMetadataService", () => {
           paneId: "33333333-3333-4333-8333-333333333333",
           surfaceId: "44444444-4444-4444-8444-444444444444",
           provider: "codex",
-          providerSessionId: metadata.sessionId,
+          providerSessionId: metadata.sessionId.toUpperCase(),
           matchedAt: "2026-09-02T00:00:00.000Z"
         }
       ],

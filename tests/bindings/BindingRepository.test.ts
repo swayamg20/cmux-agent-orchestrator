@@ -219,7 +219,7 @@ describe("BindingRepository", () => {
       paneId: "33333333-3333-4333-8333-333333333333",
       surfaceId: "44444444-4444-4444-8444-444444444444",
       provider: "codex" as const,
-      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      providerSessionId: "55555555-5555-4555-8555-55555555555A",
       matchedAt: "2026-09-02T00:00:00.000Z"
     };
     const first = new BindingRepository(plugin);
@@ -228,7 +228,12 @@ describe("BindingRepository", () => {
 
     const second = new BindingRepository(plugin);
     await second.load();
-    expect(second.listProviderSessions()).toEqual([mapping]);
+    expect(second.listProviderSessions()).toEqual([
+      {
+        ...mapping,
+        providerSessionId: mapping.providerSessionId.toLowerCase()
+      }
+    ]);
   });
 
   it("rejects assigning one provider conversation to two surfaces", async () => {
@@ -243,14 +248,15 @@ describe("BindingRepository", () => {
       paneId: "33333333-3333-4333-8333-333333333333",
       surfaceId: "44444444-4444-4444-8444-444444444444",
       provider: "claude" as const,
-      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      providerSessionId: "55555555-5555-4555-8555-55555555555a",
       matchedAt: "2026-09-02T00:00:00.000Z"
     };
     await repository.mapProviderSession(mapping);
     await expect(
       repository.mapProviderSession({
         ...mapping,
-        surfaceId: "66666666-6666-4666-8666-666666666666"
+        surfaceId: "66666666-6666-4666-8666-666666666666",
+        providerSessionId: mapping.providerSessionId.toUpperCase()
       })
     ).rejects.toThrow(/already matched/);
     expect(repository.listProviderSessions()).toEqual([mapping]);

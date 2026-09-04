@@ -14,7 +14,7 @@ import type { ProviderSessionSource } from "../../src/providers/types";
 const workspaceId = "22222222-2222-4222-8222-222222222222";
 const paneId = "33333333-3333-4333-8333-333333333333";
 const surfaceId = "44444444-4444-4444-8444-444444444444";
-const sessionId = "55555555-5555-4555-8555-555555555555";
+const sessionId = "55555555-5555-4555-8555-55555555555a";
 
 function snapshot(): CmuxSnapshot {
   return {
@@ -212,7 +212,7 @@ describe("AutomaticProviderSessionResolver", () => {
     const metadata = new ProviderMetadataService([]);
     const processes = new FakeProcessSource([processRecord(202, "claude")]);
     processes.readClaude.mockResolvedValue({
-      sessionId,
+      sessionId: sessionId.toUpperCase(),
       cwd: "/workspace/project",
       status: "idle"
     });
@@ -243,7 +243,7 @@ describe("AutomaticProviderSessionResolver", () => {
         surfaceId,
         state: "working",
         source: "hook",
-        sessionId,
+        sessionId: sessionId.toUpperCase(),
         updatedAt: 1_900
       }
     ];

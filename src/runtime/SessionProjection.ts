@@ -11,7 +11,7 @@ import type {
   ProviderSessionMetadata,
   SessionConversation
 } from "../providers/types";
-import { isCanonicalUuid } from "../security/identifiers";
+import { isCanonicalUuid, normalizeCanonicalUuid } from "../security/identifiers";
 import type { LiveSession, ProviderDetection } from "../state/types";
 
 export interface SessionProjectionInput {
@@ -42,7 +42,9 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
   const bindingProviderSurfaceIds = new Set<string>();
   const claimedProviderSessions = new Set<string>();
   for (const mapping of input.providerMappings) {
-    const providerSessionKey = `${mapping.provider}:${mapping.providerSessionId}`;
+    const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
+    if (providerSessionId === null) continue;
+    const providerSessionKey = `${mapping.provider}:${providerSessionId}`;
     if (
       providerMappingIndex.has(mapping.surfaceId) ||
       claimedProviderSessions.has(providerSessionKey)
@@ -54,7 +56,7 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
       paneId: mapping.paneId,
       surfaceId: mapping.surfaceId,
       provider: mapping.provider,
-      providerSessionId: mapping.providerSessionId,
+      providerSessionId,
       matchSource: "manual",
       matchConfidence: "high",
       explanation: "The user explicitly matched this exact cmux surface to a provider conversation."
@@ -62,7 +64,9 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
     claimedProviderSessions.add(providerSessionKey);
   }
   for (const mapping of input.automaticProviderMappings ?? []) {
-    const providerSessionKey = `${mapping.provider}:${mapping.providerSessionId}`;
+    const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
+    if (providerSessionId === null) continue;
+    const providerSessionKey = `${mapping.provider}:${providerSessionId}`;
     if (
       providerMappingIndex.has(mapping.surfaceId) ||
       claimedProviderSessions.has(providerSessionKey)
@@ -74,7 +78,7 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
       paneId: mapping.paneId,
       surfaceId: mapping.surfaceId,
       provider: mapping.provider,
-      providerSessionId: mapping.providerSessionId,
+      providerSessionId,
       matchSource: mapping.matchSource,
       matchConfidence: mapping.confidence,
       explanation: mapping.explanation
@@ -90,7 +94,7 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
     ) {
       continue;
     }
-    const providerSessionKey = `${binding.provider}:${binding.providerSessionId}`;
+    const providerSessionKey = `${binding.provider}:${binding.providerSessionId.toLowerCase()}`;
     if (claimedProviderSessions.has(providerSessionKey)) continue;
     claimedProviderSessions.add(providerSessionKey);
     bindingProviderSurfaceIds.add(binding.surfaceId);
@@ -201,12 +205,14 @@ function exactBindingMapping(
   ) {
     return null;
   }
+  const providerSessionId = normalizeCanonicalUuid(binding.providerSessionId);
+  if (providerSessionId === null) return null;
   return {
     workspaceId,
     paneId,
     surfaceId,
     provider: binding.provider,
-    providerSessionId: binding.providerSessionId,
+    providerSessionId,
     matchSource: "task-binding",
     matchConfidence: "medium",
     explanation: "The attached task records this provider conversation ID for the exact cmux surface."
@@ -239,13 +245,14 @@ function conversationFor(
     !mapping ||
     currentDirectory === null ||
     metadata.provider !== mapping.provider ||
-    metadata.sessionId !== mapping.providerSessionId ||
+    normalizeCanonicalUuid(metadata.sessionId) !== mapping.providerSessionId ||
     metadata.cwd !== currentDirectory
   ) {
     return null;
   }
   return {
     ...metadata,
+    sessionId: mapping.providerSessionId,
     matchSource: mapping.matchSource,
     matchConfidence: mapping.matchConfidence
   };

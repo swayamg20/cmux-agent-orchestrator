@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import type { AgentRunRecord } from "../bindings/types";
-import { isCanonicalUuid } from "../security/identifiers";
+import { isCanonicalUuid, normalizeCanonicalUuid } from "../security/identifiers";
 import type { LiveSession, ProviderDetection } from "../state/types";
 
 type TrackableProvider = "claude" | "codex";
@@ -78,12 +78,15 @@ export function exactTrackableIdentity(
   ) {
     return null;
   }
-  return { provider: provider.provider, sessionId: provider.sessionId.toLowerCase() };
+  return {
+    provider: provider.provider,
+    sessionId: normalizeCanonicalUuid(provider.sessionId)!
+  };
 }
 
 export function automaticTaskId(provider: TrackableProvider, providerSessionId: string): string {
-  if (!isCanonicalUuid(providerSessionId)) throw new Error("Provider session ID is not a canonical UUID.");
-  const canonicalSessionId = providerSessionId.toLowerCase();
+  const canonicalSessionId = normalizeCanonicalUuid(providerSessionId);
+  if (canonicalSessionId === null) throw new Error("Provider session ID is not a canonical UUID.");
   const characters = createHash("sha256")
     .update(`cmux-agent-orchestrator\0automatic-task\0${provider}\0${canonicalSessionId}`)
     .digest("hex")

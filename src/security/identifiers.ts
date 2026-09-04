@@ -4,3 +4,7 @@ const CANONICAL_UUID_PATTERN =
 export function isCanonicalUuid(value: string): boolean {
   return CANONICAL_UUID_PATTERN.test(value);
 }
+
+export function normalizeCanonicalUuid(value: string): string | null {
+  return isCanonicalUuid(value) ? value.toLowerCase() : null;
+}

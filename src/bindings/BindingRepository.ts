@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import type { Plugin } from "obsidian";
 import { PRODUCT_NAME } from "../identity";
-import { isCanonicalUuid } from "../security/identifiers";
+import { isCanonicalUuid, normalizeCanonicalUuid } from "../security/identifiers";
 import { parseSettings, type AgentCockpitSettings } from "../settings/AgentCockpitSettings";
 import type {
   AgentRunRecord,
@@ -111,11 +111,17 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
   const migratedRuns = new Map<string, AgentRunRecord>();
   for (const candidate of rawBindings) {
     let binding: BindingRecord | null = null;
-    if (isBinding(candidate)) binding = { ...candidate };
+    if (isBinding(candidate)) {
+      binding = {
+        ...candidate,
+        providerSessionId: normalizeProviderSessionId(candidate.providerSessionId)
+      };
+    }
     else if (isLegacyBinding(candidate)) {
       const runId = stableUuid(`run\0${id}\0${candidate.taskId}\0${candidate.surfaceId}\0${candidate.attachedAt}`);
       binding = {
         ...candidate,
+        providerSessionId: normalizeProviderSessionId(candidate.providerSessionId),
         bindingId: stableUuid(`binding\0${id}\0${candidate.workspaceId}\0${candidate.surfaceId}\0${candidate.attachedAt}`),
         runId
       };
@@ -123,7 +129,7 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
         runId,
         taskId: candidate.taskId,
         provider: candidate.provider,
-        providerSessionId: candidate.providerSessionId,
+        providerSessionId: normalizeProviderSessionId(candidate.providerSessionId),
         relation: "unknown",
         parentRunId: null,
         firstAttachedAt: candidate.attachedAt,
@@ -137,7 +143,12 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
   const runsById = new Map<string, AgentRunRecord>();
   if (Array.isArray(raw.runs)) {
     for (const candidate of raw.runs) {
-      if (isRun(candidate)) runsById.set(candidate.runId, { ...candidate });
+      if (isRun(candidate)) {
+        runsById.set(candidate.runId, {
+          ...candidate,
+          providerSessionId: normalizeProviderSessionId(candidate.providerSessionId)
+        });
+      }
       if (runsById.size >= MAX_RUNS_PER_MACHINE) break;
     }
   }
@@ -149,14 +160,18 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
   if (Array.isArray(raw.providerSessions)) {
     for (const candidate of raw.providerSessions) {
       if (isProviderSessionMapping(candidate)) {
-        const providerSessionKey = `${candidate.provider}:${candidate.providerSessionId}`;
+        const normalized = {
+          ...candidate,
+          providerSessionId: normalizeCanonicalUuid(candidate.providerSessionId)!
+        };
+        const providerSessionKey = `${normalized.provider}:${normalized.providerSessionId}`;
         if (
           claimedProviderSessions.has(providerSessionKey) ||
           providerSessionsBySurface.has(candidate.surfaceId)
         ) {
           continue;
         }
-        providerSessionsBySurface.set(candidate.surfaceId, { ...candidate });
+        providerSessionsBySurface.set(candidate.surfaceId, normalized);
         claimedProviderSessions.add(providerSessionKey);
       }
       if (providerSessionsBySurface.size >= MAX_PROVIDER_SESSIONS_PER_MACHINE) break;
@@ -238,47 +253,51 @@ export class BindingRepository {
     if (!isProviderSessionMapping(mapping)) {
       throw new Error("Provider session mapping contains an invalid canonical identity or value.");
     }
+    const normalized = {
+      ...mapping,
+      providerSessionId: normalizeCanonicalUuid(mapping.providerSessionId)!
+    };
     await this.commit((data) => {
       const machine = this.machineFor(data);
       const conflicting = machine.providerSessions.find(
         (candidate) =>
-          candidate.provider === mapping.provider &&
-          candidate.providerSessionId === mapping.providerSessionId &&
-          candidate.surfaceId !== mapping.surfaceId
+          candidate.provider === normalized.provider &&
+          candidate.providerSessionId === normalized.providerSessionId &&
+          candidate.surfaceId !== normalized.surfaceId
       );
       const conflictingBinding = machine.bindings.find(
         (candidate) =>
-          candidate.provider === mapping.provider &&
-          candidate.providerSessionId === mapping.providerSessionId &&
-          candidate.surfaceId !== mapping.surfaceId
+          candidate.provider === normalized.provider &&
+          candidate.providerSessionId === normalized.providerSessionId &&
+          candidate.surfaceId !== normalized.surfaceId
       );
       if (conflicting || conflictingBinding) {
         throw new Error("That provider conversation is already matched to another cmux surface.");
       }
       const replacing = machine.providerSessions.some(
-        (candidate) => candidate.surfaceId === mapping.surfaceId
+        (candidate) => candidate.surfaceId === normalized.surfaceId
       );
       if (!replacing && machine.providerSessions.length >= MAX_PROVIDER_SESSIONS_PER_MACHINE) {
         throw new Error(`${PRODUCT_NAME} has reached the provider-session mapping limit for this machine.`);
       }
       machine.providerSessions = machine.providerSessions.filter(
-        (candidate) => candidate.surfaceId !== mapping.surfaceId
+        (candidate) => candidate.surfaceId !== normalized.surfaceId
       );
-      machine.providerSessions.push({ ...mapping });
+      machine.providerSessions.push(normalized);
 
       const binding = machine.bindings.find(
         (candidate) =>
-          candidate.workspaceId === mapping.workspaceId &&
-          candidate.paneId === mapping.paneId &&
-          candidate.surfaceId === mapping.surfaceId
+          candidate.workspaceId === normalized.workspaceId &&
+          candidate.paneId === normalized.paneId &&
+          candidate.surfaceId === normalized.surfaceId
       );
       if (binding) {
-        binding.provider = mapping.provider;
-        binding.providerSessionId = mapping.providerSessionId;
+        binding.provider = normalized.provider;
+        binding.providerSessionId = normalized.providerSessionId;
         const run = machine.runs.find((candidate) => candidate.runId === binding.runId);
         if (run) {
-          run.provider = mapping.provider;
-          run.providerSessionId = mapping.providerSessionId;
+          run.provider = normalized.provider;
+          run.providerSessionId = normalized.providerSessionId;
         }
       }
     });
@@ -319,38 +338,42 @@ export class BindingRepository {
 
   async attach(input: NewBindingRecord): Promise<AttachBindingResult> {
     if (!isLegacyBinding(input)) throw new Error("Binding contains an invalid canonical identity or value.");
+    const normalizedInput = {
+      ...input,
+      providerSessionId: normalizeProviderSessionId(input.providerSessionId)
+    };
     let result: AttachBindingResult | null = null;
     await this.commit((data) => {
       const machine = this.machineFor(data);
-      const existing = machine.bindings.find((candidate) => candidate.surfaceId === input.surfaceId) ?? null;
-      const reusableRun = existing && existing.taskId === input.taskId
+      const existing = machine.bindings.find((candidate) => candidate.surfaceId === normalizedInput.surfaceId) ?? null;
+      const reusableRun = existing && existing.taskId === normalizedInput.taskId
         ? machine.runs.find((run) => run.runId === existing.runId) ?? null
         : null;
       const isSameProviderSession =
         reusableRun !== null &&
-        reusableRun.provider === input.provider &&
-        (input.providerSessionId === null || reusableRun.providerSessionId === input.providerSessionId);
+        reusableRun.provider === normalizedInput.provider &&
+        (normalizedInput.providerSessionId === null || reusableRun.providerSessionId === normalizedInput.providerSessionId);
       const isNewRun = !isSameProviderSession;
       if (isNewRun && machine.runs.length >= MAX_RUNS_PER_MACHINE) {
         throw new Error(`This machine has reached the ${PRODUCT_NAME} run-history limit.`);
       }
       const latestTaskRun = machine.runs
-        .filter((run) => run.taskId === input.taskId)
+        .filter((run) => run.taskId === normalizedInput.taskId)
         .sort((left, right) => right.lastAttachedAt.localeCompare(left.lastAttachedAt))[0] ?? null;
       const run: AgentRunRecord = isSameProviderSession
         ? { ...reusableRun, lastAttachedAt: input.attachedAt }
         : {
             runId: randomUUID(),
-            taskId: input.taskId,
-            provider: input.provider,
-            providerSessionId: input.providerSessionId,
-            relation: inferRelation(latestTaskRun, input),
+            taskId: normalizedInput.taskId,
+            provider: normalizedInput.provider,
+            providerSessionId: normalizedInput.providerSessionId,
+            relation: inferRelation(latestTaskRun, normalizedInput),
             parentRunId: latestTaskRun?.runId ?? null,
             firstAttachedAt: input.attachedAt,
             lastAttachedAt: input.attachedAt
           };
       const binding: BindingRecord = {
-        ...input,
+        ...normalizedInput,
         bindingId: existing?.bindingId ?? randomUUID(),
         runId: run.runId
       };
@@ -420,4 +443,8 @@ function stableUuid(seed: string): string {
   characters[16] = "89ab"[Number.parseInt(characters[16]!, 16) % 4]!;
   const hex = characters.join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function normalizeProviderSessionId(value: string | null): string | null {
+  return value === null ? null : normalizeCanonicalUuid(value) ?? value;
 }
