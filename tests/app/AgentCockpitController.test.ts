@@ -3345,6 +3345,169 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not publish or attach a manual task created in a replaced task folder", async () => {
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    let markCreateStarted!: () => void;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const { app, createdPaths } = memoryTaskApp({
+      beforeCreate: async () => {
+        markCreateStarted();
+        await createGate;
+      }
+    });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_750)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
+    const creation = controller.createTask({ title: "Manual task in old folder" }, session);
+    await createStarted;
+    await controller.updateSettings({
+      ...controller.getSettings(),
+      taskFolder: "New Agent Tasks"
+    });
+    releaseCreate();
+    await creation;
+
+    expect(createdPaths).toHaveLength(1);
+    expect(createdPaths[0]).toMatch(/^Agent Cockpit\/Tasks\//);
+    expect(controller.store.getState().tasks).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    expect(notices.slice(noticeStart)).toEqual([
+      "Created Manual task in old folder in Agent Cockpit/Tasks, but the task folder changed to New Agent Tasks before it could be added to the current board. The session was not attached."
+    ]);
+
+    await controller.reloadTasks();
+    expect(controller.store.getState().tasks).toEqual([]);
+    controller.dispose();
+  });
+
+  it("keeps a queued manual task in the folder selected when creation began", async () => {
+    let createAttempt = 0;
+    let releaseBlocker!: () => void;
+    const blockerGate = new Promise<void>((resolve) => {
+      releaseBlocker = resolve;
+    });
+    let markBlockerStarted!: () => void;
+    const blockerStarted = new Promise<void>((resolve) => {
+      markBlockerStarted = resolve;
+    });
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const { app, createdPaths } = memoryTaskApp({
+      beforeCreate: async () => {
+        createAttempt += 1;
+        if (createAttempt !== 1) return;
+        markBlockerStarted();
+        await blockerGate;
+      }
+    });
+    const blockerRepository = new TaskRepository(app, "Agent Cockpit/Tasks");
+    const blocker = blockerRepository.create({ title: "Earlier queued write" });
+    await blockerStarted;
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_751)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+    const creation = controller.createTask({ title: "Queued manual task" }, session);
+    await controller.updateSettings({
+      ...controller.getSettings(),
+      taskFolder: "New Agent Tasks"
+    });
+    releaseBlocker();
+    await blocker;
+    await creation;
+
+    expect(createdPaths).toHaveLength(2);
+    expect(createdPaths[0]).toMatch(/^Agent Cockpit\/Tasks\/earlier-queued-write\.md$/);
+    expect(createdPaths[1]).toMatch(/^Agent Cockpit\/Tasks\/queued-manual-task\.md$/);
+    expect(controller.store.getState().tasks).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    controller.dispose();
+  });
+
+  it("does not duplicate a manual task loaded by a concurrent same-folder settings save", async () => {
+    let gateSave = false;
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let markSaveStarted!: () => void;
+    const saveStarted = new Promise<void>((resolve) => {
+      markSaveStarted = resolve;
+    });
+    let markTaskWritten!: () => void;
+    const taskWritten = new Promise<void>((resolve) => {
+      markTaskWritten = resolve;
+    });
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => {
+        if (!gateSave) return;
+        markSaveStarted();
+        await saveGate;
+      }
+    } as unknown as Plugin;
+    const { app } = memoryTaskApp({
+      afterCreateMutation: async () => {
+        markTaskWritten();
+      }
+    });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_752))
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    gateSave = true;
+    const settingsUpdate = controller.updateSettings({
+      ...controller.getSettings(),
+      previewLines: controller.getSettings().previewLines - 1
+    });
+    await saveStarted;
+    const creation = controller.createTask({ title: "One visible manual task" });
+    await taskWritten;
+    releaseSave();
+    await settingsUpdate;
+    const task = await creation;
+
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, title: "One visible manual task" }
+    ]);
+    expect(controller.store.getState().tasks).toHaveLength(1);
+    controller.dispose();
+  });
+
   it("refreshes reconfigured cmux topology before automatic tracking resumes", async () => {
     let persisted: unknown;
     const requestedBinaryPaths: string[] = [];

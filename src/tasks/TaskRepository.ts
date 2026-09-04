@@ -215,8 +215,9 @@ export class TaskRepository {
 
   async create(options: CreateTaskOptions): Promise<TaskRecord> {
     const taskId = randomUUID();
+    const taskFolder = this.taskFolder;
     return this.enqueueMutation(async () => {
-      const task = await this.createWithId(options, taskId, undefined, false);
+      const task = await this.createWithId(options, taskId, undefined, false, taskFolder);
       if (task === null) throw new Error("Task creation was cancelled.");
       return task;
     });
@@ -262,14 +263,14 @@ export class TaskRepository {
     options: CreateTaskOptions,
     taskId: string,
     canMutate: MutationGuard | undefined,
-    deterministic: boolean
+    deterministic: boolean,
+    taskFolder = this.taskFolder
   ): Promise<TaskRecord | null> {
     const title = options.title.replace(/[\r\n]+/g, " ").trim();
     if (!title) throw new Error("Task title is required.");
     if (title.length > 512) throw new Error("Task title must be 512 characters or fewer.");
     const normalizedTaskId = normalizeCanonicalUuid(taskId);
     if (normalizedTaskId === null) throw new Error("Task ID is not a canonical UUID.");
-    const taskFolder = this.taskFolder;
     if (canMutate && !canMutate()) return null;
     if (!(await this.ensureFolder(taskFolder, canMutate))) return null;
     if (canMutate && !canMutate()) return null;

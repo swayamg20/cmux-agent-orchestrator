@@ -433,15 +433,32 @@ export class AgentCockpitController {
   async createTask(options: CreateTaskOptions, session: LiveSession | null = null): Promise<TaskRecord> {
     if (this.disposed) throw new Error(`${PRODUCT_NAME} is unloaded.`);
     try {
+      const taskFolder = this.requireSettings().taskFolder;
       const current = session === null ? null : this.resolveCurrentBindingSession(session);
       const task = await this.requireTaskRepository().create(options);
       if (this.disposed) return task;
-      this.store.update((state) => ({ tasks: [task, ...state.tasks] }));
+      await this.waitForSettingsUpdates();
+      if (this.disposed) return task;
+      const activeTaskFolder = this.requireSettings().taskFolder;
+      const activeTasks = this.requireTaskRepository().list();
+      const activeTask = activeTasks.find(
+        (candidate) => candidate.taskId === task.taskId && candidate.file.path === task.file.path
+      ) ?? null;
+      this.store.update({ tasks: activeTasks });
+      if (activeTask === null) {
+        this.recomputeSessions();
+        const attachment = current === null ? "" : " The session was not attached.";
+        const message = activeTaskFolder === taskFolder
+          ? `Created ${task.title}, but it is no longer available in ${activeTaskFolder} and was not added to the current board.${attachment}`
+          : `Created ${task.title} in ${taskFolder}, but the task folder changed to ${activeTaskFolder} before it could be added to the current board.${attachment}`;
+        new Notice(message);
+        return task;
+      }
       if (current === null) {
         new Notice(`Created ${task.title}.`);
       } else {
         try {
-          await this.attachTaskInternal(current, task);
+          await this.attachTaskInternal(current, activeTask);
           if (this.disposed) return task;
           new Notice(`Created ${task.title} and attached the session.`);
         } catch (error) {
@@ -454,6 +471,14 @@ export class AgentCockpitController {
       if (!this.disposed) new Notice(readableError(error));
       throw error;
     }
+  }
+
+  private async waitForSettingsUpdates(): Promise<void> {
+    let pending: Promise<void>;
+    do {
+      pending = this.settingsUpdateWork;
+      await pending;
+    } while (pending !== this.settingsUpdateWork);
   }
 
   async openTask(task: TaskRecord): Promise<void> {
