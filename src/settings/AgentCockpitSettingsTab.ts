@@ -7,6 +7,7 @@ import {
   type SettingDefinitionItem
 } from "obsidian";
 import type { AgentCockpitController } from "../app/AgentCockpitController";
+import { runUiAction } from "../app/runUiAction";
 import { PRODUCT_NAME } from "../identity";
 import type { AgentCockpitSettings } from "./AgentCockpitSettings";
 
@@ -132,7 +133,10 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
     setting.addButton((button) =>
       button.setButtonText("Test connection").onClick(() => {
         button.setDisabled(true);
-        void this.controller.testConnection().finally(() => button.setDisabled(false));
+        void runUiAction(
+          () => this.controller.testConnection(),
+          "Could not test the cmux connection."
+        ).finally(() => button.setDisabled(false));
       })
     );
   }

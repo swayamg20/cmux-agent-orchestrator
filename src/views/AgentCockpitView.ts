@@ -1,5 +1,6 @@
 import { ItemView, setIcon, type WorkspaceLeaf } from "obsidian";
 import type { AgentCockpitController } from "../app/AgentCockpitController";
+import { runUiAction } from "../app/runUiAction";
 import { renderCmuxConnectionPanel } from "../components/CmuxConnectionPanel";
 import type { SessionCardActions } from "../components/SessionCard";
 import { renderConnectionBadge } from "../components/StatusBadge";
@@ -114,7 +115,10 @@ export class AgentCockpitView extends ItemView {
     panelSlot.empty();
     renderHeader(headerSlot, state, this.controller);
     renderCmuxConnectionPanel(connectionSlot, state.connection, state.refreshing, {
-      retry: () => void this.controller.testConnection(),
+      retry: () => void runUiAction(
+        () => this.controller.testConnection(),
+        "Could not test the cmux connection."
+      ),
       copySetupSteps: () => void this.controller.copyCmuxSetupSteps()
     });
     this.renderSectionTabs(tabsSlot, state);

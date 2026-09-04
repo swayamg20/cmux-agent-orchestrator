@@ -35,6 +35,7 @@ All notable changes to this project will be documented in this file.
 - Surface exact provider-conversation replacement as an Attention item when a persisted task binding still points at the reused surface.
 - Remove the obsolete v0.1 label from rejected-action messages so the security policy remains accurate across releases.
 - Report ribbon and command-palette view failures as notices instead of leaking rejected workspace promises into the console.
+- Report connection-test failures from both the main view and settings without leaking rejected promises into the console.
 
 ### Security
 
