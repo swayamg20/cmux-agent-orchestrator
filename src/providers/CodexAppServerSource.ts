@@ -73,7 +73,10 @@ export class CodexAppServerSource implements ProviderSessionSource {
 }
 
 export class CodexAppServerClient implements CodexAppServerRequester {
-  private readonly children = new Set<ChildProcessWithoutNullStreams>();
+  private readonly activeExchanges = new Map<
+    ChildProcessWithoutNullStreams,
+    (error: Error) => void
+  >();
   private binaryPath: Promise<string> | null = null;
   private disposed = false;
 
@@ -92,9 +95,11 @@ export class CodexAppServerClient implements CodexAppServerRequester {
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
-    for (const child of this.children) terminateOwnedChild(child);
-    this.children.clear();
+    for (const cancel of this.activeExchanges.values()) {
+      cancel(new ProviderMetadataError("Codex metadata access has been disposed."));
+    }
   }
 
   private exchange(
@@ -110,7 +115,6 @@ export class CodexAppServerClient implements CodexAppServerRequester {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true
       });
-      this.children.add(child);
 
       const decoder = new StringDecoder("utf8");
       let stdoutBytes = 0;
@@ -125,10 +129,12 @@ export class CodexAppServerClient implements CodexAppServerRequester {
         if (timer !== null) cancelTimer(timer);
         signal?.removeEventListener("abort", abort);
         terminateOwnedChild(child);
+        destroyOwnedPipes(child);
         if (error) reject(error);
         else resolve(result);
       };
       const abort = (): void => finish(new ProviderMetadataError("Codex metadata request was cancelled."));
+      this.activeExchanges.set(child, finish);
       timer = startTimer(
         () => finish(new ProviderMetadataError("Codex app-server did not respond before the timeout.")),
         APP_SERVER_TIMEOUT_MS
@@ -205,7 +211,7 @@ export class CodexAppServerClient implements CodexAppServerRequester {
         finish(new ProviderMetadataError("Could not start the Codex app-server metadata source.", error));
       });
       child.once("close", (code) => {
-        this.children.delete(child);
+        this.activeExchanges.delete(child);
         if (settled) return;
         finish(
           new ProviderMetadataError(
@@ -334,4 +340,10 @@ function terminateOwnedChild(child: ChildProcessWithoutNullStreams): void {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   }, FORCE_KILL_AFTER_MS);
   timer.unref();
+}
+
+function destroyOwnedPipes(child: ChildProcessWithoutNullStreams): void {
+  child.stdin.destroy();
+  child.stdout.destroy();
+  child.stderr.destroy();
 }

@@ -1,4 +1,8 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
+import { PassThrough } from "node:stream";
+import { setTimeout as startTimer } from "node:timers";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -8,6 +12,12 @@ import {
   decodeCodexThreadList,
   type CodexAppServerRequester
 } from "../../src/providers/CodexAppServerSource";
+
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+
+vi.mock("node:child_process", () => ({
+  spawn: spawnMock
+}));
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -20,6 +30,17 @@ function deferred<T>(): Deferred<T> {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+function appServerChild(): ChildProcessWithoutNullStreams {
+  return Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    exitCode: null,
+    signalCode: null,
+    kill: vi.fn(() => true)
+  }) as unknown as ChildProcessWithoutNullStreams;
 }
 
 const fixture = (): Promise<string> =>
@@ -90,5 +111,36 @@ describe("CodexAppServerSource", () => {
     discovery.resolve("/usr/bin/true");
 
     await expect(request).rejects.toThrow("disposed");
+  });
+
+  it("settles an active exchange immediately on disposal and ignores late initialization", async () => {
+    const child = appServerChild();
+    const writes: string[] = [];
+    child.stdin.on("data", (chunk: Buffer) => writes.push(chunk.toString("utf8")));
+    spawnMock.mockReturnValueOnce(child);
+    const client = new CodexAppServerClient();
+    (client as unknown as { binaryPath: Promise<string> | null }).binaryPath =
+      Promise.resolve("/opt/homebrew/bin/codex");
+
+    const request = client.request("thread/list", { cwd: "/repository" });
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    client.dispose();
+
+    const outcome = await Promise.race([
+      request.then(
+        () => "resolved",
+        (error: unknown) => error instanceof Error ? error.message : String(error)
+      ),
+      new Promise<string>((resolve) => startTimer(() => resolve("still pending"), 25))
+    ]);
+    const writesAtDisposal = writes.length;
+    child.stdout.emit("data", Buffer.from('{"id":1,"result":{}}\n'));
+    await Promise.resolve();
+    Object.assign(child, { exitCode: 0 });
+    child.emit("close", 0);
+    await request.catch(() => undefined);
+
+    expect(outcome).toContain("disposed");
+    expect(writes).toHaveLength(writesAtDisposal);
   });
 });
