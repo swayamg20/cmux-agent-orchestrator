@@ -1367,4 +1367,109 @@ describe("TaskRepository", () => {
 
     expect(frontmatter["workflow-status"]).toBe("review");
   });
+
+  it.each(["increment", "repair"] as const)(
+    "keeps a queued run-count %s on its exact task when the configured folder changes",
+    async (operation) => {
+      let blockCreate = false;
+      let markCreateStarted!: () => void;
+      const createStarted = new Promise<void>((resolve) => {
+        markCreateStarted = resolve;
+      });
+      let releaseCreate!: () => void;
+      const createGate = new Promise<void>((resolve) => {
+        releaseCreate = resolve;
+      });
+      const memory = createMemoryTaskApp({
+        beforeCreate: async () => {
+          if (!blockCreate) return;
+          markCreateStarted();
+          await createGate;
+        }
+      });
+      const repository = new TaskRepository(memory.app, "Folder A");
+      const taskA = await repository.create({ title: "Exact task A" });
+      repository.setTaskFolder("Folder B");
+      const taskB = await repository.create({ title: "Different task B" });
+      const taskBFrontmatter = memory.app.metadataCache.getFileCache(taskB.file)?.frontmatter;
+      if (taskBFrontmatter === undefined) throw new Error("Missing task B frontmatter fixture.");
+      memory.replaceFrontmatter(taskB.file.path, {
+        ...taskBFrontmatter,
+        "task-id": taskA.taskId
+      });
+
+      repository.setTaskFolder("Folder A");
+      blockCreate = true;
+      const blockingCreate = repository.create({ title: "Hold the task queue" });
+      await createStarted;
+      const update = operation === "increment"
+        ? repository.incrementRunCount(taskA)
+        : repository.ensureRunCountAtLeast(taskA, 1);
+      repository.setTaskFolder("Folder B");
+      releaseCreate();
+
+      await blockingCreate;
+      await expect(update).resolves.toBe(1);
+      repository.setTaskFolder("Folder A");
+      expect(repository.findById(taskA.taskId)).toMatchObject({
+        title: "Exact task A",
+        runCount: 1
+      });
+      repository.setTaskFolder("Folder B");
+      expect(repository.findById(taskA.taskId)).toMatchObject({
+        title: "Different task B",
+        runCount: 0
+      });
+    }
+  );
+
+  it("keeps a queued workflow update on its exact task when the configured folder changes", async () => {
+    let blockCreate = false;
+    let markCreateStarted!: () => void;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const memory = createMemoryTaskApp({
+      beforeCreate: async () => {
+        if (!blockCreate) return;
+        markCreateStarted();
+        await createGate;
+      }
+    });
+    const repository = new TaskRepository(memory.app, "Folder A");
+    const taskA = await repository.create({ title: "Exact workflow task A" });
+    repository.setTaskFolder("Folder B");
+    const taskB = await repository.create({ title: "Different workflow task B" });
+    const taskBFrontmatter = memory.app.metadataCache.getFileCache(taskB.file)?.frontmatter;
+    if (taskBFrontmatter === undefined) throw new Error("Missing task B frontmatter fixture.");
+    memory.replaceFrontmatter(taskB.file.path, {
+      ...taskBFrontmatter,
+      "task-id": taskA.taskId
+    });
+
+    repository.setTaskFolder("Folder A");
+    blockCreate = true;
+    const blockingCreate = repository.create({ title: "Hold the workflow queue" });
+    await createStarted;
+    const update = repository.updateWorkflow(taskA, "review");
+    repository.setTaskFolder("Folder B");
+    releaseCreate();
+
+    await blockingCreate;
+    await update;
+    repository.setTaskFolder("Folder A");
+    expect(repository.findById(taskA.taskId)).toMatchObject({
+      title: "Exact workflow task A",
+      workflowStatus: "review"
+    });
+    repository.setTaskFolder("Folder B");
+    expect(repository.findById(taskA.taskId)).toMatchObject({
+      title: "Different workflow task B",
+      workflowStatus: "active"
+    });
+  });
 });

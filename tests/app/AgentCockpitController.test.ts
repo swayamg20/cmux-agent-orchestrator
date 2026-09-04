@@ -1223,6 +1223,86 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not publish a queued workflow result onto a same-ID task in a newly selected folder", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: false } };
+    let blockCreate = false;
+    let markCreateStarted!: () => void;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const memory = memoryTaskApp({
+      beforeCreate: async () => {
+        if (!blockCreate) return;
+        markCreateStarted();
+        await createGate;
+      }
+    });
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(650))
+    );
+
+    await controller.initialize();
+    const taskA = await controller.createTask({ title: "Workflow task A" });
+    const folderBRepository = new TaskRepository(memory.app, "Folder B");
+    const taskB = await folderBRepository.create({ title: "Different workflow task B" });
+    const taskBFrontmatter = memory.app.metadataCache.getFileCache(taskB.file)?.frontmatter;
+    if (taskBFrontmatter === undefined) throw new Error("Missing task B frontmatter fixture.");
+    memory.replaceFrontmatter(taskB.file.path, {
+      ...taskBFrontmatter,
+      "task-id": taskA.taskId
+    });
+
+    blockCreate = true;
+    const queueOwner = new TaskRepository(memory.app, controller.getSettings().taskFolder);
+    const blockingCreate = queueOwner.create({ title: "Hold the workflow queue" });
+    await createStarted;
+    const update = controller.updateWorkflow(taskA, "review");
+    await controller.updateSettings({
+      ...controller.getSettings(),
+      taskFolder: "Folder B"
+    });
+    expect(controller.store.getState().tasks).toMatchObject([
+      {
+        taskId: taskA.taskId,
+        title: "Different workflow task B",
+        workflowStatus: "active"
+      }
+    ]);
+
+    releaseCreate();
+    await blockingCreate;
+    await expect(update).resolves.toBe(true);
+
+    expect(controller.store.getState().tasks).toHaveLength(1);
+    expect(controller.store.getState().tasks[0]).toMatchObject({
+      taskId: taskA.taskId,
+      title: "Different workflow task B",
+      workflowStatus: "active",
+      file: taskB.file
+    });
+    const folderARepository = new TaskRepository(
+      memory.app,
+      "Agent Cockpit/Tasks"
+    );
+    expect(folderARepository.findById(taskA.taskId)).toMatchObject({
+      title: "Workflow task A",
+      workflowStatus: "review"
+    });
+    controller.dispose();
+  });
+
   it("automatically creates one neutral active task for an exact session and never recreates it", async () => {
     let persisted: unknown;
     let observedAt = 1_000;
@@ -3634,6 +3714,73 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not persist a manual attachment when the exact surface disappears while its write is queued", async () => {
+    let currentSnapshot = snapshot(5_310);
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const transport: CmuxTransport = {
+      ...connectedTransport(5_310),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const { app } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const original = controller.store.getState().sessions[0]!;
+    const task = await controller.createTask({ title: "Guard a queued attachment" });
+    const noticeStart = notices.length;
+
+    const internal = controller as unknown as { bindings: BindingRepository };
+    const repository = internal.bindings;
+    const attachIfSurfaceUnchanged = repository.attachIfSurfaceUnchanged.bind(repository);
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    let markWriteQueued!: () => void;
+    const writeQueued = new Promise<void>((resolve) => {
+      markWriteQueued = resolve;
+    });
+    repository.attachIfSurfaceUnchanged = async (input, expected, canMutate) => {
+      markWriteQueued();
+      await writeGate;
+      return attachIfSurfaceUnchanged(input, expected, canMutate);
+    };
+
+    const attachment = controller.attachTask(original, task);
+    await writeQueued;
+
+    currentSnapshot = snapshot(5_311);
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces = [];
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.selectedSurfaceId = null;
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+    releaseWrite();
+
+    await expect(attachment).rejects.toThrow(/no longer exists/);
+    expect(persisted).toBeUndefined();
+    expect(repository.list()).toEqual([]);
+    expect(repository.listRuns()).toEqual([]);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, runCount: 0 }
+    ]);
+    expect(notices.slice(noticeStart)).not.toContain("Attached session to Guard a queued attachment.");
+    controller.dispose();
+  });
+
   it("keeps a newly created task without duplicating notices when attachment persistence fails", async () => {
     const plugin = {
       loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
@@ -3696,6 +3843,66 @@ describe("AgentCockpitController connection failures", () => {
       "Created Recover manual run count.",
       "Attached session to Recover manual run count."
     ]);
+    controller.dispose();
+  });
+
+  it("repairs a manual run count in its original folder when settings change during the first attempt", async () => {
+    let persisted: unknown;
+    let markFrontmatterStarted!: () => void;
+    const frontmatterStarted = new Promise<void>((resolve) => {
+      markFrontmatterStarted = resolve;
+    });
+    let releaseFrontmatter!: () => void;
+    const frontmatterGate = new Promise<void>((resolve) => {
+      releaseFrontmatter = resolve;
+    });
+    const plugin = {
+      loadData: async () => persisted ?? ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
+    const memory = memoryTaskApp({
+      failFrontmatterWrites: 1,
+      beforeFrontmatter: async () => {
+        markFrontmatterStarted();
+        await frontmatterGate;
+      }
+    });
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_337))
+    );
+
+    await controller.initialize();
+    const originalFolder = controller.getSettings().taskFolder;
+    const task = await controller.createTask({ title: "Recover in original folder" });
+    const attachment = controller.attachTask(controller.store.getState().sessions[0]!, task);
+    await frontmatterStarted;
+
+    await controller.updateSettings({
+      ...controller.getSettings(),
+      taskFolder: "Different Tasks"
+    });
+    releaseFrontmatter();
+    await attachment;
+    await controller.updateSettings({
+      ...controller.getSettings(),
+      taskFolder: originalFolder
+    });
+
+    expect(memory.frontmatterWriteAttempts()).toBe(2);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, runCount: 1 }
+    ]);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(notices.slice(noticeStart)).toContain("Attached session to Recover in original folder.");
+    expect(notices.slice(noticeStart)).not.toContainEqual(
+      expect.stringContaining("Session attached, but run count was not updated")
+    );
     controller.dispose();
   });
 

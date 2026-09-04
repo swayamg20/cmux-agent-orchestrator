@@ -206,11 +206,24 @@ export class TaskRepository {
   }
 
   findById(taskId: string): TaskRecord {
-    const matches = this.findMatchesById(taskId);
+    return this.findByIdInFolder(taskId, this.taskFolder);
+  }
+
+  private findByIdInFolder(taskId: string, taskFolder: string): TaskRecord {
+    const matches = this.findMatchesById(taskId, taskFolder);
     if (matches.length !== 1) {
       throw new Error(matches.length === 0 ? "The linked task no longer exists." : "The task ID is duplicated in the vault.");
     }
     return matches[0]!;
+  }
+
+  private resolveExactTask(task: TaskRecord, taskFolder: string): TaskRecord {
+    const latest = this.findByIdInFolder(task.taskId, taskFolder);
+    if (latest.file !== task.file) {
+      throw new Error("Task identity changed before the update. Refresh and try again.");
+    }
+    this.assertExactTaskFile(task.file, taskFolder);
+    return latest;
   }
 
   async create(options: CreateTaskOptions): Promise<TaskRecord> {
@@ -360,10 +373,12 @@ export class TaskRepository {
 
   async updateWorkflow(task: TaskRecord, workflowStatus: WorkflowStatus): Promise<void> {
     assertWorkflowTransition(task.workflowStatus, workflowStatus);
+    const taskFolder = this.taskFolder;
     return this.enqueueMutation(async () => {
-      const latest = this.findById(task.taskId);
+      const latest = this.resolveExactTask(task, taskFolder);
       const updatedAt = new Date().toISOString();
       await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
+        this.assertExactTaskFile(task.file, taskFolder);
         if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
           throw new Error("Task identity changed before the update.");
         }
@@ -373,31 +388,30 @@ export class TaskRepository {
         frontmatter["workflow-status"] = workflowStatus;
         frontmatter["updated-at"] = updatedAt;
       });
-      this.rememberRecentTask(this.taskFolder, { ...latest, workflowStatus, updatedAt });
+      this.rememberRecentTask(taskFolder, { ...latest, workflowStatus, updatedAt });
     });
   }
 
   async incrementRunCount(task: TaskRecord): Promise<number> {
+    const taskFolder = this.taskFolder;
+    return this.enqueueMutation(() => this.incrementRunCountInFolder(task, taskFolder));
+  }
+
+  async incrementRunCountWithRecovery(task: TaskRecord, minimum: number): Promise<number> {
+    this.assertMinimumRunCount(minimum);
+    const taskFolder = this.taskFolder;
     return this.enqueueMutation(async () => {
-      const latest = this.findById(task.taskId);
-      let nextCount = task.runCount + 1;
-      const updatedAt = new Date().toISOString();
-      await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
-        if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
-          throw new Error("Task identity changed before the update.");
-        }
-        const current =
-          typeof frontmatter["run-count"] === "number" &&
-          Number.isFinite(frontmatter["run-count"]) &&
-          frontmatter["run-count"] >= 0
-            ? Math.min(Math.floor(frontmatter["run-count"]), 999_999)
-            : 0;
-        nextCount = current + 1;
-        frontmatter["run-count"] = nextCount;
-        frontmatter["updated-at"] = updatedAt;
-      });
-      this.rememberRecentTask(this.taskFolder, { ...latest, runCount: nextCount, updatedAt });
-      return nextCount;
+      try {
+        return await this.incrementRunCountInFolder(task, taskFolder);
+      } catch {
+        const recovered = await this.ensureRunCountAtLeastInFolder(
+          task,
+          minimum,
+          taskFolder
+        );
+        if (recovered === null) throw new Error("Run-count recovery was cancelled.");
+        return recovered;
+      }
     });
   }
 
@@ -412,49 +426,90 @@ export class TaskRepository {
     minimum: number,
     canMutate?: MutationGuard
   ): Promise<number | null> {
+    this.assertMinimumRunCount(minimum);
+    const taskFolder = this.taskFolder;
+    return this.enqueueMutation(() =>
+      this.ensureRunCountAtLeastInFolder(task, minimum, taskFolder, canMutate)
+    );
+  }
+
+  private async incrementRunCountInFolder(
+    task: TaskRecord,
+    taskFolder: string
+  ): Promise<number> {
+    const latest = this.resolveExactTask(task, taskFolder);
+    let nextCount = task.runCount + 1;
+    const updatedAt = new Date().toISOString();
+    await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
+      this.assertExactTaskFile(task.file, taskFolder);
+      if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
+        throw new Error("Task identity changed before the update.");
+      }
+      const current =
+        typeof frontmatter["run-count"] === "number" &&
+        Number.isFinite(frontmatter["run-count"]) &&
+        frontmatter["run-count"] >= 0
+          ? Math.min(Math.floor(frontmatter["run-count"]), 999_999)
+          : 0;
+      nextCount = current + 1;
+      frontmatter["run-count"] = nextCount;
+      frontmatter["updated-at"] = updatedAt;
+    });
+    this.rememberRecentTask(taskFolder, { ...latest, runCount: nextCount, updatedAt });
+    return nextCount;
+  }
+
+  private async ensureRunCountAtLeastInFolder(
+    task: TaskRecord,
+    minimum: number,
+    taskFolder: string,
+    canMutate?: MutationGuard
+  ): Promise<number | null> {
+    if (canMutate && !canMutate()) return null;
+    const latest = this.resolveExactTask(task, taskFolder);
+    if (latest.runCount >= minimum) return latest.runCount;
+
+    let nextCount = latest.runCount;
+    let changed = false;
+    let cancelled = false;
+    const updatedAt = new Date().toISOString();
+    if (canMutate && !canMutate()) return null;
+    await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
+      if (canMutate && !canMutate()) {
+        cancelled = true;
+        return;
+      }
+      this.assertExactTaskFile(task.file, taskFolder);
+      if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
+        throw new Error("Task identity changed before the update.");
+      }
+      const current =
+        typeof frontmatter["run-count"] === "number" &&
+        Number.isFinite(frontmatter["run-count"]) &&
+        frontmatter["run-count"] >= 0
+          ? Math.min(Math.floor(frontmatter["run-count"]), 1_000_000)
+          : 0;
+      nextCount = Math.max(current, minimum);
+      if (nextCount === current) return;
+      changed = true;
+      frontmatter["run-count"] = nextCount;
+      frontmatter["updated-at"] = updatedAt;
+    });
+    if (cancelled) return null;
+    if (changed) {
+      this.rememberRecentTask(taskFolder, { ...latest, runCount: nextCount, updatedAt });
+    }
+    return nextCount;
+  }
+
+  private assertMinimumRunCount(minimum: number): void {
     if (!Number.isSafeInteger(minimum) || minimum < 0 || minimum > 1_000_000) {
       throw new Error("Minimum run count must be an integer between 0 and 1000000.");
     }
-    return this.enqueueMutation(async () => {
-      if (canMutate && !canMutate()) return null;
-      const latest = this.findById(task.taskId);
-      if (latest.runCount >= minimum) return latest.runCount;
-
-      let nextCount = latest.runCount;
-      let changed = false;
-      let cancelled = false;
-      const updatedAt = new Date().toISOString();
-      if (canMutate && !canMutate()) return null;
-      await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
-        if (canMutate && !canMutate()) {
-          cancelled = true;
-          return;
-        }
-        if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
-          throw new Error("Task identity changed before the update.");
-        }
-        const current =
-          typeof frontmatter["run-count"] === "number" &&
-          Number.isFinite(frontmatter["run-count"]) &&
-          frontmatter["run-count"] >= 0
-            ? Math.min(Math.floor(frontmatter["run-count"]), 1_000_000)
-            : 0;
-        nextCount = Math.max(current, minimum);
-        if (nextCount === current) return;
-        changed = true;
-        frontmatter["run-count"] = nextCount;
-        frontmatter["updated-at"] = updatedAt;
-      });
-      if (cancelled) return null;
-      if (changed) {
-        this.rememberRecentTask(this.taskFolder, { ...latest, runCount: nextCount, updatedAt });
-      }
-      return nextCount;
-    });
   }
 
   async open(task: TaskRecord): Promise<void> {
-    const latest = this.findById(task.taskId);
+    const latest = this.resolveExactTask(task, this.taskFolder);
     const leaf = this.app.workspace.getLeaf("tab");
     await leaf.openFile(latest.file);
   }
@@ -690,22 +745,22 @@ export class TaskRepository {
     return true;
   }
 
-  private indexedTasks(): TaskRecord[] {
-    return this.taskFiles()
+  private indexedTasks(taskFolder = this.taskFolder): TaskRecord[] {
+    return this.taskFiles(taskFolder)
       .map((file) => parseTaskRecord(file, this.app.metadataCache.getFileCache(file)?.frontmatter))
       .filter((task): task is TaskRecord => task !== null);
   }
 
-  private findMatchesById(taskId: string): TaskRecord[] {
+  private findMatchesById(taskId: string, taskFolder = this.taskFolder): TaskRecord[] {
     const normalizedTaskId = normalizeCanonicalUuid(taskId);
     if (normalizedTaskId === null) return [];
-    const indexed = this.indexedTasks();
+    const indexed = this.indexedTasks(taskFolder);
     const matches = indexed.filter((task) => task.taskId === normalizedTaskId);
-    const recentTasks = this.recentTasks();
+    const recentTasks = this.recentTasks(taskFolder);
     const recent = recentTasks.get(normalizedTaskId);
     if (recent === undefined) return matches;
     if (
-      !this.isInTaskFolder(recent.file.path) ||
+      !this.isInTaskFolder(recent.file.path, taskFolder) ||
       this.recentTaskIsDisproved(recent)
     ) {
       recentTasks.delete(normalizedTaskId);
@@ -723,6 +778,17 @@ export class TaskRepository {
     const withRecentState = [...matches];
     withRecentState[indexedMatch] = reconcileTaskSnapshots(matches[indexedMatch]!, recent);
     return withRecentState;
+  }
+
+  private assertExactTaskFile(file: TFile, taskFolder: string): void {
+    const path = normalizePath(file.path);
+    if (
+      file.extension !== "md" ||
+      !this.isInTaskFolder(path, taskFolder) ||
+      this.app.vault.getAbstractFileByPath(path) !== file
+    ) {
+      throw new Error("Task identity changed before the update. Refresh and try again.");
+    }
   }
 
   private isInTaskFolder(path: string, taskFolder = this.taskFolder): boolean {

@@ -495,13 +495,9 @@ export class AgentCockpitController {
     if (this.disposed) return false;
     try {
       await this.requireTaskRepository().updateWorkflow(task, workflowStatus);
+      await this.waitForSettingsUpdates();
       if (this.disposed) return false;
-      const updatedAt = new Date().toISOString();
-      this.store.update((state) => ({
-        tasks: state.tasks.map((candidate) =>
-          candidate.taskId === task.taskId ? { ...candidate, workflowStatus, updatedAt } : candidate
-        )
-      }));
+      this.store.update({ tasks: this.requireTaskRepository().list() });
       this.recomputeSessions();
       return true;
     } catch (error) {
@@ -1637,16 +1633,24 @@ export class AgentCockpitController {
     return binding;
   }
 
+  private resolveCurrentTask(original: TaskRecord): TaskRecord {
+    const current = this.requireTaskRepository().findById(original.taskId);
+    if (current.file !== original.file) {
+      throw new Error("The selected task changed before the session could be attached. Refresh and try again.");
+    }
+    return current;
+  }
+
   private async attachTaskInternal(session: LiveSession, task: TaskRecord): Promise<void> {
     if (this.disposed) return;
     const current = this.resolveCurrentBindingSession(session);
     const expectedBinding = this.expectedTaskBinding(session, current);
-    validateBindingIdentity(task.taskId, current);
-    this.requireTaskRepository().findById(task.taskId);
+    const currentTask = this.resolveCurrentTask(task);
+    validateBindingIdentity(currentTask.taskId, current);
     const attachedAt = new Date().toISOString();
     const result = await this.bindings.attachIfSurfaceUnchanged(
       {
-        taskId: task.taskId,
+        taskId: currentTask.taskId,
         workspaceId: current.workspaceId,
         paneId: current.paneId,
         surfaceId: current.surfaceId,
@@ -1654,7 +1658,13 @@ export class AgentCockpitController {
         providerSessionId: current.provider.sessionId,
         attachedAt
       },
-      expectedBinding
+      expectedBinding,
+      () => {
+        if (this.disposed) return false;
+        this.resolveCurrentBindingSession(current);
+        this.resolveCurrentTask(currentTask);
+        return true;
+      }
     );
     if (this.disposed) return;
     if (result === null) {
@@ -1665,13 +1675,10 @@ export class AgentCockpitController {
     this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
     if (result.isNewRun) {
       try {
-        const runCount = await this.persistNewRunCount(task);
+        await this.persistNewRunCount(currentTask);
+        await this.waitForSettingsUpdates();
         if (this.disposed) return;
-        this.store.update((state) => ({
-          tasks: state.tasks.map((candidate) =>
-            candidate.taskId === task.taskId ? { ...candidate, runCount, updatedAt: attachedAt } : candidate
-          )
-        }));
+        this.store.update({ tasks: this.requireTaskRepository().list() });
       } catch (error) {
         if (this.disposed) return;
         new Notice(`Session attached, but run count was not updated: ${readableError(error)}`);
@@ -1682,16 +1689,13 @@ export class AgentCockpitController {
 
   private async persistNewRunCount(task: TaskRecord): Promise<number> {
     const repository = this.requireTaskRepository();
-    try {
-      return await repository.incrementRunCount(task);
-    } catch {
-      // The vault API may reject before or after applying a frontmatter edit.
-      // Reconcile to a minimum instead of repeating the increment, which keeps
-      // this recovery idempotent in both cases.
-      const recordedRuns = this.bindings.listRuns(task.taskId).length;
-      const expected = Math.min(1_000_000, Math.max(task.runCount + 1, recordedRuns));
-      return repository.ensureRunCountAtLeast(task, expected);
-    }
+    // The vault API may reject before or after applying a frontmatter edit.
+    // Reconcile to a minimum instead of repeating the increment, which keeps
+    // this recovery idempotent in both cases. The repository keeps both
+    // attempts pinned to the same exact task file and task folder.
+    const recordedRuns = this.bindings.listRuns(task.taskId).length;
+    const expected = Math.min(1_000_000, Math.max(task.runCount + 1, recordedRuns));
+    return repository.incrementRunCountWithRecovery(task, expected);
   }
 
   private handleError(error: unknown, connectionFailure = true): void {
