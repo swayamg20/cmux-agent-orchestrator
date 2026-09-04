@@ -41,7 +41,7 @@ export class ProviderMetadataService {
       const sessions = (await this.requireSource(provider).list(cwd, request.controller.signal))
         .map((session) => normalizeMetadata(session, provider, cwd))
         .filter((session): session is ProviderSessionMetadata => session !== null);
-      if (this.disposed) return [];
+      if (this.disposed || request.controller.signal.aborted) return [];
       for (const session of sessions) this.cache(session, request.revision);
       return sessions.map((session) => ({ ...session }));
     } finally {
@@ -66,7 +66,7 @@ export class ProviderMetadataService {
         cwd,
         request.controller.signal
       );
-      if (this.disposed) return null;
+      if (this.disposed || request.controller.signal.aborted) return null;
       const session = loaded === null ? null : normalizeMetadata(loaded, provider, cwd);
       if (session) this.cache(session, request.revision);
       else if (this.isLatestRequest(key, request.revision)) this.metadata.delete(key);

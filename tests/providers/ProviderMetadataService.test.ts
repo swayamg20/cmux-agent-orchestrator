@@ -178,6 +178,50 @@ describe("ProviderMetadataService", () => {
     service.dispose();
   });
 
+  it("discards an exact metadata response when the provider ignores caller cancellation", async () => {
+    let resolveGet!: (value: ProviderSessionMetadata | null) => void;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async () => new Promise<ProviderSessionMetadata | null>((resolve) => {
+        resolveGet = resolve;
+      }),
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const controller = new AbortController();
+    const pending = service.get("codex", metadata.sessionId, metadata.cwd, controller.signal);
+
+    controller.abort();
+    resolveGet(metadata);
+
+    await expect(pending).resolves.toBeNull();
+    expect(service.evidence.has(`codex:${metadata.sessionId}`)).toBe(false);
+    service.dispose();
+  });
+
+  it("discards a metadata list when the provider ignores caller cancellation", async () => {
+    let resolveList!: (value: ProviderSessionMetadata[]) => void;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => new Promise<ProviderSessionMetadata[]>((resolve) => {
+        resolveList = resolve;
+      }),
+      get: async () => null,
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const controller = new AbortController();
+    const pending = service.list("codex", metadata.cwd, controller.signal);
+
+    controller.abort();
+    resolveList([metadata]);
+
+    await expect(pending).resolves.toEqual([]);
+    expect(service.evidence.has(`codex:${metadata.sessionId}`)).toBe(false);
+    service.dispose();
+  });
+
   it("does not let an older list response overwrite newer conversation metadata", async () => {
     const resolvers: Array<(value: ProviderSessionMetadata[]) => void> = [];
     const source: ProviderSessionSource = {
