@@ -176,6 +176,91 @@ describe("AttentionEngine", () => {
     )).toBe(true);
   });
 
+  it("reports when exact evidence proves that a bound surface now hosts another provider conversation", () => {
+    const work = task("active");
+    const oldSessionId = "55555555-5555-4555-8555-555555555555";
+    const newSessionId = "66666666-6666-4666-8666-666666666666";
+    const reusedSurface: LiveSession = {
+      key: `${binding.workspaceId}:${binding.surfaceId}`,
+      workspaceId: binding.workspaceId,
+      paneId: binding.paneId,
+      surfaceId: binding.surfaceId,
+      workspaceTitle: "Workspace",
+      workspaceIndex: 0,
+      paneIndex: 0,
+      surfaceIndex: 0,
+      surfaceTitle: "Surface",
+      surfaceType: "terminal",
+      currentDirectory: "/repo",
+      provider: {
+        provider: "codex",
+        confidence: "high",
+        source: "codex-writer-lock",
+        explanation: "Verified a different exact writer.",
+        sessionId: newSessionId
+      },
+      assessment: assessment("unknown"),
+      observedAt: 1_000,
+      notifications: [],
+      linkedTaskId: null,
+      conversation: null,
+      preview: null
+    };
+
+    const result = new AttentionEngine().build(
+      [reusedSurface],
+      [work],
+      [{ ...binding, providerSessionId: oldSessionId }],
+      1_000,
+      STALE_AFTER_MS
+    );
+
+    expect(result).toMatchObject([
+      {
+        key: `task:${work.taskId}`,
+        session: null,
+        task: { taskId: work.taskId, workflowStatus: "active" },
+        reasons: [
+          {
+            kind: "linked-session-changed",
+            confidence: "high",
+            severity: 3
+          }
+        ]
+      }
+    ]);
+    expect(work.workflowStatus).toBe("active");
+  });
+
+  it("does not claim a provider-session change from heuristic evidence", () => {
+    const heuristic = {
+      ...liveSession("heuristic", assessment("unknown")),
+      workspaceId: binding.workspaceId,
+      paneId: binding.paneId,
+      surfaceId: binding.surfaceId,
+      provider: {
+        provider: "codex" as const,
+        confidence: "medium" as const,
+        source: "screen-preview" as const,
+        explanation: "Screen text resembles Codex.",
+        sessionId: "66666666-6666-4666-8666-666666666666"
+      }
+    };
+
+    expect(
+      new AttentionEngine().build(
+        [heuristic],
+        [task("active")],
+        [{
+          ...binding,
+          providerSessionId: "55555555-5555-4555-8555-555555555555"
+        }],
+        1_000,
+        STALE_AFTER_MS
+      )
+    ).toEqual([]);
+  });
+
   it("sorts runtime errors above generic unread notifications", () => {
     const base: Omit<LiveSession, "key" | "surfaceId" | "assessment" | "notifications"> = {
       workspaceId: "workspace",

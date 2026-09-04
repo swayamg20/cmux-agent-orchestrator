@@ -104,7 +104,7 @@ updated-at:
 
 cmux UUIDs and provider observations do not go into task frontmatter. Automatically created notes use a deterministic task UUID derived from the provider kind and canonical provider session ID without embedding or displaying that original ID. Plugin `data.json` schema version 3 stores settings, surface bindings, durable run relationships, and exact cmux-surface-to-provider-session-ID mappings under a one-way hashed machine namespace. Existing schema-v1 and schema-v2 data migrate in memory and are written as v3 on the next plugin-data mutation. Conversation titles, provider previews, terminal previews, notification bodies, evidence ledgers, output fingerprints, and source-health snapshots remain memory-only.
 
-A task may own several runs and several currently attached surfaces. Each binding has its own canonical binding ID and run ID. Reattaching the same surface/provider run reuses that run; a different provider is recorded as a handoff; uncertain same-provider relationships remain explicitly `unknown` rather than being invented as a resume or fork.
+A task may own several runs and several currently attached surfaces. Each binding has its own canonical binding ID and run ID. Reattaching the same surface/provider run reuses that run; a different provider is recorded as a handoff; uncertain same-provider relationships remain explicitly `unknown` rather than being invented as a resume or fork. If high-confidence exact evidence proves that cmux reused a surface for another provider conversation, the previous task is never inherited by the new run. Attention identifies the change, and a manual attachment may replace only the live surface binding while preserving the previous task and run history.
 
 ## cmux transport
 

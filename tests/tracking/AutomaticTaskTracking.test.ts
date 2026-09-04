@@ -4,6 +4,7 @@ import type { LiveSession, ProviderDetection } from "../../src/state/types";
 import {
   automaticTaskId,
   automaticTaskTitle,
+  bindingConflictsWithExactProviderIdentity,
   selectAutomaticTrackCandidates
 } from "../../src/tracking/AutomaticTaskTracking";
 
@@ -158,6 +159,46 @@ describe("automatic task tracking policy", () => {
     };
 
     expect(selectAutomaticTrackCandidates([codex], [run])).toEqual([]);
+  });
+
+  it("treats a binding as stale only when exact evidence proves another provider conversation", () => {
+    const surfaceId = "55555555-5555-4555-8555-555555555555";
+    const binding = {
+      provider: "codex" as const,
+      providerSessionId: CODEX_SESSION_ID
+    };
+
+    expect(
+      bindingConflictsWithExactProviderIdentity(
+        binding,
+        session(surfaceId, exactProvider("codex", CODEX_SESSION_ID, "codex-writer-lock"))
+      )
+    ).toBe(false);
+    expect(
+      bindingConflictsWithExactProviderIdentity(
+        binding,
+        session(surfaceId, exactProvider("codex", CLAUDE_SESSION_ID, "codex-writer-lock"))
+      )
+    ).toBe(true);
+    expect(
+      bindingConflictsWithExactProviderIdentity(
+        binding,
+        session(surfaceId, exactProvider("claude", CLAUDE_SESSION_ID, "claude-process-registry"))
+      )
+    ).toBe(true);
+    expect(
+      bindingConflictsWithExactProviderIdentity(binding, session(surfaceId, {
+        ...exactProvider("codex", CLAUDE_SESSION_ID),
+        confidence: "medium",
+        source: "screen-preview"
+      }))
+    ).toBe(false);
+    expect(
+      bindingConflictsWithExactProviderIdentity(
+        { ...binding, providerSessionId: "not-a-uuid" },
+        session(surfaceId, exactProvider("codex", CLAUDE_SESSION_ID, "codex-writer-lock"))
+      )
+    ).toBe(false);
   });
 
   it("keeps private conversation and cmux titles out of automatic Markdown titles", () => {

@@ -51,6 +51,7 @@ import type { TaskRecord, WorkflowStatus } from "../tasks/TaskSchema";
 import {
   automaticTaskId,
   automaticTaskTitle,
+  bindingConflictsWithExactProviderIdentity,
   exactTrackableIdentity,
   providerSessionKey,
   selectAutomaticTrackCandidates,
@@ -1278,10 +1279,13 @@ export class AgentCockpitController {
   ): BindingRecord | null {
     const binding = this.bindings.findBySurface(current.surfaceId);
     if (original.linkedTaskId === null) {
-      if (binding !== null) {
+      if (
+        binding !== null &&
+        !bindingConflictsWithExactProviderIdentity(binding, current)
+      ) {
         throw new Error("The task binding changed while the picker was open. Refresh and try again.");
       }
-      return null;
+      return binding;
     }
     if (
       binding === null ||

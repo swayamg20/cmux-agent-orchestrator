@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
-import type { AgentRunRecord } from "../bindings/types";
+import type { AgentRunRecord, BindingRecord } from "../bindings/types";
 import { isCanonicalUuid, normalizeCanonicalUuid } from "../security/identifiers";
 import type { LiveSession, ProviderDetection } from "../state/types";
 
@@ -82,6 +82,20 @@ export function exactTrackableIdentity(
     provider: provider.provider,
     sessionId: normalizeCanonicalUuid(provider.sessionId)!
   };
+}
+
+export function bindingConflictsWithExactProviderIdentity(
+  binding: Pick<BindingRecord, "provider" | "providerSessionId">,
+  session: LiveSession
+): boolean {
+  const identity = exactTrackableIdentity(session);
+  const bindingSessionId = normalizeCanonicalUuid(binding.providerSessionId ?? "");
+  return (
+    identity !== null &&
+    (binding.provider === "claude" || binding.provider === "codex") &&
+    bindingSessionId !== null &&
+    (binding.provider !== identity.provider || bindingSessionId !== identity.sessionId)
+  );
 }
 
 export function automaticTaskId(provider: TrackableProvider, providerSessionId: string): string {

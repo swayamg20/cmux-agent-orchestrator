@@ -945,6 +945,91 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("allows an explicit attachment after exact evidence proves that a surface was reused", async () => {
+    let persisted: unknown;
+    let observedAt = 1_750;
+    let providerSessionId = "55555555-5555-4555-8555-555555555555";
+    const plugin = {
+      loadData: async () => persisted ?? ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        ...exactCodexResolverResult(currentSnapshot.observedAt),
+        mappings: [
+          {
+            ...exactCodexResolverResult(currentSnapshot.observedAt).mappings[0]!,
+            providerSessionId
+          }
+        ]
+      }),
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(observedAt),
+      snapshot: async () => snapshot(++observedAt)
+    };
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const previousTask = await controller.createTask({ title: "Previous conversation" });
+    await controller.attachTask(controller.store.getState().sessions[0]!, previousTask);
+
+    providerSessionId = "66666666-6666-4666-8666-666666666666";
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    const reusedSurface = controller.store.getState().sessions[0]!;
+    expect(reusedSurface.provider.sessionId).toBe(providerSessionId);
+    expect(reusedSurface.linkedTaskId).toBeNull();
+    expect(controller.store.getState().attention).toMatchObject([
+      {
+        task: { taskId: previousTask.taskId },
+        reasons: [{ kind: "linked-session-changed" }]
+      }
+    ]);
+
+    const nextTask = await controller.createTask({ title: "Current conversation" });
+    await controller.attachTask(reusedSurface, nextTask);
+
+    expect(controller.store.getState().bindings).toMatchObject([
+      {
+        taskId: nextTask.taskId,
+        provider: "codex",
+        providerSessionId
+      }
+    ]);
+    expect(controller.store.getState().runs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: previousTask.taskId }),
+        expect.objectContaining({ taskId: nextTask.taskId, providerSessionId })
+      ])
+    );
+    expect(controller.store.getState().runs).toHaveLength(2);
+    expect(controller.store.getState().tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: previousTask.taskId, runCount: 1 }),
+        expect.objectContaining({ taskId: nextTask.taskId, runCount: 1 })
+      ])
+    );
+    expect(controller.store.getState().sessions[0]?.linkedTaskId).toBe(nextTask.taskId);
+    expect(
+      controller.store.getState().attention.some((item) =>
+        item.reasons.some((reason) => reason.kind === "linked-session-changed")
+      )
+    ).toBe(false);
+    controller.dispose();
+  });
+
   it("reconnects an exact provider conversation to its existing task after its surface changes", async () => {
     let persisted: unknown;
     let currentSnapshot = snapshot(2_000);

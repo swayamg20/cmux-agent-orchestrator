@@ -2,6 +2,7 @@ import type { BindingRecord } from "../bindings/types";
 import { normalizeCanonicalUuid } from "../security/identifiers";
 import type { AttentionItem, AttentionReason, LiveSession } from "../state/types";
 import type { TaskRecord } from "../tasks/TaskSchema";
+import { bindingConflictsWithExactProviderIdentity } from "../tracking/AutomaticTaskTracking";
 
 const REVIEW_PATTERN = /\b(?:ready for review|review requested|completed|finished successfully|implementation complete)\b/i;
 
@@ -117,7 +118,23 @@ export class AttentionEngine {
           firstObservedAt: this.seenAt(key, now)
         });
       }
-      if (session !== null) continue;
+      if (session !== null) {
+        if (
+          boundTask !== null &&
+          bindingConflictsWithExactProviderIdentity(binding, session)
+        ) {
+          const taskKey = `task:${binding.taskId}`;
+          add(taskKey, null, boundTask, {
+            kind: "linked-session-changed",
+            label: "Linked agent run changed",
+            detail: "This cmux surface now proves a different provider conversation. The durable task and previous run remain unchanged; attach the new run explicitly or enable automatic tracking.",
+            severity: 3,
+            confidence: "high",
+            firstObservedAt: this.seenAt(taskKey, now)
+          });
+        }
+        continue;
+      }
       add(key, null, boundTask, {
         kind: "linked-surface-missing",
         label: "Linked surface disappeared",

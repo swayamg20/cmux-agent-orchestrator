@@ -31,6 +31,8 @@ All notable changes to this project will be documented in this file.
 - Report a stale Focus click safely when the cmux connection is unavailable instead of leaking an unhandled UI rejection.
 - Preserve a newly created task and report one explicit partial-success notice if its session attachment cannot be persisted.
 - Report a stale Preview click safely when cmux is unavailable instead of leaking an unhandled UI rejection.
+- Let a user attach a newly proven provider conversation after cmux reuses an old surface, while retaining the previous task and run history.
+- Surface exact provider-conversation replacement as an Attention item when a persisted task binding still points at the reused surface.
 
 ### Security
 
@@ -43,6 +45,7 @@ All notable changes to this project will be documented in this file.
 - Preserve the strongest agreeing identity proof when newer cmux detection and exact local process evidence describe the same provider session.
 - Relocate a stale binding only when its complete old cmux target is absent and one unique high-confidence live surface proves the same canonical provider session.
 - Require workspace, pane, and surface UUID agreement before projecting a task binding or considering its cmux target present.
+- Require high-confidence exact provider identity before treating a same-surface task binding as stale or replaceable.
 
 ## [0.2.0] - 2026-09-03
 
