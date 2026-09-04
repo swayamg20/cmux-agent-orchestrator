@@ -772,6 +772,40 @@ describe("BindingRepository", () => {
     expect(saveData).not.toHaveBeenCalled();
   });
 
+  it("does not restore legacy data after current plugin data disappears across reloads", async () => {
+    let persisted: unknown = { schemaVersion: 3, settings: {}, machines: {} };
+    const sharedAdapter = {};
+    const firstPlugin = {
+      app: { vault: { adapter: sharedAdapter } },
+      manifest: { id: "cmux-agent-orchestrator" },
+      loadData: async () => structuredClone(persisted),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const firstRepository = new BindingRepository(firstPlugin, async () => undefined);
+    await firstRepository.load();
+    persisted = undefined;
+
+    const loadLegacyData = vi.fn(async () => ({
+      schemaVersion: 1,
+      settings: { taskFolder: "Stale legacy tasks" },
+      machines: {}
+    }));
+    const saveData = vi.fn(async () => undefined);
+    const replacementPlugin = {
+      app: { vault: { adapter: sharedAdapter } },
+      manifest: { id: "cmux-agent-orchestrator" },
+      loadData: async () => structuredClone(persisted),
+      saveData
+    } as unknown as Plugin;
+    const replacementRepository = new BindingRepository(replacementPlugin, loadLegacyData);
+
+    await expect(replacementRepository.load()).rejects.toThrow(/data became unavailable/);
+
+    expect(loadLegacyData).not.toHaveBeenCalled();
+    expect(saveData).not.toHaveBeenCalled();
+    expect(persisted).toBeUndefined();
+  });
+
   it("fails closed when data disappears after the first successful save", async () => {
     let persisted: unknown;
     let unavailable = false;

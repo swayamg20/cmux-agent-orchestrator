@@ -729,6 +729,7 @@ export class BindingRepository {
       if (this.hasObservedCurrentData) this.persistenceScope.observedData = true;
       let importedLegacyData = false;
       if (isMissingPluginData(loaded)) {
+        if (this.persistenceScope.observedData) throw unavailablePluginDataError();
         const legacyData = await this.loadLegacyData();
         if (hasPersistedPluginData(legacyData)) {
           loaded = legacyData;
@@ -744,6 +745,7 @@ export class BindingRepository {
           this.data = decodePluginData(current, this.currentMachineId, { strictForWrite: true });
           return;
         }
+        if (this.persistenceScope.observedData) throw unavailablePluginDataError();
         await this.persistDraft(imported);
       }
     });
@@ -1089,7 +1091,7 @@ export class BindingRepository {
         this.hasObservedCurrentData ||
         this.persistenceScope.observedData
       ) {
-        throw new Error(`${PRODUCT_NAME} data became unavailable before it could be saved.`);
+        throw unavailablePluginDataError();
       }
       return structuredClone(base);
     }
@@ -1132,6 +1134,10 @@ function hasPersistedPluginData(value: unknown): value is Record<string, unknown
 
 function isMissingPluginData(value: unknown): value is null | undefined {
   return value === null || value === undefined;
+}
+
+function unavailablePluginDataError(): Error {
+  return new Error(`${PRODUCT_NAME} data became unavailable before it could be saved.`);
 }
 
 function inferRelation(latest: AgentRunRecord | null, input: NewBindingRecord): RunRelation {
