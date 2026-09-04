@@ -2159,6 +2159,137 @@ describe("AgentCockpitController connection failures", () => {
     expect(controller.store.getState().tasks).toEqual([]);
   });
 
+  it("does not finish initialization after plugin data loading outlives disposal", async () => {
+    let releaseLoad!: () => void;
+    const loadGate = new Promise<void>((resolve) => {
+      releaseLoad = resolve;
+    });
+    let markLoadStarted!: () => void;
+    const loadStarted = new Promise<void>((resolve) => {
+      markLoadStarted = resolve;
+    });
+    let clientCreations = 0;
+    const plugin = {
+      loadData: async () => {
+        markLoadStarted();
+        await loadGate;
+        return {
+          settings: {
+            taskFolder: "Must not load after unload",
+            autoTrackAgentRuns: false
+          }
+        };
+      },
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => {
+        clientCreations += 1;
+        return new CmuxClient(connectedTransport(4_646));
+      }
+    );
+
+    const initialization = controller.initialize();
+    await loadStarted;
+    controller.dispose();
+    releaseLoad();
+    await initialization;
+
+    expect(clientCreations).toBe(0);
+    expect(controller.getLoadedTaskFolder()).toBeNull();
+    expect(controller.store.getState().snapshot).toBeNull();
+    expect(controller.store.getState().tasks).toEqual([]);
+  });
+
+  it("does not apply a direct topology refresh that outlives disposal", async () => {
+    let gateSnapshot = false;
+    let releaseSnapshot!: (value: CmuxSnapshot) => void;
+    let markSnapshotStarted!: () => void;
+    const snapshotStarted = new Promise<void>((resolve) => {
+      markSnapshotStarted = resolve;
+    });
+    const transport: CmuxTransport = {
+      ...connectedTransport(4_646),
+      snapshot: async () => {
+        if (!gateSnapshot) return snapshot(4_646);
+        markSnapshotStarted();
+        return new Promise<CmuxSnapshot>((resolve) => {
+          releaseSnapshot = resolve;
+        });
+      }
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    gateSnapshot = true;
+    const refresh = controller.refreshTopology();
+    await snapshotStarted;
+    controller.dispose();
+    releaseSnapshot(snapshot(4_647));
+    await refresh;
+
+    expect(controller.store.getState().snapshot).toBeNull();
+    expect(controller.store.getState().sessions).toEqual([]);
+  });
+
+  it("does not start a queued settings write after disposal", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: false } };
+    let releaseFirstSave!: () => void;
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    let markFirstSaveStarted!: () => void;
+    const firstSaveStarted = new Promise<void>((resolve) => {
+      markFirstSaveStarted = resolve;
+    });
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        if (saveCount === 1) {
+          markFirstSaveStarted();
+          await firstSaveGate;
+        }
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_646))
+    );
+
+    await controller.initialize();
+    const first = controller.updateSettings({
+      ...controller.getSettings(),
+      staleAfterMs: 30 * 60_000
+    });
+    await firstSaveStarted;
+    const queued = controller.updateSettings({
+      ...controller.getSettings(),
+      staleAfterMs: 60 * 60_000
+    });
+    controller.dispose();
+    releaseFirstSave();
+    await Promise.all([first, queued]);
+
+    expect(saveCount).toBe(1);
+    expect(controller.store.getState().snapshot).toBeNull();
+    expect(controller.store.getState().tasks).toEqual([]);
+  });
+
   it("does not republish an automatic task whose vault create outlives disposal", async () => {
     let releaseCreate!: () => void;
     const createGate = new Promise<void>((resolve) => {

@@ -113,7 +113,14 @@ export class AgentCockpitController {
   }
 
   async initialize(): Promise<void> {
-    await this.bindings.load();
+    if (this.disposed) return;
+    try {
+      await this.bindings.load();
+    } catch (error) {
+      if (this.disposed) return;
+      throw error;
+    }
+    if (this.disposed) return;
     this.settings = this.bindings.getSettings();
     this.taskRepository = new TaskRepository(this.app, this.settings.taskFolder);
     this.store.update({
@@ -122,6 +129,7 @@ export class AgentCockpitController {
       runs: this.bindings.listRuns()
     });
     await this.connect();
+    if (this.disposed) return;
     if (this.client !== null) await this.refreshNow();
   }
 
@@ -154,12 +162,13 @@ export class AgentCockpitController {
     if (client === null || this.disposed) return;
     try {
       const snapshot = await client.snapshot(signal);
+      if (this.disposed) return;
       this.applyTopology(snapshot);
       this.scheduleProviderClassification();
       this.scheduleProviderMetadataRefresh();
       this.scheduleProviderIdentityResolution(snapshot);
     } catch (error) {
-      if (isAbort(error)) return;
+      if (this.disposed || isAbort(error)) return;
       this.applyTopologyFailure(error);
     }
   }
@@ -169,9 +178,10 @@ export class AgentCockpitController {
     if (client === null || this.disposed) return;
     try {
       const notifications = await client.notifications(signal);
+      if (this.disposed) return;
       this.applyNotifications(notifications);
     } catch (error) {
-      if (isAbort(error)) return;
+      if (this.disposed || isAbort(error)) return;
       this.applyNotificationFailure(error);
     }
   }
@@ -476,6 +486,7 @@ export class AgentCockpitController {
   }
 
   async updateSettings(next: AgentCockpitSettings): Promise<void> {
+    if (this.disposed) return;
     const parsed = parseSettings({ ...next, cmuxBinaryPath: validateBinarySetting(next.cmuxBinaryPath) });
     this.pendingSettingsUpdates += 1;
     this.cancelAutomaticTaskTracking();
@@ -497,6 +508,7 @@ export class AgentCockpitController {
   }
 
   private async applySettingsUpdate(parsed: AgentCockpitSettings): Promise<void> {
+    if (this.disposed) return;
     const current = this.requireSettings();
     const cmuxBinaryChanged = current.cmuxBinaryPath !== parsed.cmuxBinaryPath;
     await this.bindings.updateSettings(parsed);
@@ -628,6 +640,7 @@ export class AgentCockpitController {
   }
 
   private applyTopology(snapshot: CmuxSnapshot): void {
+    if (this.disposed) return;
     // Every topology snapshot is a new authority boundary. Work selected from
     // the prior snapshot may finish creating a note, but it must not bind a
     // provider session after this point without being selected again.
@@ -661,6 +674,7 @@ export class AgentCockpitController {
   }
 
   private applyNotifications(notifications: CmuxNotification[]): void {
+    if (this.disposed) return;
     const checkedAt = Date.now();
     this.store.update((state) => ({
       notifications,
@@ -674,6 +688,7 @@ export class AgentCockpitController {
   }
 
   private applyTopologyFailure(error: unknown): void {
+    if (this.disposed) return;
     // A cached tree remains useful for display, but it is no longer current
     // enough to authorize automatic durable bindings.
     this.cancelIdentityResolution();
@@ -698,6 +713,7 @@ export class AgentCockpitController {
   }
 
   private applyNotificationFailure(error: unknown): void {
+    if (this.disposed) return;
     const checkedAt = Date.now();
     const message = readableError(error);
     this.store.update((state) => ({
@@ -715,6 +731,7 @@ export class AgentCockpitController {
   }
 
   private recomputeSessions(): void {
+    if (this.disposed) return;
     const state = this.store.getState();
     const snapshot = state.snapshot;
     if (snapshot === null) {
@@ -1533,7 +1550,7 @@ export class AgentCockpitController {
   }
 
   private handleError(error: unknown, connectionFailure = true): void {
-    if (isAbort(error)) return;
+    if (this.disposed || isAbort(error)) return;
     const message = readableError(error);
     if (!connectionFailure) {
       this.store.update({ error: message });
