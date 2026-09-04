@@ -268,6 +268,50 @@ describe("AttentionEngine", () => {
 
     expect(new AttentionEngine().build([session], [], [], now, STALE_AFTER_MS)).toEqual([]);
   });
+
+  it("surfaces finished agent output for review without changing workflow", () => {
+    const work = task("active");
+    const session = {
+      ...liveSession("finished", assessment("turn-finished", {
+        coverage: "structured",
+        confidence: "high",
+        explanation: "cmux reports that the provider turn completed."
+      })),
+      linkedTaskId: work.taskId
+    };
+
+    const result = new AttentionEngine().build(
+      [session],
+      [work],
+      [],
+      2_000_000,
+      STALE_AFTER_MS
+    );
+
+    expect(result).toMatchObject([
+      {
+        task: { taskId: work.taskId, workflowStatus: "active" },
+        reasons: [
+          {
+            kind: "review-ready",
+            label: "Agent output may be ready for review",
+            severity: 3,
+            confidence: "high"
+          }
+        ]
+      }
+    ]);
+    expect(work.workflowStatus).toBe("active");
+  });
+
+  it("does not promote an unsupported fallback turn-finished claim into attention", () => {
+    const session = liveSession("fallback-finished", assessment("turn-finished", {
+      coverage: "fallback",
+      confidence: "low"
+    }));
+
+    expect(new AttentionEngine().build([session], [], [], 2_000_000, STALE_AFTER_MS)).toEqual([]);
+  });
 });
 
 function assessment(

@@ -37,6 +37,7 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 - Machine-scoped task, run-history, surface, and provider-conversation bindings in schema-v3 plugin data.
 - Orphan sessions and stale bindings.
 - Configurable stale-working attention for structured lifecycle evidence, without changing task workflow.
+- Review attention when structured lifecycle or cmux notification evidence says an agent turn finished, without automatically moving its task.
 - Clear cmux disconnected, blocked, malformed-output, timeout, and output-limit states.
 - One-time GUI onboarding for normal Finder, Dock, and Spotlight launches when cmux rejects external clients.
 
@@ -173,6 +174,7 @@ Each session projects separate dimensions: surface presence, agent presence, exe
 - In cmux 0.62.2, topology proves only that a canonical surface exists. Exact local process evidence can prove a provider/session attachment, and a PID-bound Claude registry status can add lifecycle evidence; a Codex writer lock alone does not prove a live turn.
 - When a newer cmux build exposes `list-agents`, its `working`, `blocked`, `idle`, `done`, and `unknown` states become structured execution evidence. `done` means provider output is ready for review, never that durable work is Done.
 - Unread cmux notifications can support medium-confidence `Needs input`, `Error reported`, or `Review output`.
+- Structured or notification-backed `Turn finished` evidence creates a review-attention signal while leaving the task's workflow state untouched.
 - A changed on-demand preview records low-confidence recent activity such as reading, editing, or command output, but leaves execution phase `State unknown`.
 - Generic words such as `approval` or `confirm` in terminal prose never assert `Needs input`.
 - A missing linked surface creates an attention item but does not prove provider completion.

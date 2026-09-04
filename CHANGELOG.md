@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - Add a default-on setting to disable creation of new automatic tasks without changing existing tasks or running agents.
 - Surface a missing linked Markdown task as an actionable attention item without deleting the binding or recreating the note.
 - Surface a conservative stale-working attention signal when structured lifecycle evidence remains Working beyond a configurable inactivity threshold.
+- Surface structured or notification-backed finished agent output in Attention for human review without moving the durable task.
 
 ### Fixed
 

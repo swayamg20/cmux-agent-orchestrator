@@ -55,6 +55,18 @@ export class AttentionEngine {
           confidence: session.assessment.confidence,
           firstObservedAt: firstSeen
         });
+      } else if (
+        session.assessment.executionPhase === "turn-finished" &&
+        (session.assessment.coverage === "structured" || session.assessment.coverage === "partial")
+      ) {
+        add(session.key, session, task, {
+          kind: "review-ready",
+          label: "Agent output may be ready for review",
+          detail: session.assessment.explanation,
+          severity: 3,
+          confidence: session.assessment.confidence,
+          firstObservedAt: firstSeen
+        });
       }
 
       if (isStaleWorkingSession(session, now, staleAfterMs)) {
@@ -74,9 +86,11 @@ export class AttentionEngine {
         session.assessment.executionPhase !== "failed" &&
         session.assessment.executionPhase !== "waiting"
       ) {
-        const review = unread.some((notification) =>
-          REVIEW_PATTERN.test(`${notification.title}\n${notification.subtitle}\n${notification.body}`)
-        );
+        const review =
+          session.assessment.executionPhase === "turn-finished" ||
+          unread.some((notification) =>
+            REVIEW_PATTERN.test(`${notification.title}\n${notification.subtitle}\n${notification.body}`)
+          );
         add(session.key, session, task, {
           kind: review ? "review-ready" : "unread-notification",
           label: review ? "Output may be ready for review" : "Unread cmux notification",
