@@ -11,6 +11,7 @@ import type {
   ProviderSessionResolver
 } from "../../src/providers/identity/types";
 import type { ProviderSessionSource } from "../../src/providers/types";
+import { TaskRepository } from "../../src/tasks/TaskRepository";
 import { automaticTaskId } from "../../src/tracking/AutomaticTaskTracking";
 import { createMemoryTaskApp as memoryTaskApp } from "../helpers/memoryTaskApp";
 
@@ -1401,6 +1402,90 @@ describe("AgentCockpitController connection failures", () => {
     expect(markdownWrites).toHaveLength(1);
     expect(controller.store.getState().bindings).toEqual([]);
     expect(controller.store.getState().runs).toEqual([]);
+    controller.dispose();
+  });
+
+  it("keeps a concurrent explicit task attachment instead of replacing it automatically", async () => {
+    let persisted: unknown;
+    let gateAutomaticCreate = false;
+    let releaseAutomaticCreate: (() => void) | undefined;
+    let markAutomaticCreateStarted: (() => void) | undefined;
+    const automaticCreateStarted = new Promise<void>((resolve) => {
+      markAutomaticCreateStarted = resolve;
+    });
+    const automaticCreateGate = new Promise<void>((resolve) => {
+      releaseAutomaticCreate = resolve;
+    });
+    let releaseFirstSave: (() => void) | undefined;
+    let markFirstSaveStarted: (() => void) | undefined;
+    const firstSaveStarted = new Promise<void>((resolve) => {
+      markFirstSaveStarted = resolve;
+    });
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        if (saveCount === 1) {
+          markFirstSaveStarted?.();
+          await firstSaveGate;
+        }
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const { app, markdownWrites } = memoryTaskApp({
+      beforeCreate: async () => {
+        if (!gateAutomaticCreate) return;
+        markAutomaticCreateStarted?.();
+        await automaticCreateGate;
+      }
+    });
+    const manualTask = await new TaskRepository(app, "Agent Cockpit/Tasks").create({
+      title: "User-selected task"
+    });
+    gateAutomaticCreate = true;
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_450)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await automaticCreateStarted;
+    const manualAttachment = controller.attachTask(
+      controller.store.getState().sessions[0]!,
+      manualTask
+    );
+    await firstSaveStarted;
+    releaseAutomaticCreate?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseFirstSave?.();
+    await manualAttachment;
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().bindings).toMatchObject([
+      { taskId: manualTask.taskId }
+    ]);
+    expect(controller.store.getState().runs).toMatchObject([
+      { taskId: manualTask.taskId, provider: "codex" }
+    ]);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(controller.store.getState().sessions[0]?.linkedTaskId).toBe(manualTask.taskId);
+    expect(controller.store.getState().tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: manualTask.taskId, runCount: 1 }),
+        expect.objectContaining({
+          taskId: automaticTaskId("codex", "55555555-5555-4555-8555-555555555555"),
+          runCount: 0
+        })
+      ])
+    );
+    expect(markdownWrites).toHaveLength(2);
     controller.dispose();
   });
 

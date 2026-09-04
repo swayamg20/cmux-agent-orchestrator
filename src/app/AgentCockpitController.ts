@@ -722,6 +722,15 @@ export class AgentCockpitController {
       try {
         let current = this.resolveCurrentAutomaticCandidate(candidate);
         if (current === null || this.hasProviderRun(candidate)) continue;
+        const expectedBinding = this.bindings.findBySurface(current.surfaceId);
+        if (
+          expectedBinding !== null &&
+          expectedBinding.provider === candidate.provider &&
+          normalizeCanonicalUuid(expectedBinding.providerSessionId ?? "") ===
+            candidate.providerSessionId
+        ) {
+          continue;
+        }
 
         const ensured = await this.taskRepository.ensure({
           taskId: candidate.taskId,
@@ -744,15 +753,19 @@ export class AgentCockpitController {
         validateBindingIdentity(task.taskId, current);
 
         const attachedAt = new Date().toISOString();
-        const result = await this.bindings.attach({
-          taskId: task.taskId,
-          workspaceId: current.workspaceId,
-          paneId: current.paneId,
-          surfaceId: current.surfaceId,
-          provider: candidate.provider,
-          providerSessionId: candidate.providerSessionId,
-          attachedAt
-        });
+        const result = await this.bindings.attachIfSurfaceUnchanged(
+          {
+            taskId: task.taskId,
+            workspaceId: current.workspaceId,
+            paneId: current.paneId,
+            surfaceId: current.surfaceId,
+            provider: candidate.provider,
+            providerSessionId: candidate.providerSessionId,
+            attachedAt
+          },
+          expectedBinding
+        );
+        if (result === null) continue;
         changed = true;
         if (result.isNewRun) {
           try {

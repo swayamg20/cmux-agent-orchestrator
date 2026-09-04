@@ -402,50 +402,35 @@ export class BindingRepository {
     const normalizedInput = normalizeNewBindingRecord(input);
     let result: AttachBindingResult | null = null;
     await this.commit((data) => {
-      const machine = this.machineFor(data);
-      assertProviderSessionAvailable(machine, normalizedInput);
-      const existing = machine.bindings.find((candidate) => candidate.surfaceId === normalizedInput.surfaceId) ?? null;
-      const reusableRun = existing && existing.taskId === normalizedInput.taskId
-        ? machine.runs.find((run) => run.runId === existing.runId) ?? null
-        : null;
-      const isSameProviderSession =
-        reusableRun !== null &&
-        reusableRun.provider === normalizedInput.provider &&
-        (normalizedInput.providerSessionId === null || reusableRun.providerSessionId === normalizedInput.providerSessionId);
-      const isNewRun = !isSameProviderSession;
-      if (isNewRun && machine.runs.length >= MAX_RUNS_PER_MACHINE) {
-        throw new Error(`This machine has reached the ${PRODUCT_NAME} run-history limit.`);
-      }
-      const latestTaskRun = machine.runs
-        .filter((run) => run.taskId === normalizedInput.taskId)
-        .sort((left, right) => right.lastAttachedAt.localeCompare(left.lastAttachedAt))[0] ?? null;
-      const run: AgentRunRecord = isSameProviderSession
-        ? { ...reusableRun, lastAttachedAt: input.attachedAt }
-        : {
-            runId: randomUUID(),
-            taskId: normalizedInput.taskId,
-            provider: normalizedInput.provider,
-            providerSessionId: normalizedInput.providerSessionId,
-            relation: inferRelation(latestTaskRun, normalizedInput),
-            parentRunId: latestTaskRun?.runId ?? null,
-            firstAttachedAt: input.attachedAt,
-            lastAttachedAt: input.attachedAt
-          };
-      const binding: BindingRecord = {
-        ...normalizedInput,
-        bindingId: existing?.bindingId ?? randomUUID(),
-        runId: run.runId
-      };
-      const replacing = machine.bindings.some((candidate) => candidate.surfaceId === binding.surfaceId);
-      if (!replacing && machine.bindings.length >= MAX_BINDINGS_PER_MACHINE) {
-        throw new Error(`This machine has reached the ${PRODUCT_NAME} binding limit.`);
-      }
-      machine.bindings = machine.bindings.filter((candidate) => candidate.surfaceId !== binding.surfaceId);
-      machine.bindings.push(binding);
-      machine.runs = machine.runs.filter((candidate) => candidate.runId !== run.runId);
-      machine.runs.push(run);
-      result = { binding: { ...binding }, run: { ...run }, isNewRun };
+      result = attachToMachine(this.machineFor(data), normalizedInput);
     });
+    if (result === null) throw new Error(`${PRODUCT_NAME} could not persist the session attachment.`);
+    return result;
+  }
+
+  async attachIfSurfaceUnchanged(
+    input: NewBindingRecord,
+    expected: BindingRecord | null
+  ): Promise<AttachBindingResult | null> {
+    if (!isLegacyBinding(input)) throw new Error("Binding contains an invalid canonical identity or value.");
+    const normalizedInput = normalizeNewBindingRecord(input);
+    if (expected !== null && !isBinding(expected)) {
+      throw new Error("Expected binding contains an invalid canonical identity or value.");
+    }
+    const normalizedExpected = expected === null ? null : normalizeBindingRecord(expected);
+    let result: AttachBindingResult | null = null;
+    const committed = await this.commitConditional((data) => {
+      const machine = this.machineFor(data);
+      const current = machine.bindings.find(
+        (candidate) => candidate.surfaceId === normalizedInput.surfaceId
+      ) ?? null;
+      if (!sameBinding(current, normalizedExpected)) {
+        return false;
+      }
+      result = attachToMachine(machine, normalizedInput);
+      return true;
+    });
+    if (!committed) return null;
     if (result === null) throw new Error(`${PRODUCT_NAME} could not persist the session attachment.`);
     return result;
   }
@@ -555,6 +540,18 @@ export class BindingRepository {
       this.data = draft;
     });
     this.saveChain = operation;
+    return operation;
+  }
+
+  private commitConditional(mutate: (draft: PersistedPluginData) => boolean): Promise<boolean> {
+    const operation = this.saveChain.catch(() => undefined).then(async () => {
+      const draft = structuredClone(this.requireData());
+      if (!mutate(draft)) return false;
+      await this.plugin.saveData(draft);
+      this.data = draft;
+      return true;
+    });
+    this.saveChain = operation.then(() => undefined);
     return operation;
   }
 }
@@ -699,4 +696,73 @@ function assertProviderSessionAvailable(
   if (mappingChanged) {
     throw new Error("The saved provider conversation for this cmux surface changed before attachment.");
   }
+}
+
+function attachToMachine(
+  machine: MachineBindings,
+  input: NewBindingRecord
+): AttachBindingResult {
+  assertProviderSessionAvailable(machine, input);
+  const existing = machine.bindings.find(
+    (candidate) => candidate.surfaceId === input.surfaceId
+  ) ?? null;
+  const reusableRun = existing && existing.taskId === input.taskId
+    ? machine.runs.find((run) => run.runId === existing.runId) ?? null
+    : null;
+  const isSameProviderSession =
+    reusableRun !== null &&
+    reusableRun.provider === input.provider &&
+    (input.providerSessionId === null || reusableRun.providerSessionId === input.providerSessionId);
+  const isNewRun = !isSameProviderSession;
+  if (isNewRun && machine.runs.length >= MAX_RUNS_PER_MACHINE) {
+    throw new Error(`This machine has reached the ${PRODUCT_NAME} run-history limit.`);
+  }
+  const latestTaskRun = machine.runs
+    .filter((run) => run.taskId === input.taskId)
+    .sort((left, right) => right.lastAttachedAt.localeCompare(left.lastAttachedAt))[0] ?? null;
+  const run: AgentRunRecord = isSameProviderSession
+    ? { ...reusableRun, lastAttachedAt: input.attachedAt }
+    : {
+        runId: randomUUID(),
+        taskId: input.taskId,
+        provider: input.provider,
+        providerSessionId: input.providerSessionId,
+        relation: inferRelation(latestTaskRun, input),
+        parentRunId: latestTaskRun?.runId ?? null,
+        firstAttachedAt: input.attachedAt,
+        lastAttachedAt: input.attachedAt
+      };
+  const binding: BindingRecord = {
+    ...input,
+    bindingId: existing?.bindingId ?? randomUUID(),
+    runId: run.runId
+  };
+  const replacing = machine.bindings.some(
+    (candidate) => candidate.surfaceId === binding.surfaceId
+  );
+  if (!replacing && machine.bindings.length >= MAX_BINDINGS_PER_MACHINE) {
+    throw new Error(`This machine has reached the ${PRODUCT_NAME} binding limit.`);
+  }
+  machine.bindings = machine.bindings.filter(
+    (candidate) => candidate.surfaceId !== binding.surfaceId
+  );
+  machine.bindings.push(binding);
+  machine.runs = machine.runs.filter((candidate) => candidate.runId !== run.runId);
+  machine.runs.push(run);
+  return { binding: { ...binding }, run: { ...run }, isNewRun };
+}
+
+function sameBinding(left: BindingRecord | null, right: BindingRecord | null): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.bindingId === right.bindingId &&
+    left.runId === right.runId &&
+    left.taskId === right.taskId &&
+    left.workspaceId === right.workspaceId &&
+    left.paneId === right.paneId &&
+    left.surfaceId === right.surfaceId &&
+    left.provider === right.provider &&
+    left.providerSessionId === right.providerSessionId &&
+    left.attachedAt === right.attachedAt
+  );
 }

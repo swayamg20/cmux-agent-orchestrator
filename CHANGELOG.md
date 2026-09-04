@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 
 - Keep retrying recoverable automatic-tracking writes without repeating the same failure notice on every reconciliation, while reporting the error again if it recurs after recovery.
 - Prevent a new exact provider session that reuses an existing cmux surface from inheriting the previous session's task binding; retain the earlier task and run history while creating a separate automatic task for the new session.
+- Let an explicit task attachment win atomically if it races with automatic tracking, instead of allowing background work to replace the user's binding.
 
 ### Security
 

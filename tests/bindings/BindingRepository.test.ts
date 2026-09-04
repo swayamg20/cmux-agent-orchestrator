@@ -160,6 +160,63 @@ describe("BindingRepository", () => {
     expect(repository.list()).toHaveLength(1);
   });
 
+  it("does not let a conditional automatic attachment replace a queued explicit binding", async () => {
+    let data: unknown;
+    let releaseFirstSave: (() => void) | undefined;
+    let markFirstSaveStarted: (() => void) | undefined;
+    const firstSaveStarted = new Promise<void>((resolve) => {
+      markFirstSaveStarted = resolve;
+    });
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        if (saveCount === 1) {
+          markFirstSaveStarted?.();
+          await firstSaveGate;
+        }
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex" as const,
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    };
+
+    const explicit = repository.attach({
+      ...target,
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    });
+    await firstSaveStarted;
+    const automatic = repository.attachIfSurfaceUnchanged(
+      {
+        ...target,
+        taskId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        attachedAt: "2026-09-04T00:00:01.000Z"
+      },
+      null
+    );
+    releaseFirstSave?.();
+
+    await expect(explicit).resolves.toMatchObject({ isNewRun: true });
+    await expect(automatic).resolves.toBeNull();
+    expect(saveCount).toBe(1);
+    expect(repository.list()).toMatchObject([
+      { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }
+    ]);
+    expect(repository.listRuns()).toHaveLength(1);
+  });
+
   it("migrates schema-v1 bindings to stable identities without losing the mapping", async () => {
     let data: unknown = {
       schemaVersion: 1,
