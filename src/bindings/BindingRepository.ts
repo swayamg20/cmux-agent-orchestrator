@@ -986,12 +986,16 @@ export class BindingRepository {
     });
   }
 
-  async forgetProviderSessionIfUnchanged(expected: ProviderSessionMapping): Promise<boolean> {
+  async forgetProviderSessionIfUnchanged(
+    expected: ProviderSessionMapping,
+    canMutate?: MutationGuard
+  ): Promise<boolean> {
     if (!isProviderSessionMapping(expected)) {
       throw new Error("Expected provider session mapping contains an invalid canonical identity or value.");
     }
     const normalizedExpected = normalizeProviderSessionMapping(expected);
     return this.commitConditional((data) => {
+      if (canMutate && !canMutate()) return false;
       const machine = this.machineFor(data);
       const current = machine.providerSessions.find(
         (mapping) => mapping.surfaceId === normalizedExpected.surfaceId
@@ -1089,12 +1093,16 @@ export class BindingRepository {
     });
   }
 
-  async detachIfUnchanged(expected: BindingRecord): Promise<boolean> {
+  async detachIfUnchanged(
+    expected: BindingRecord,
+    canMutate?: MutationGuard
+  ): Promise<boolean> {
     if (!isBinding(expected)) {
       throw new Error("Expected binding contains an invalid canonical identity or value.");
     }
     const normalizedExpected = normalizeBindingRecord(expected);
     return this.commitConditional((data) => {
+      if (canMutate && !canMutate()) return false;
       const machine = this.machineFor(data);
       const current = machine.bindings.find(
         (candidate) => candidate.surfaceId === normalizedExpected.surfaceId

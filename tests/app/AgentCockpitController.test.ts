@@ -4809,6 +4809,54 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not detach a task binding after the exact cmux surface disappears from a queued write", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: false } };
+    let currentSnapshot = snapshot(5_355);
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const transport: CmuxTransport = {
+      ...connectedTransport(5_355),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const task = await controller.createTask({ title: "Keep exact detach target" });
+    await controller.attachTask(controller.store.getState().sessions[0]!, task);
+    const session = controller.store.getState().sessions[0]!;
+    const persistedBefore = structuredClone(persisted);
+    const internal = controller as unknown as { bindings: BindingRepository };
+    const detacher = internal.bindings as unknown as {
+      detachIfUnchanged: (
+        expected: Parameters<BindingRepository["detachIfUnchanged"]>[0],
+        canMutate?: () => boolean
+      ) => Promise<boolean>;
+    };
+    const detachIfUnchanged = detacher.detachIfUnchanged.bind(detacher);
+    detacher.detachIfUnchanged = async (expected, canMutate) => {
+      currentSnapshot = snapshot(5_356);
+      currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces = [];
+      currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.selectedSurfaceId = null;
+      await controller.refreshNow();
+      return detachIfUnchanged(expected, canMutate);
+    };
+
+    await expect(controller.detachTask(session)).rejects.toThrow(/no longer exists/);
+
+    expect(persisted).toEqual(persistedBefore);
+    expect(internal.bindings.list()).toMatchObject([{ taskId: task.taskId }]);
+    controller.dispose();
+  });
+
   it("does not replace a newer task binding from a stale picker", async () => {
     let persisted: unknown = { settings: { autoTrackAgentRuns: false } };
     const plugin = {
@@ -4891,6 +4939,69 @@ describe("AgentCockpitController connection failures", () => {
     expect(controllerBindings.listProviderSessions()).toMatchObject([
       { providerSessionId: "66666666-6666-4666-8666-666666666666" }
     ]);
+    controller.dispose();
+  });
+
+  it("does not forget a conversation match after the exact cmux surface disappears from a queued write", async () => {
+    let persisted: unknown;
+    let currentSnapshot = snapshot(5_380);
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const initialRepository = new BindingRepository(plugin);
+    await initialRepository.load();
+    await initialRepository.updateSettings({
+      ...initialRepository.getSettings(),
+      autoTrackAgentRuns: false
+    });
+    await initialRepository.mapProviderSession({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      matchedAt: "2026-09-04T00:00:00.000Z"
+    });
+    const transport: CmuxTransport = {
+      ...connectedTransport(5_380),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()])
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+    const persistedBefore = structuredClone(persisted);
+    const internal = controller as unknown as { bindings: BindingRepository };
+    const originalMapping = internal.bindings.listProviderSessions()[0]!;
+    const forgetter = internal.bindings as unknown as {
+      forgetProviderSessionIfUnchanged: (
+        expected: Parameters<BindingRepository["forgetProviderSessionIfUnchanged"]>[0],
+        canMutate?: () => boolean
+      ) => Promise<boolean>;
+    };
+    const forgetProviderSessionIfUnchanged =
+      forgetter.forgetProviderSessionIfUnchanged.bind(forgetter);
+    forgetter.forgetProviderSessionIfUnchanged = async (expected, canMutate) => {
+      currentSnapshot = snapshot(5_381);
+      currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces = [];
+      currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.selectedSurfaceId = null;
+      await controller.refreshNow();
+      return forgetProviderSessionIfUnchanged(expected, canMutate);
+    };
+
+    await controller.forgetConversation(session);
+
+    expect(persisted).toEqual(persistedBefore);
+    expect(internal.bindings.listProviderSessions()).toEqual([originalMapping]);
     controller.dispose();
   });
 
