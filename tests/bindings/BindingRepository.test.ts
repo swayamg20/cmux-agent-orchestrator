@@ -160,6 +160,38 @@ describe("BindingRepository", () => {
     expect(repository.list()).toHaveLength(1);
   });
 
+  it("keeps the conditional save queue usable after a handled persistence failure", async () => {
+    let shouldFail = true;
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => {
+        if (shouldFail) throw new Error("conditional disk unavailable");
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const binding = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex" as const,
+      providerSessionId: null,
+      attachedAt: "2026-08-23T00:00:00.000Z"
+    };
+
+    await expect(repository.attachIfSurfaceUnchanged(binding, null)).rejects.toThrow(
+      /conditional disk unavailable/
+    );
+    expect(repository.list()).toEqual([]);
+
+    shouldFail = false;
+    await expect(repository.attachIfSurfaceUnchanged(binding, null)).resolves.toMatchObject({
+      isNewRun: true
+    });
+    expect(repository.list()).toHaveLength(1);
+  });
+
   it("does not let a conditional automatic attachment replace a queued explicit binding", async () => {
     let data: unknown;
     let releaseFirstSave: (() => void) | undefined;

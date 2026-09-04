@@ -295,40 +295,7 @@ export class AgentCockpitController {
 
   async attachTask(session: LiveSession, task: TaskRecord): Promise<void> {
     try {
-      const current = this.resolveCurrentBindingSession(session);
-      const expectedBinding = this.expectedTaskBinding(session, current);
-      validateBindingIdentity(task.taskId, current);
-      this.requireTaskRepository().findById(task.taskId);
-      const attachedAt = new Date().toISOString();
-      const result = await this.bindings.attachIfSurfaceUnchanged(
-        {
-          taskId: task.taskId,
-          workspaceId: current.workspaceId,
-          paneId: current.paneId,
-          surfaceId: current.surfaceId,
-          provider: current.provider.provider,
-          providerSessionId: current.provider.sessionId,
-          attachedAt
-        },
-        expectedBinding
-      );
-      if (result === null) {
-        throw new Error("The task binding changed while the picker was open. Refresh and try again.");
-      }
-      this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
-      if (result.isNewRun) {
-        try {
-          const runCount = await this.requireTaskRepository().incrementRunCount(task);
-          this.store.update((state) => ({
-            tasks: state.tasks.map((candidate) =>
-              candidate.taskId === task.taskId ? { ...candidate, runCount, updatedAt: attachedAt } : candidate
-            )
-          }));
-        } catch (error) {
-          new Notice(`Session attached, but run count was not updated: ${readableError(error)}`);
-        }
-      }
-      this.recomputeSessions();
+      await this.attachTaskInternal(session, task);
       new Notice(`Attached session to ${task.title}.`);
     } catch (error) {
       new Notice(readableError(error));
@@ -367,8 +334,16 @@ export class AgentCockpitController {
       const current = session === null ? null : this.resolveCurrentBindingSession(session);
       const task = await this.requireTaskRepository().create(options);
       this.store.update((state) => ({ tasks: [task, ...state.tasks] }));
-      if (current !== null) await this.attachTask(current, task);
-      else new Notice(`Created ${task.title}.`);
+      if (current === null) {
+        new Notice(`Created ${task.title}.`);
+      } else {
+        try {
+          await this.attachTaskInternal(current, task);
+          new Notice(`Created ${task.title} and attached the session.`);
+        } catch (error) {
+          new Notice(`Created ${task.title}, but could not attach the session: ${readableError(error)}`);
+        }
+      }
       return task;
     } catch (error) {
       new Notice(readableError(error));
@@ -1317,6 +1292,43 @@ export class AgentCockpitController {
       throw new Error("The task binding changed while the picker was open. Refresh and try again.");
     }
     return binding;
+  }
+
+  private async attachTaskInternal(session: LiveSession, task: TaskRecord): Promise<void> {
+    const current = this.resolveCurrentBindingSession(session);
+    const expectedBinding = this.expectedTaskBinding(session, current);
+    validateBindingIdentity(task.taskId, current);
+    this.requireTaskRepository().findById(task.taskId);
+    const attachedAt = new Date().toISOString();
+    const result = await this.bindings.attachIfSurfaceUnchanged(
+      {
+        taskId: task.taskId,
+        workspaceId: current.workspaceId,
+        paneId: current.paneId,
+        surfaceId: current.surfaceId,
+        provider: current.provider.provider,
+        providerSessionId: current.provider.sessionId,
+        attachedAt
+      },
+      expectedBinding
+    );
+    if (result === null) {
+      throw new Error("The task binding changed while the picker was open. Refresh and try again.");
+    }
+    this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
+    if (result.isNewRun) {
+      try {
+        const runCount = await this.requireTaskRepository().incrementRunCount(task);
+        this.store.update((state) => ({
+          tasks: state.tasks.map((candidate) =>
+            candidate.taskId === task.taskId ? { ...candidate, runCount, updatedAt: attachedAt } : candidate
+          )
+        }));
+      } catch (error) {
+        new Notice(`Session attached, but run count was not updated: ${readableError(error)}`);
+      }
+    }
+    this.recomputeSessions();
   }
 
   private handleError(error: unknown, connectionFailure = true): void {

@@ -1854,6 +1854,38 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("keeps a newly created task without duplicating notices when attachment persistence fails", async () => {
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => {
+        throw new Error("simulated binding write failure");
+      }
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_325))
+    );
+
+    await controller.initialize();
+    const session = controller.store.getState().sessions[0]!;
+
+    await expect(
+      controller.createTask({ title: "Keep partial task" }, session)
+    ).resolves.toMatchObject({ title: "Keep partial task" });
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().tasks).toMatchObject([{ title: "Keep partial task" }]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    expect(notices.slice(noticeStart)).toEqual([
+      "Created Keep partial task, but could not attach the session: simulated binding write failure"
+    ]);
+    controller.dispose();
+  });
+
   it("does not detach a newer task binding from a stale session card", async () => {
     const notices = (Notice as unknown as { messages: string[] }).messages;
     const noticeStart = notices.length;

@@ -550,7 +550,10 @@ export class BindingRepository {
       this.data = draft;
       return true;
     });
-    this.saveChain = operation.then(() => undefined);
+    this.saveChain = operation.then(
+      () => undefined,
+      () => undefined
+    );
     return operation;
   }
 }

@@ -29,6 +29,7 @@ All notable changes to this project will be documented in this file.
 - Refresh durable task state when a task note or containing folder is moved or deleted, so stale bindings become visible immediately.
 - Restore the workflow selector to its persisted value when a stale or failed card move is rejected.
 - Report a stale Focus click safely when the cmux connection is unavailable instead of leaking an unhandled UI rejection.
+- Preserve a newly created task and report one explicit partial-success notice if its session attachment cannot be persisted.
 
 ### Security
 
