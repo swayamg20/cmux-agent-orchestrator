@@ -2159,6 +2159,88 @@ describe("AgentCockpitController connection failures", () => {
     expect(controller.store.getState().tasks).toEqual([]);
   });
 
+  it("does not republish an automatic task whose vault create outlives disposal", async () => {
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    let markCreateStarted!: () => void;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const { app, markdownWrites } = memoryTaskApp({
+      beforeCreate: async () => {
+        markCreateStarted();
+        await createGate;
+      }
+    });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_647)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await createStarted;
+    controller.dispose();
+    releaseCreate();
+    await controller.waitForBackgroundWork();
+
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().tasks).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+  });
+
+  it("does not continue automatic binding work after its save outlives disposal", async () => {
+    let persisted: unknown;
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let markSaveStarted!: () => void;
+    const saveStarted = new Promise<void>((resolve) => {
+      markSaveStarted = resolve;
+    });
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        markSaveStarted();
+        await saveGate;
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
+    const { app, frontmatterWriteAttempts, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_648)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await saveStarted;
+    controller.dispose();
+    releaseSave();
+    await controller.waitForBackgroundWork();
+
+    expect(markdownWrites).toHaveLength(1);
+    expect(frontmatterWriteAttempts()).toBe(0);
+    expect(controller.store.getState().tasks).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    expect(notices.slice(noticeStart)).toEqual([]);
+  });
+
   it("does not bind stale automatic work after topology fails and resumes from a fresh snapshot", async () => {
     let persisted: unknown;
     let snapshotCalls = 0;

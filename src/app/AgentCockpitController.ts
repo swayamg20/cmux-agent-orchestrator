@@ -910,7 +910,7 @@ export class AgentCockpitController {
         );
         if (result === null) continue;
         changed = true;
-        if (result.isNewRun) {
+        if (result.isNewRun && this.automaticTrackingAllowed(generation)) {
           try {
             await this.persistNewRunCount(task);
           } catch (error) {
@@ -930,6 +930,7 @@ export class AgentCockpitController {
     if (changed) {
       this.publishAutomaticTrackingState();
     }
+    if (this.disposed) return;
     if (tracked > 0) {
       new Notice(
         `Automatically tracked ${String(tracked)} exact agent ${tracked === 1 ? "run" : "runs"} on the Work board.`
@@ -1096,7 +1097,7 @@ export class AgentCockpitController {
   }
 
   private publishAutomaticTrackingState(): void {
-    if (this.taskRepository === null) return;
+    if (this.disposed || this.taskRepository === null) return;
     this.store.update({
       tasks: this.taskRepository.list(),
       bindings: this.bindings.list(),
@@ -1157,6 +1158,7 @@ export class AgentCockpitController {
   }
 
   private reportAutomaticTrackingIssue(key: string, error: unknown): void {
+    if (this.disposed) return;
     const message = readableError(error);
     const pass = this.automaticTrackingPass;
     pass?.failedIssueKeys.add(key);
