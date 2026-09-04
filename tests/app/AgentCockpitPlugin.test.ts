@@ -139,4 +139,65 @@ describe("AgentCockpitPlugin lifecycle", () => {
     expect(controller.dispose).toHaveBeenCalledOnce();
     expect(harness.notices).toEqual([]);
   });
+
+  it("does not reveal a newly prepared view after unload", async () => {
+    const viewState = deferred<void>();
+    const leaf = { setViewState: vi.fn(() => viewState.promise) };
+    const revealLeaf = vi.fn(async () => undefined);
+    const plugin = createPlugin();
+    await plugin.onload();
+    const testablePlugin = plugin as unknown as {
+      activateView: () => Promise<void>;
+      app: {
+        workspace: {
+          getLeaf: () => typeof leaf;
+          getLeavesOfType: () => [];
+          revealLeaf: typeof revealLeaf;
+        };
+      };
+    };
+    testablePlugin.app.workspace = {
+      getLeaf: () => leaf,
+      getLeavesOfType: () => [],
+      revealLeaf
+    };
+
+    const activation = testablePlugin.activateView();
+    expect(leaf.setViewState).toHaveBeenCalledOnce();
+    plugin.onunload();
+    viewState.resolve(undefined);
+    await activation;
+
+    expect(revealLeaf).not.toHaveBeenCalled();
+  });
+
+  it("suppresses an in-flight view failure after unload", async () => {
+    const reveal = deferred<void>();
+    const leaf = { setViewState: vi.fn(async () => undefined) };
+    const revealLeaf = vi.fn(() => reveal.promise);
+    const plugin = createPlugin();
+    await plugin.onload();
+    const testablePlugin = plugin as unknown as {
+      activateView: () => Promise<void>;
+      app: {
+        workspace: {
+          getLeaf: () => typeof leaf;
+          getLeavesOfType: () => [typeof leaf];
+          revealLeaf: typeof revealLeaf;
+        };
+      };
+    };
+    testablePlugin.app.workspace = {
+      getLeaf: () => leaf,
+      getLeavesOfType: () => [leaf],
+      revealLeaf
+    };
+
+    const activation = testablePlugin.activateView();
+    expect(revealLeaf).toHaveBeenCalledWith(leaf);
+    plugin.onunload();
+    reveal.reject(new Error("Late view failure."));
+
+    await expect(activation).resolves.toBeUndefined();
+  });
 });

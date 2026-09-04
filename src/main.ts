@@ -81,12 +81,19 @@ export default class AgentCockpitPlugin extends Plugin {
   }
 
   private async activateView(): Promise<void> {
-    let leaf = this.app.workspace.getLeavesOfType(AGENT_COCKPIT_VIEW_TYPE)[0];
-    if (!leaf) {
-      leaf = this.app.workspace.getLeaf("tab");
-      await leaf.setViewState({ type: AGENT_COCKPIT_VIEW_TYPE, active: true });
+    const controller = this.requireController();
+    try {
+      let leaf = this.app.workspace.getLeavesOfType(AGENT_COCKPIT_VIEW_TYPE)[0];
+      if (!leaf) {
+        leaf = this.app.workspace.getLeaf("tab");
+        await leaf.setViewState({ type: AGENT_COCKPIT_VIEW_TYPE, active: true });
+        if (this.controller !== controller) return;
+      }
+      await this.app.workspace.revealLeaf(leaf);
+    } catch (error) {
+      if (this.controller !== controller) return;
+      throw error;
     }
-    await this.app.workspace.revealLeaf(leaf);
   }
 
   private requireController(): AgentCockpitController {
