@@ -244,9 +244,11 @@ export class AgentCockpitController {
 
   async loadPreview(session: LiveSession): Promise<void> {
     if (this.disposed) return;
+    const clientGeneration = this.clientGeneration;
+    let requestClient: CmuxClient | null = null;
     try {
       const client = this.requireClient();
-      const clientGeneration = this.clientGeneration;
+      requestClient = client;
       const settings = this.requireSettings();
       const requested = this.resolveCurrentSession(session);
       const signature = previewSurfaceSignature(requested);
@@ -288,7 +290,13 @@ export class AgentCockpitController {
       }
       this.recomputeSessions();
     } catch (error) {
-      if (this.disposed) return;
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        (requestClient !== null && requestClient !== this.client)
+      ) {
+        return;
+      }
       this.handleError(error, false);
       new Notice(readableError(error));
     }
@@ -296,18 +304,31 @@ export class AgentCockpitController {
 
   async focusSession(session: LiveSession): Promise<void> {
     if (this.disposed) return;
+    const clientGeneration = this.clientGeneration;
+    const focusAction = this.focusAction;
     try {
-      const focusAction = this.focusAction;
       if (focusAction === null) throw new Error("cmux connection is not initialized.");
       const result = await focusAction.execute(this.store.getState().connection, session);
-      if (this.disposed) return;
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        focusAction !== this.focusAction
+      ) {
+        return;
+      }
       new Notice(
         result.verified
           ? `Focused ${result.target.workspaceTitle} / ${result.target.surfaceTitle} in cmux.`
           : "cmux accepted the focus command, but the selected surface could not be verified within the bounded retry window."
       );
     } catch (error) {
-      if (this.disposed) return;
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        focusAction !== this.focusAction
+      ) {
+        return;
+      }
       this.handleError(error, false);
       new Notice(readableError(error));
     }

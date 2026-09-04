@@ -675,6 +675,108 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not report a preview failure from an earlier cmux connection", async () => {
+    let clientCreations = 0;
+    let rejectOldPreview!: (reason?: unknown) => void;
+    let markOldPreviewStarted!: () => void;
+    const oldPreviewStarted = new Promise<void>((resolve) => {
+      markOldPreviewStarted = resolve;
+    });
+    const titledSnapshot = (): CmuxSnapshot => {
+      const current = snapshot(Date.now());
+      current.windows[0]!.workspaces[0]!.panes[0]!.surfaces[0]!.title = "Codex";
+      return current;
+    };
+    const firstTransport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      snapshot: async () => titledSnapshot(),
+      readPreview: () =>
+        new Promise((_resolve, reject) => {
+          rejectOldPreview = reject;
+          markOldPreviewStarted();
+        })
+    };
+    const currentTransport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      snapshot: async () => titledSnapshot()
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(clientCreations++ === 0 ? firstTransport : currentTransport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const staleLoad = controller.loadPreview(controller.store.getState().sessions[0]!);
+    await oldPreviewStarted;
+
+    await controller.testConnection();
+    await controller.waitForBackgroundWork();
+    const noticeStart = notices.length;
+    rejectOldPreview(new Error("stale preview failure"));
+    await staleLoad;
+
+    expect(controller.store.getState().connection.status).toBe("connected");
+    expect(controller.store.getState().error).toBeNull();
+    expect(notices.slice(noticeStart)).toEqual([]);
+    controller.dispose();
+  });
+
+  it("does not notify when focus finishes through an earlier cmux connection", async () => {
+    let clientCreations = 0;
+    let releaseOldFocus!: () => void;
+    const oldFocusGate = new Promise<void>((resolve) => {
+      releaseOldFocus = resolve;
+    });
+    let markOldFocusStarted!: () => void;
+    const oldFocusStarted = new Promise<void>((resolve) => {
+      markOldFocusStarted = resolve;
+    });
+    let oldFocusedTarget: CmuxTarget | null = null;
+    const firstTransport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      focus: async (target) => {
+        markOldFocusStarted();
+        await oldFocusGate;
+        oldFocusedTarget = target;
+      },
+      focusedTarget: async () => oldFocusedTarget
+    };
+    const currentTransport = connectedTransport(Date.now());
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(clientCreations++ === 0 ? firstTransport : currentTransport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const staleFocus = controller.focusSession(controller.store.getState().sessions[0]!);
+    await oldFocusStarted;
+
+    await controller.testConnection();
+    await controller.waitForBackgroundWork();
+    const noticeStart = notices.length;
+    releaseOldFocus();
+    await staleFocus;
+
+    expect(controller.store.getState().connection.status).toBe("connected");
+    expect(controller.store.getState().error).toBeNull();
+    expect(notices.slice(noticeStart)).toEqual([]);
+    controller.dispose();
+  });
+
   it("retries provider classification without applying evidence from an earlier cmux connection", async () => {
     let clientCreations = 0;
     let finishOldClassification: ((text: string) => void) | null = null;
