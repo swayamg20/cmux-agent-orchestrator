@@ -137,7 +137,7 @@ Repository equality is not an identity signal, so the plugin never assigns a con
 
 Any missing, duplicate, stale, or conflicting evidence fails closed and leaves the cmux title visible. The row's **Choose provider conversation** action remains a manual fallback and override.
 
-After an exact match, the provider title becomes the primary row label. The inferred surface-to-provider match is recomputed and kept only in memory. When automatic Work tracking is enabled, the resulting task binding and provider session ID are persisted so that the durable run survives a reload; the title itself is still memory-only. Explicit manual matches survive reloads by reloading title metadata from the provider-owned source. If the exact title cannot be loaded, the UI explicitly labels the cmux surface title as a fallback. One provider conversation cannot be assigned to two cmux surfaces, and a manual match always wins.
+After an exact match, the provider title becomes the primary row label. The inferred surface-to-provider match is recomputed and kept only in memory. When automatic Work tracking is enabled, the resulting task binding and provider session ID are persisted so that the durable run survives a reload; the title itself is still memory-only. Explicit manual matches survive reloads by reloading title metadata from the provider-owned source. If the exact title cannot be loaded, the UI explicitly labels the cmux surface title as a fallback. One provider conversation cannot be assigned to two cmux surfaces. A current exact manual match wins over automatic evidence, while a mapping whose complete canonical cmux tuple is absent cannot shadow fresh exact evidence for a live surface.
 
 The provider metadata boundary is deliberately narrow:
 

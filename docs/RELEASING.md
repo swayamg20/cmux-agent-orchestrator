@@ -20,7 +20,8 @@ CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX=1 npm test -- tests/smoke/cmux.live.test.ts
 CMUX_AGENT_ORCHESTRATOR_LIVE_PROVIDERS=1 npm test -- tests/smoke/provider-metadata.live.test.ts
 CMUX_AGENT_ORCHESTRATOR_LIVE_IDENTITY=1 npm test -- tests/smoke/automatic-identity.live.test.ts
 CMUX_AGENT_ORCHESTRATOR_LIVE_TRACKING=1 npm test -- tests/smoke/automatic-tracking.live.test.ts
-npm run validate:release -- --tag 0.2.0
+RELEASE_VERSION="$(node -p "require('./manifest.json').version")"
+npm run validate:release -- --tag "$RELEASE_VERSION"
 ```
 
 The live smoke tests are read-only. They resolve current cmux topology, notifications, canonical UUIDs, three bounded lines from one selected surface, bounded local provider-title metadata, and exact automatic provider-to-surface identity where local evidence permits. The automatic-tracking smoke persists its generated task Markdown and binding data only to in-memory doubles, supplies blank terminal previews, and fails if focus is attempted. The smoke tests do not send terminal input, resume a conversation, modify provider files, or write to a real vault.
