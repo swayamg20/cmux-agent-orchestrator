@@ -34,15 +34,37 @@ interface ProcessCandidate {
 }
 
 interface ProcessResolution {
+  kind: "resolved";
   process: ProviderProcess;
   mapping: AutomaticProviderSessionMapping;
   lifecycle: AutomaticLifecycleObservation | null;
+  claudeSession: { sessionId: string; cwd: string } | null;
   codexWriterIds: readonly string[] | null;
 }
+
+interface RejectedProcessIdentity {
+  kind: "rejected";
+  rejectedSurfaceId: string;
+  rejectedProviderSessionKeys: readonly string[];
+}
+
+type ProcessIdentityAttempt = ProcessResolution | RejectedProcessIdentity | null;
 
 interface ProcessRevalidation {
   resolutions: ProcessResolution[];
   rejectedSurfaceIds: ReadonlySet<string>;
+  rejectedProviderSessionKeys: ReadonlySet<string>;
+}
+
+interface CandidateSelection {
+  candidates: ProcessCandidate[];
+  rejectedSurfaceIds: Set<string>;
+}
+
+interface NormalizedMappings {
+  mappings: AutomaticProviderSessionMapping[];
+  rejectedSurfaceIds: ReadonlySet<string>;
+  rejectedProviderSessionKeys: ReadonlySet<string>;
 }
 
 type ExactMetadataReader = (
@@ -77,10 +99,15 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     const verifyExact = memoizeExactMetadataReads(this.metadata);
 
     const nativePromise = this.readNativeAgents(client, signal, issues);
-    const processResolutions =
+    const localResolution =
       this.platform === "darwin"
         ? await this.resolveLocalProcesses(surfaces, checkedAt, verifyExact, signal, issues)
-        : [];
+        : {
+            resolutions: [],
+            rejectedSurfaceIds: new Set<string>(),
+            rejectedProviderSessionKeys: new Set<string>()
+          };
+    const processResolutions = localResolution.resolutions;
     const nativeAgents = await nativePromise;
     if (this.disposed || signal?.aborted) return emptyResolution(checkedAt);
 
@@ -93,20 +120,53 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
       signal,
       issues
     );
-    const processRevalidation = await this.revalidateCodexWriterSets(
+    const processRevalidation = await this.revalidateProcessIdentities(
       processResolutions,
       signal
     );
     if (this.disposed || signal?.aborted) return emptyResolution(checkedAt);
-    const publishableNativeMappings = nativeMappings.filter(
-      (mapping) => !processRevalidation.rejectedSurfaceIds.has(mapping.surfaceId)
+    const rejectedSurfaceIds = new Set([
+      ...localResolution.rejectedSurfaceIds,
+      ...processRevalidation.rejectedSurfaceIds
+    ]);
+    const rejectedProviderSessionKeys = new Set([
+      ...localResolution.rejectedProviderSessionKeys,
+      ...processRevalidation.rejectedProviderSessionKeys
+    ]);
+    const survivingProcessMappings = processRevalidation.resolutions.map(
+      (resolution) => resolution.mapping
     );
-    const mappings = normalizeMappings(
+    const survivingProcessSurfaceIds = new Set(
+      survivingProcessMappings.map((mapping) => mapping.surfaceId)
+    );
+    const publishableNativeMappings = nativeMappings.filter(
+      (mapping) => !survivingProcessSurfaceIds.has(mapping.surfaceId)
+    );
+    const normalizedMappings = normalizeMappings(
       [
         ...publishableNativeMappings,
-        ...processRevalidation.resolutions.map((resolution) => resolution.mapping)
+        ...survivingProcessMappings
       ],
       issues
+    );
+    for (const surfaceId of normalizedMappings.rejectedSurfaceIds) {
+      rejectedSurfaceIds.add(surfaceId);
+    }
+    for (const identityKey of normalizedMappings.rejectedProviderSessionKeys) {
+      rejectedProviderSessionKeys.add(identityKey);
+    }
+    for (const mapping of normalizedMappings.mappings) {
+      if (rejectedSurfaceIds.has(mapping.surfaceId)) {
+        rejectedProviderSessionKeys.add(providerIdentityKey(mapping));
+      }
+    }
+    for (const mapping of normalizedMappings.mappings) {
+      if (rejectedProviderSessionKeys.has(providerIdentityKey(mapping))) {
+        rejectedSurfaceIds.add(mapping.surfaceId);
+      }
+    }
+    const mappings = normalizedMappings.mappings.filter(
+      (mapping) => !rejectedSurfaceIds.has(mapping.surfaceId)
     );
     const mappingBySurface = new Map(
       mappings.map((mapping) => [normalizeCanonicalUuid(mapping.surfaceId)!, mapping])
@@ -135,6 +195,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     );
     const localLifecycle = processRevalidation.resolutions.flatMap((resolution) =>
       resolution.lifecycle &&
+      !rejectedSurfaceIds.has(normalizeCanonicalUuid(resolution.lifecycle.surfaceId)!) &&
       !nativeSurfaceIds.has(normalizeCanonicalUuid(resolution.lifecycle.surfaceId)!)
         ? [resolution.lifecycle]
         : []
@@ -143,6 +204,8 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     return {
       mappings,
       lifecycle: [...nativeLifecycle, ...localLifecycle],
+      suppressedSurfaceIds: [...rejectedSurfaceIds].sort(),
+      suppressedProviderSessionKeys: [...rejectedProviderSessionKeys].sort(),
       checkedAt,
       nativeLifecycleAvailable: nativeAgents.available,
       issues: [...new Set(issues)].slice(0, 8)
@@ -160,13 +223,17 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     verifyExact: ExactMetadataReader,
     signal: AbortSignal | undefined,
     issues: string[]
-  ): Promise<ProcessResolution[]> {
+  ): Promise<ProcessRevalidation> {
     let before: ProviderProcess[];
     try {
       before = await this.processes.listForegroundProviderProcesses(signal);
     } catch {
       issues.push("The local provider process inventory could not be read.");
-      return [];
+      return {
+        resolutions: [],
+        rejectedSurfaceIds: new Set(),
+        rejectedProviderSessionKeys: new Set()
+      };
     }
 
     const candidates = await mapLimited(before, RESOLUTION_CONCURRENCY, async (processRecord) => {
@@ -179,9 +246,9 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
         return null;
       }
     });
-    const unambiguous = unambiguousCandidates(candidates.filter(isPresent));
-    const tentative = await mapLimited(
-      unambiguous,
+    const selection = selectUnambiguousCandidates(candidates.filter(isPresent));
+    const attempts = await mapLimited(
+      selection.candidates,
       RESOLUTION_CONCURRENCY,
       async (candidate) => {
         try {
@@ -191,19 +258,48 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
         }
       }
     );
+    const rejectedProviderSessionKeys = new Set<string>();
+    for (const attempt of attempts) {
+      if (!isRejectedProcessIdentity(attempt)) continue;
+      selection.rejectedSurfaceIds.add(attempt.rejectedSurfaceId);
+      for (const identityKey of attempt.rejectedProviderSessionKeys) {
+        rejectedProviderSessionKeys.add(identityKey);
+      }
+    }
+    const tentative = attempts.filter(isProcessResolution);
 
     let after: ProviderProcess[];
     try {
       after = await this.processes.listForegroundProviderProcesses(signal);
     } catch {
       issues.push("Provider processes changed while identities were being resolved.");
-      return [];
+      for (const resolution of tentative) {
+        selection.rejectedSurfaceIds.add(resolution.mapping.surfaceId);
+        rejectedProviderSessionKeys.add(providerIdentityKey(resolution.mapping));
+      }
+      return {
+        resolutions: [],
+        rejectedSurfaceIds: selection.rejectedSurfaceIds,
+        rejectedProviderSessionKeys
+      };
     }
     const stable = new Map(after.map((processRecord) => [processRecord.pid, processRecord]));
-    return tentative.filter(
-      (resolution): resolution is ProcessResolution =>
-        resolution !== null && sameProcess(resolution.process, stable.get(resolution.process.pid))
-    );
+    const resolutions = tentative.filter((resolution) => {
+      const processStable = sameProcess(
+        resolution.process,
+        stable.get(resolution.process.pid)
+      );
+      if (!processStable) {
+        selection.rejectedSurfaceIds.add(resolution.mapping.surfaceId);
+        rejectedProviderSessionKeys.add(providerIdentityKey(resolution.mapping));
+      }
+      return processStable;
+    });
+    return {
+      resolutions,
+      rejectedSurfaceIds: selection.rejectedSurfaceIds,
+      rejectedProviderSessionKeys
+    };
   }
 
   private async resolveProcessCandidate(
@@ -211,7 +307,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     checkedAt: number,
     verifyExact: ExactMetadataReader,
     signal?: AbortSignal
-  ): Promise<ProcessResolution | null> {
+  ): Promise<ProcessIdentityAttempt> {
     const cwd = candidate.surface.currentDirectory;
     if (!cwd) return null;
     if (candidate.process.provider === "claude") {
@@ -230,6 +326,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
         observedAt: checkedAt
       };
       return {
+        kind: "resolved",
         process: candidate.process,
         mapping,
         lifecycle: claudeLifecycleObservation(
@@ -238,29 +335,38 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
           providerSessionId,
           checkedAt
         ),
+        claudeSession: { sessionId: providerSessionId, cwd },
         codexWriterIds: null
       };
     }
 
     const writerIds = await this.processes.readCodexWriterSessionIds(candidate.process.pid, signal);
-    if (writerIds.length > MAX_CODEX_WRITER_LOCKS) return null;
+    if (writerIds.length === 0) return null;
+    const rejection: RejectedProcessIdentity = {
+      kind: "rejected",
+      rejectedSurfaceId: candidate.surface.surfaceId,
+      rejectedProviderSessionKeys: canonicalProviderSessionKeys("codex", writerIds)
+    };
+    if (writerIds.length > MAX_CODEX_WRITER_LOCKS) return rejection;
     const writerThreads = new Map<string, ProviderSessionMetadata>();
     for (const sessionId of writerIds) {
       if (signal?.aborted || this.disposed) return null;
       const normalizedWriterId = normalizeCanonicalUuid(sessionId);
-      if (normalizedWriterId === null || writerThreads.has(normalizedWriterId)) return null;
+      if (normalizedWriterId === null || writerThreads.has(normalizedWriterId)) return rejection;
       let thread: ProviderSessionMetadata | null;
       try {
         thread = await verifyExact("codex", sessionId, cwd, signal);
       } catch {
-        return null;
+        return signal?.aborted || this.disposed ? null : rejection;
       }
-      if (thread === null || !canonicalUuidEquals(thread.sessionId, sessionId)) return null;
+      if (signal?.aborted || this.disposed) return null;
+      if (thread === null || !canonicalUuidEquals(thread.sessionId, sessionId)) return rejection;
       writerThreads.set(normalizedWriterId, thread);
     }
     const thread = singleConnectedCodexRoot(writerThreads);
-    if (thread === null) return null;
+    if (thread === null) return rejection;
     return {
+      kind: "resolved",
       process: candidate.process,
       mapping: {
         ...candidate.surface,
@@ -273,23 +379,115 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
         observedAt: checkedAt
       },
       lifecycle: null,
+      claudeSession: null,
       codexWriterIds: [...writerThreads.keys()]
     };
   }
 
-  private async revalidateCodexWriterSets(
+  private async revalidateProcessIdentities(
     resolutions: readonly ProcessResolution[],
     signal?: AbortSignal
   ): Promise<ProcessRevalidation> {
+    const rejectedSurfaceIds = new Set<string>();
+    const rejectedProviderSessionKeys = new Set<string>();
+    if (resolutions.length === 0) {
+      return { resolutions: [], rejectedSurfaceIds, rejectedProviderSessionKeys };
+    }
+
+    let currentProcesses: ProviderProcess[];
+    try {
+      currentProcesses = await this.processes.listForegroundProviderProcesses(signal);
+    } catch {
+      for (const resolution of resolutions) {
+        rejectedSurfaceIds.add(resolution.mapping.surfaceId);
+        rejectedProviderSessionKeys.add(providerIdentityKey(resolution.mapping));
+      }
+      return { resolutions: [], rejectedSurfaceIds, rejectedProviderSessionKeys };
+    }
+    const currentByPid = new Map(
+      currentProcesses.map((processRecord) => [processRecord.pid, processRecord])
+    );
+    const processStableResolutions = resolutions.filter((resolution) => {
+      const stable = sameProcess(
+        resolution.process,
+        currentByPid.get(resolution.process.pid)
+      );
+      if (!stable) {
+        rejectedSurfaceIds.add(resolution.mapping.surfaceId);
+        rejectedProviderSessionKeys.add(providerIdentityKey(resolution.mapping));
+      }
+      return stable;
+    });
+
     const checks = await mapLimited(
-      resolutions,
+      processStableResolutions,
       RESOLUTION_CONCURRENCY,
       async (resolution) => {
+        if (resolution.claudeSession !== null) {
+          if (signal?.aborted || this.disposed) {
+            return {
+              resolution: null,
+              rejectedSurfaceId: resolution.mapping.surfaceId,
+              rejectedProviderSessionKeys: []
+            };
+          }
+          let currentSession;
+          try {
+            currentSession = await this.processes.readClaudeSession(
+              resolution.process,
+              resolution.claudeSession.cwd,
+              signal
+            );
+          } catch {
+            return {
+              resolution: null,
+              rejectedSurfaceId: resolution.mapping.surfaceId,
+              rejectedProviderSessionKeys: []
+            };
+          }
+          const currentSessionId = normalizeCanonicalUuid(currentSession?.sessionId ?? "");
+          if (
+            signal?.aborted ||
+            this.disposed ||
+            currentSession === null ||
+            currentSession.cwd !== resolution.claudeSession.cwd ||
+            currentSessionId !== resolution.claudeSession.sessionId
+          ) {
+            return {
+              resolution: null,
+              rejectedSurfaceId: resolution.mapping.surfaceId,
+              rejectedProviderSessionKeys:
+                currentSessionId === null ? [] : [`claude:${currentSessionId}`]
+            };
+          }
+          return {
+            resolution: {
+              ...resolution,
+              lifecycle: claudeLifecycleObservation(
+                currentSession.status,
+                {
+                  workspaceId: resolution.mapping.workspaceId,
+                  paneId: resolution.mapping.paneId,
+                  surfaceId: resolution.mapping.surfaceId,
+                  currentDirectory: resolution.claudeSession.cwd
+                },
+                resolution.claudeSession.sessionId,
+                resolution.mapping.observedAt
+              )
+            },
+            rejectedSurfaceId: null,
+            rejectedProviderSessionKeys: []
+          };
+        }
         if (resolution.codexWriterIds === null) {
-          return { resolution, rejectedSurfaceId: null };
+          return { resolution, rejectedSurfaceId: null, rejectedProviderSessionKeys: [] };
         }
         if (signal?.aborted || this.disposed) {
-          return { resolution: null, rejectedSurfaceId: resolution.mapping.surfaceId };
+          return {
+            resolution: null,
+            rejectedSurfaceId: resolution.mapping.surfaceId,
+            rejectedProviderSessionKeys: []
+          };
         }
         let currentWriterIds: string[];
         try {
@@ -298,27 +496,46 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
             signal
           );
         } catch {
-          return { resolution: null, rejectedSurfaceId: resolution.mapping.surfaceId };
+          return {
+            resolution: null,
+            rejectedSurfaceId: resolution.mapping.surfaceId,
+            rejectedProviderSessionKeys: []
+          };
         }
+        const observedProviderSessionKeys = canonicalProviderSessionKeys(
+          "codex",
+          currentWriterIds
+        );
         if (
           signal?.aborted ||
           this.disposed ||
           !sameCanonicalWriterSet(resolution.codexWriterIds, currentWriterIds)
         ) {
-          return { resolution: null, rejectedSurfaceId: resolution.mapping.surfaceId };
+          return {
+            resolution: null,
+            rejectedSurfaceId: resolution.mapping.surfaceId,
+            rejectedProviderSessionKeys: observedProviderSessionKeys
+          };
         }
-        return { resolution, rejectedSurfaceId: null };
+        return { resolution, rejectedSurfaceId: null, rejectedProviderSessionKeys: [] };
       }
     );
+    for (const [index, { rejectedSurfaceId, rejectedProviderSessionKeys: observedKeys }] of checks.entries()) {
+      if (rejectedSurfaceId === null) continue;
+      rejectedSurfaceIds.add(rejectedSurfaceId);
+      rejectedProviderSessionKeys.add(
+        providerIdentityKey(processStableResolutions[index]!.mapping)
+      );
+      for (const identityKey of observedKeys) {
+        rejectedProviderSessionKeys.add(identityKey);
+      }
+    }
     return {
       resolutions: checks.flatMap(({ resolution }) =>
         resolution === null ? [] : [resolution]
       ),
-      rejectedSurfaceIds: new Set(
-        checks.flatMap(({ rejectedSurfaceId }) =>
-          rejectedSurfaceId === null ? [] : [rejectedSurfaceId]
-        )
-      )
+      rejectedSurfaceIds,
+      rejectedProviderSessionKeys
     };
   }
 
@@ -350,7 +567,6 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
         const providerSessionId = normalizeCanonicalUuid(record.sessionId);
         if (providerSessionId === null) return null;
         const processMapping = processBySurface.get(surfaceId);
-        if (processMapping && processMapping.providerSessionId !== providerSessionId) return null;
         let provider: ProviderSessionKind | null =
           processMapping?.providerSessionId === providerSessionId ? processMapping.provider : null;
         if (!provider) {
@@ -506,20 +722,28 @@ function indexSurfaces(snapshot: CmuxSnapshot): Map<string, IndexedSurface> {
   return surfaces;
 }
 
-function unambiguousCandidates(candidates: readonly ProcessCandidate[]): ProcessCandidate[] {
+function selectUnambiguousCandidates(
+  candidates: readonly ProcessCandidate[]
+): CandidateSelection {
   const bySurface = new Map<string, ProcessCandidate[]>();
   for (const candidate of candidates) {
     const list = bySurface.get(candidate.surface.surfaceId) ?? [];
     list.push(candidate);
     bySurface.set(candidate.surface.surfaceId, list);
   }
-  return [...bySurface.values()].flatMap((items) => (items.length === 1 ? items : []));
+  const rejectedSurfaceIds = new Set<string>();
+  const selected = [...bySurface.entries()].flatMap(([surfaceId, items]) => {
+    if (items.length === 1) return items;
+    rejectedSurfaceIds.add(surfaceId);
+    return [];
+  });
+  return { candidates: selected, rejectedSurfaceIds };
 }
 
 function normalizeMappings(
   mappings: readonly AutomaticProviderSessionMapping[],
   issues: string[]
-): AutomaticProviderSessionMapping[] {
+): NormalizedMappings {
   const normalized = mappings.flatMap((mapping) => {
     const workspaceId = normalizeCanonicalUuid(mapping.workspaceId);
     const paneId = normalizeCanonicalUuid(mapping.paneId);
@@ -552,12 +776,16 @@ function normalizeMappings(
   }
 
   const bySurface = new Map<string, AutomaticProviderSessionMapping>();
+  const rejectedSurfaceIds = new Set(ambiguousSurfaces);
+  const rejectedProviderSessionKeys = new Set<string>();
   for (const mapping of normalized) {
     const identity = `${mapping.provider}:${mapping.providerSessionId}`;
     if (
       ambiguousSurfaces.has(mapping.surfaceId) ||
       ambiguousIdentities.has(identity)
     ) {
+      rejectedSurfaceIds.add(mapping.surfaceId);
+      rejectedProviderSessionKeys.add(identity);
       continue;
     }
     const existing = bySurface.get(mapping.surfaceId);
@@ -568,7 +796,42 @@ function normalizeMappings(
       bySurface.set(mapping.surfaceId, mapping);
     }
   }
-  return [...bySurface.values()];
+  return {
+    mappings: [...bySurface.values()],
+    rejectedSurfaceIds,
+    rejectedProviderSessionKeys
+  };
+}
+
+function providerIdentityKey(
+  mapping: Pick<AutomaticProviderSessionMapping, "provider" | "providerSessionId">
+): string {
+  const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
+  return `${mapping.provider}:${providerSessionId ?? mapping.providerSessionId.toLowerCase()}`;
+}
+
+function canonicalProviderSessionKeys(
+  provider: ProviderSessionKind,
+  sessionIds: readonly string[]
+): string[] {
+  return [
+    ...new Set(
+      sessionIds.flatMap((sessionId) => {
+        const normalized = normalizeCanonicalUuid(sessionId);
+        return normalized === null ? [] : [`${provider}:${normalized}`];
+      })
+    )
+  ].sort();
+}
+
+function isRejectedProcessIdentity(
+  attempt: ProcessIdentityAttempt
+): attempt is RejectedProcessIdentity {
+  return attempt?.kind === "rejected";
+}
+
+function isProcessResolution(attempt: ProcessIdentityAttempt): attempt is ProcessResolution {
+  return attempt?.kind === "resolved";
 }
 
 function confidenceRank(confidence: Confidence): number {
@@ -687,6 +950,8 @@ function emptyResolution(checkedAt: number): ProviderIdentityResolution {
   return {
     mappings: [],
     lifecycle: [],
+    suppressedSurfaceIds: [],
+    suppressedProviderSessionKeys: [],
     checkedAt,
     nativeLifecycleAvailable: false,
     issues: []

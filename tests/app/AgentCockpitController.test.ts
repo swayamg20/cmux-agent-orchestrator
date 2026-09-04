@@ -1541,6 +1541,168 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not auto-track a saved provider mapping rejected by current identity evidence", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: true } };
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const seed = new BindingRepository(plugin);
+    await seed.load();
+    await seed.mapProviderSession({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "claude",
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      matchedAt: "2026-09-04T00:00:00.000Z"
+    });
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        checkedAt: currentSnapshot.observedAt + 1,
+        nativeLifecycleAvailable: false,
+        issues: [],
+        mappings: [],
+        lifecycle: [],
+        suppressedSurfaceIds: ["44444444-4444-4444-8444-444444444444"]
+      }),
+      dispose: () => undefined
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(1_475)),
+      new ProviderMetadataService([]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().tasks).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    expect(markdownWrites).toEqual([]);
+    expect(controller.store.getState().sessions[0]?.provider.sessionId).toBeNull();
+    expect(
+      (controller as unknown as { bindings: BindingRepository }).bindings.listProviderSessions()
+    ).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("does not auto-track a rejected provider conversation from a different saved surface", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: true } };
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const rejectedProviderSessionId = "55555555-5555-4555-8555-555555555555";
+    const seed = new BindingRepository(plugin);
+    await seed.load();
+    await seed.mapProviderSession({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: rejectedProviderSessionId,
+      matchedAt: "2026-09-04T00:00:00.000Z"
+    });
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        checkedAt: currentSnapshot.observedAt + 1,
+        nativeLifecycleAvailable: false,
+        issues: [],
+        mappings: [],
+        lifecycle: [],
+        suppressedSurfaceIds: ["66666666-6666-4666-8666-666666666666"],
+        suppressedProviderSessionKeys: [`codex:${rejectedProviderSessionId.toUpperCase()}`]
+      }),
+      dispose: () => undefined
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(1_480)),
+      new ProviderMetadataService([]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().tasks).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    expect(markdownWrites).toEqual([]);
+    expect(controller.store.getState().sessions[0]?.provider.sessionId).toBeNull();
+    expect(
+      (controller as unknown as { bindings: BindingRepository }).bindings.listProviderSessions()
+    ).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("does not let a rejected automatic identity expose a different saved identity on that surface", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: true } };
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const staleSessionId = "55555555-5555-4555-8555-555555555555";
+    const rejectedSessionId = "66666666-6666-4666-8666-666666666666";
+    const seed = new BindingRepository(plugin);
+    await seed.load();
+    await seed.mapProviderSession({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: staleSessionId,
+      matchedAt: "2026-09-04T00:00:00.000Z"
+    });
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        ...exactCodexResolverResult(currentSnapshot.observedAt),
+        mappings: [
+          {
+            ...exactCodexResolverResult(currentSnapshot.observedAt).mappings[0]!,
+            providerSessionId: rejectedSessionId
+          }
+        ],
+        suppressedProviderSessionKeys: [`codex:${rejectedSessionId}`]
+      }),
+      dispose: () => undefined
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(1_490)),
+      new ProviderMetadataService([]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().tasks).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    expect(markdownWrites).toEqual([]);
+    expect(controller.store.getState().sessions[0]?.provider.sessionId).toBeNull();
+    expect(
+      (controller as unknown as { bindings: BindingRepository }).bindings.listProviderSessions()
+    ).toHaveLength(1);
+    controller.dispose();
+  });
+
   it("starts a new automatic task when a different exact session reuses the same surface", async () => {
     let persisted: unknown;
     let observedAt = 1_500;

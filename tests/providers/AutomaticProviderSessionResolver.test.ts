@@ -302,16 +302,19 @@ describe("AutomaticProviderSessionResolver", () => {
       dispose: () => undefined
     }]);
     const processes = new FakeProcessSource([processRecord()]);
-    processes.readLocks.mockResolvedValue(
-      Array.from({ length: 9 }, (_, index) =>
-        `${index.toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`
-      )
+    const writerIds = Array.from({ length: 9 }, (_, index) =>
+      `${index.toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`
     );
+    processes.readLocks.mockResolvedValue(writerIds);
     const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
 
     const result = await resolver.resolve(snapshot(), client());
 
     expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId]);
+    expect(result.suppressedProviderSessionKeys).toEqual(
+      writerIds.map((writerId) => `codex:${writerId}`)
+    );
     expect(get).not.toHaveBeenCalled();
     resolver.dispose();
     metadata.dispose();
@@ -350,10 +353,45 @@ describe("AutomaticProviderSessionResolver", () => {
       const result = await resolver.resolve(snapshot(), client());
 
       expect(result.mappings).toEqual([]);
+      expect(result.suppressedSurfaceIds).toEqual([surfaceId]);
+      expect(result.suppressedProviderSessionKeys).toEqual([
+        `codex:${sessionId}`,
+        `codex:${secondSessionId}`
+      ]);
       resolver.dispose();
       metadata.dispose();
     }
   );
+
+  it("leaves a surface unsuppressed when Codex has no writer lock evidence", async () => {
+    const metadata = new ProviderMetadataService([codexSource()]);
+    const processes = new FakeProcessSource([processRecord()]);
+    processes.readLocks.mockResolvedValue([]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([]);
+    expect(result.suppressedProviderSessionKeys).toEqual([]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("rejects duplicate canonical Codex writer identities as ambiguous evidence", async () => {
+    const metadata = new ProviderMetadataService([codexSource()]);
+    const processes = new FakeProcessSource([processRecord()]);
+    processes.readLocks.mockResolvedValue([sessionId, sessionId.toUpperCase()]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId]);
+    expect(result.suppressedProviderSessionKeys).toEqual([`codex:${sessionId}`]);
+    resolver.dispose();
+    metadata.dispose();
+  });
 
   it("accepts one proven root Codex lock when every competing lock is a proven subagent", async () => {
     const source: ProviderSessionSource = {
@@ -400,6 +438,29 @@ describe("AutomaticProviderSessionResolver", () => {
     const result = await resolver.resolve(snapshot(), client());
 
     expect(result.mappings).toEqual([]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("rejects multiple independent Codex roots as ambiguous identity evidence", async () => {
+    const metadata = new ProviderMetadataService([
+      codexWriterGraphSource({
+        [sessionId]: { parentSessionId: null, sourceKind: "cli" },
+        [secondSessionId]: { parentSessionId: null, sourceKind: "cli" }
+      })
+    ]);
+    const processes = new FakeProcessSource([processRecord()]);
+    processes.readLocks.mockResolvedValue([sessionId, secondSessionId]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId]);
+    expect(result.suppressedProviderSessionKeys).toEqual([
+      `codex:${sessionId}`,
+      `codex:${secondSessionId}`
+    ]);
     resolver.dispose();
     metadata.dispose();
   });
@@ -545,6 +606,7 @@ describe("AutomaticProviderSessionResolver", () => {
     const result = await resolver.resolve(snapshot(), client());
 
     expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId]);
     expect(processes.readLocks).not.toHaveBeenCalled();
     resolver.dispose();
     metadata.dispose();
@@ -564,7 +626,114 @@ describe("AutomaticProviderSessionResolver", () => {
     expect(result.issues).toContain(
       "Conflicting provider conversation identities were discarded for safety."
     );
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId, secondSurfaceId]);
     expect(processes.readLocks).toHaveBeenCalledTimes(4);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("does not hide a cross-surface native conflict behind an earlier process rejection", async () => {
+    const metadata = new ProviderMetadataService([codexSource()]);
+    const processes = new FakeProcessSource([processRecord(101), processRecord(102)]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+    const agents: CmuxAgentRecord[] = [
+      {
+        surfaceId,
+        state: "working",
+        source: "hook",
+        sessionId,
+        updatedAt: 1_900
+      },
+      {
+        surfaceId: secondSurfaceId,
+        state: "working",
+        source: "hook",
+        sessionId,
+        updatedAt: 1_900
+      }
+    ];
+
+    const result = await resolver.resolve(snapshotWithTwoSurfaces(), client(agents));
+
+    expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId, secondSurfaceId]);
+    expect(processes.readLocks).not.toHaveBeenCalled();
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("does not publish a native identity hidden by a process mapping that later fails revalidation", async () => {
+    const metadata = new ProviderMetadataService([
+      codexWriterGraphSource({
+        [sessionId]: { parentSessionId: null, sourceKind: "cli" },
+        [secondSessionId]: { parentSessionId: null, sourceKind: "cli" }
+      })
+    ]);
+    const processes = new FakeProcessSource([processRecord()]);
+    processes.readLocks
+      .mockResolvedValueOnce([sessionId])
+      .mockResolvedValueOnce([secondSessionId]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+    const agents: CmuxAgentRecord[] = [
+      {
+        surfaceId,
+        state: "working",
+        source: "hook",
+        sessionId: secondSessionId,
+        updatedAt: 1_900
+      },
+      {
+        surfaceId: secondSurfaceId,
+        state: "working",
+        source: "hook",
+        sessionId: secondSessionId,
+        updatedAt: 1_900
+      }
+    ];
+
+    const result = await resolver.resolve(snapshotWithTwoSurfaces(), client(agents));
+
+    expect(processes.readLocks).toHaveBeenCalledTimes(2);
+    expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId, secondSurfaceId]);
+    expect(result.suppressedProviderSessionKeys).toEqual([
+      `codex:${sessionId}`,
+      `codex:${secondSessionId}`
+    ]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("rejects a native mapping that conflicts with a replacement identity observed during final revalidation", async () => {
+    const metadata = new ProviderMetadataService([
+      codexWriterGraphSource({
+        [sessionId]: { parentSessionId: null, sourceKind: "cli" },
+        [secondSessionId]: { parentSessionId: null, sourceKind: "cli" }
+      })
+    ]);
+    const processes = new FakeProcessSource([processRecord()]);
+    processes.readLocks
+      .mockResolvedValueOnce([sessionId])
+      .mockResolvedValueOnce([secondSessionId]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+    const agents: CmuxAgentRecord[] = [
+      {
+        surfaceId: secondSurfaceId,
+        state: "working",
+        source: "hook",
+        sessionId: secondSessionId,
+        updatedAt: 1_900
+      }
+    ];
+
+    const result = await resolver.resolve(snapshotWithTwoSurfaces(), client(agents));
+
+    expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId, secondSurfaceId]);
+    expect(result.suppressedProviderSessionKeys).toEqual([
+      `codex:${sessionId}`,
+      `codex:${secondSessionId}`
+    ]);
     resolver.dispose();
     metadata.dispose();
   });
@@ -580,6 +749,7 @@ describe("AutomaticProviderSessionResolver", () => {
 
     expect(processes.readLocks).toHaveBeenCalledWith(101);
     expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId]);
     resolver.dispose();
     metadata.dispose();
   });
@@ -615,6 +785,40 @@ describe("AutomaticProviderSessionResolver", () => {
 
     expect(processes.readLocks).toHaveBeenCalledTimes(2);
     expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId]);
+    expect(result.suppressedProviderSessionKeys).toEqual([
+      `codex:${sessionId}`,
+      `codex:${secondSessionId}`
+    ]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("suppresses every bounded Codex identity when final writer locks overflow", async () => {
+    const metadata = new ProviderMetadataService([codexSource()]);
+    const process = processRecord();
+    const processes = new FakeProcessSource([process]);
+    const finalWriterIds = [
+      ...Array.from({ length: 8 }, (_, index) =>
+        `${index.toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`
+      ),
+      secondSessionId
+    ];
+    processes.readLocks
+      .mockResolvedValueOnce([sessionId])
+      .mockResolvedValueOnce(finalWriterIds);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(processes.readLocks).toHaveBeenCalledTimes(2);
+    expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId]);
+    expect(result.suppressedProviderSessionKeys).toEqual(
+      [sessionId, ...finalWriterIds]
+        .map((writerId) => `codex:${writerId}`)
+        .sort()
+    );
     resolver.dispose();
     metadata.dispose();
   });
@@ -641,6 +845,187 @@ describe("AutomaticProviderSessionResolver", () => {
       source: "claude-registry",
       provider: "claude"
     });
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("fails closed when a stable Claude process changes registry sessions before publication", async () => {
+    let markInventoryStarted: (() => void) | undefined;
+    const inventoryStarted = new Promise<void>((resolve) => {
+      markInventoryStarted = resolve;
+    });
+    let finishInventoryRead: (() => void) | undefined;
+    const inventoryRead = new Promise<void>((resolve) => {
+      finishInventoryRead = resolve;
+    });
+    const metadata = new ProviderMetadataService([]);
+    const process = processRecord(202, "claude");
+    const processes = new FakeProcessSource([process]);
+    let inventoryReads = 0;
+    vi.spyOn(processes, "listForegroundProviderProcesses").mockImplementation(async () => {
+      if (inventoryReads++ === 0) return [{ ...process }];
+      markInventoryStarted?.();
+      await inventoryRead;
+      return [{ ...process }];
+    });
+    let currentClaudeSession: ClaudeProcessSession = {
+      sessionId,
+      cwd: "/workspace/project",
+      status: "idle"
+    };
+    processes.readClaude.mockImplementation(async () => ({ ...currentClaudeSession }));
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const resolving = resolver.resolve(
+      snapshot(),
+      client([
+        {
+          surfaceId,
+          state: "working",
+          source: "hook",
+          sessionId,
+          updatedAt: 1_900
+        }
+      ])
+    );
+    await inventoryStarted;
+    currentClaudeSession = {
+      sessionId: secondSessionId,
+      cwd: "/workspace/project",
+      status: "idle"
+    };
+    finishInventoryRead?.();
+    const result = await resolving;
+
+    expect(processes.readClaude).toHaveBeenCalledTimes(2);
+    expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId]);
+    expect(result.suppressedProviderSessionKeys).toEqual([
+      `claude:${sessionId}`,
+      `claude:${secondSessionId}`
+    ]);
+    expect(result.lifecycle).toEqual([
+      expect.objectContaining({ provider: "unknown", providerSessionId: null })
+    ]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("fails closed when a Claude process exits during the final registry read", async () => {
+    let markFinalRegistryReadStarted: (() => void) | undefined;
+    const finalRegistryReadStarted = new Promise<void>((resolve) => {
+      markFinalRegistryReadStarted = resolve;
+    });
+    let finishFinalRegistryRead: (() => void) | undefined;
+    const finalRegistryRead = new Promise<void>((resolve) => {
+      finishFinalRegistryRead = resolve;
+    });
+    const metadata = new ProviderMetadataService([]);
+    const process = processRecord(202, "claude");
+    const processes = new FakeProcessSource([process]);
+    let inventoryReads = 0;
+    let processPresent = true;
+    vi.spyOn(processes, "listForegroundProviderProcesses").mockImplementation(async () => {
+      inventoryReads += 1;
+      return processPresent ? [{ ...process }] : [];
+    });
+    let registryReads = 0;
+    processes.readClaude.mockImplementation(async () => {
+      registryReads += 1;
+      if (registryReads === 2) {
+        markFinalRegistryReadStarted?.();
+        await finalRegistryRead;
+      }
+      if (!processPresent) return null;
+      return { sessionId, cwd: "/workspace/project", status: "idle" };
+    });
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const resolving = resolver.resolve(
+      snapshot(),
+      client([
+        {
+          surfaceId,
+          state: "working",
+          source: "hook",
+          sessionId,
+          updatedAt: 1_900
+        }
+      ])
+    );
+    await finalRegistryReadStarted;
+    processPresent = false;
+    finishFinalRegistryRead?.();
+    const result = await resolving;
+
+    expect(processes.readClaude).toHaveBeenCalledTimes(2);
+    expect(inventoryReads).toBe(3);
+    expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId]);
+    expect(result.lifecycle).toEqual([
+      expect.objectContaining({ provider: "unknown", providerSessionId: null })
+    ]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("fails closed when Claude changes sessions during final process revalidation", async () => {
+    let markFinalInventoryStarted: (() => void) | undefined;
+    const finalInventoryStarted = new Promise<void>((resolve) => {
+      markFinalInventoryStarted = resolve;
+    });
+    let finishFinalInventory: (() => void) | undefined;
+    const finalInventory = new Promise<void>((resolve) => {
+      finishFinalInventory = resolve;
+    });
+    const metadata = new ProviderMetadataService([]);
+    const process = processRecord(202, "claude");
+    const processes = new FakeProcessSource([process]);
+    let inventoryReads = 0;
+    vi.spyOn(processes, "listForegroundProviderProcesses").mockImplementation(async () => {
+      inventoryReads += 1;
+      if (inventoryReads === 3) {
+        markFinalInventoryStarted?.();
+        await finalInventory;
+      }
+      return [{ ...process }];
+    });
+    let currentClaudeSession: ClaudeProcessSession = {
+      sessionId,
+      cwd: "/workspace/project",
+      status: "idle"
+    };
+    processes.readClaude.mockImplementation(async () => ({ ...currentClaudeSession }));
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const resolving = resolver.resolve(
+      snapshot(),
+      client([
+        {
+          surfaceId,
+          state: "working",
+          source: "hook",
+          sessionId,
+          updatedAt: 1_900
+        }
+      ])
+    );
+    await finalInventoryStarted;
+    currentClaudeSession = {
+      sessionId: secondSessionId,
+      cwd: "/workspace/project",
+      status: "idle"
+    };
+    finishFinalInventory?.();
+    const result = await resolving;
+
+    expect(inventoryReads).toBe(3);
+    expect(processes.readClaude).toHaveBeenCalledTimes(2);
+    expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId]);
+    expect(result.lifecycle).toEqual([
+      expect.objectContaining({ provider: "unknown", providerSessionId: null })
+    ]);
     resolver.dispose();
     metadata.dispose();
   });

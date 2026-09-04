@@ -108,6 +108,8 @@ export class AgentCockpitController {
   private identityGeneration = 0;
   private identityResolvedGeneration: number | null = null;
   private automaticProviderMappings: AutomaticProviderSessionMapping[] = [];
+  private suppressedProviderSurfaceIds = new Set<string>();
+  private suppressedProviderSessionKeys = new Set<string>();
   private client: CmuxClient | null = null;
   private clientGeneration = 0;
   private focusAction: FocusSessionAction | null = null;
@@ -635,6 +637,8 @@ export class AgentCockpitController {
     if (cmuxBinaryChanged) {
       this.cancelIdentityResolution();
       this.automaticProviderMappings = [];
+      this.suppressedProviderSurfaceIds.clear();
+      this.suppressedProviderSessionKeys.clear();
       this.refreshCoordinator.dispose();
       this.client?.dispose();
       this.client = null;
@@ -650,6 +654,8 @@ export class AgentCockpitController {
     this.refreshCoordinator.dispose();
     this.cancelIdentityResolution();
     this.automaticProviderMappings = [];
+    this.suppressedProviderSurfaceIds.clear();
+    this.suppressedProviderSessionKeys.clear();
     this.client?.dispose();
     this.client = null;
     this.focusAction = null;
@@ -795,6 +801,8 @@ export class AgentCockpitController {
     this.identityResolvedGeneration = null;
     const checkedAt = snapshot.observedAt;
     this.automaticProviderMappings = [];
+    this.suppressedProviderSurfaceIds.clear();
+    this.suppressedProviderSessionKeys.clear();
     this.store.update((state) => ({
       snapshot,
       lastRefreshAt: checkedAt,
@@ -842,6 +850,8 @@ export class AgentCockpitController {
     this.cancelIdentityResolution();
     this.cancelAutomaticTaskTracking();
     this.automaticProviderMappings = [];
+    this.suppressedProviderSurfaceIds.clear();
+    this.suppressedProviderSessionKeys.clear();
     const checkedAt = Date.now();
     const message = readableError(error);
     this.store.update((state) => ({
@@ -894,6 +904,8 @@ export class AgentCockpitController {
         bindings: state.bindings,
         providerMappings: this.bindings.listProviderSessions(),
         automaticProviderMappings: this.automaticProviderMappings,
+        suppressedProviderSurfaceIds: this.suppressedProviderSurfaceIds,
+        suppressedProviderSessionKeys: this.suppressedProviderSessionKeys,
         providerMetadata: this.providerMetadata.evidence,
         detector: this.detector,
         providerEvidence: this.providerClassifier.evidence,
@@ -1446,6 +1458,18 @@ export class AgentCockpitController {
     resolution: ProviderIdentityResolution
   ): void {
     this.automaticProviderMappings = resolution.mappings;
+    this.suppressedProviderSurfaceIds = new Set(
+      (resolution.suppressedSurfaceIds ?? []).flatMap((surfaceId) => {
+        const normalized = normalizeCanonicalUuid(surfaceId);
+        return normalized === null ? [] : [normalized];
+      })
+    );
+    this.suppressedProviderSessionKeys = new Set(
+      (resolution.suppressedProviderSessionKeys ?? []).flatMap((identityKey) => {
+        const normalized = normalizeProviderSessionKey(identityKey);
+        return normalized === null ? [] : [normalized];
+      })
+    );
     const liveKeys = this.evidence.sync(
       snapshot,
       this.store.getState().notifications,
@@ -1824,6 +1848,15 @@ function previewSurfaceSignature(session: LiveSession): string {
     providerSessionId === null ? null : session.provider.provider,
     providerSessionId
   ]);
+}
+
+function normalizeProviderSessionKey(identityKey: string): string | null {
+  const separator = identityKey.indexOf(":");
+  if (separator < 1) return null;
+  const provider = identityKey.slice(0, separator);
+  if (provider !== "claude" && provider !== "codex") return null;
+  const providerSessionId = normalizeCanonicalUuid(identityKey.slice(separator + 1));
+  return providerSessionId === null ? null : `${provider}:${providerSessionId}`;
 }
 
 function automaticRunCountError(error: unknown): Error {

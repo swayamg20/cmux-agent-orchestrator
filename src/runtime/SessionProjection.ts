@@ -24,6 +24,8 @@ export interface SessionProjectionInput {
   bindings: readonly BindingRecord[];
   providerMappings: readonly ProviderSessionMapping[];
   automaticProviderMappings?: readonly AutomaticProviderSessionMapping[];
+  suppressedProviderSurfaceIds?: ReadonlySet<string>;
+  suppressedProviderSessionKeys?: ReadonlySet<string>;
   providerMetadata: ReadonlyMap<string, ProviderSessionMetadata>;
   detector: AgentDetector;
   providerEvidence: ReadonlyMap<string, ProviderDetection>;
@@ -33,6 +35,18 @@ export interface SessionProjectionInput {
 
 export function projectLiveSessions(input: SessionProjectionInput): LiveSession[] {
   const liveSurfaces = indexLiveSurfaces(input.snapshot);
+  const suppressedProviderSurfaceIds = new Set(
+    [...(input.suppressedProviderSurfaceIds ?? [])].flatMap((surfaceId) => {
+      const normalized = normalizeCanonicalUuid(surfaceId);
+      return normalized === null ? [] : [normalized];
+    })
+  );
+  const suppressedProviderSessionKeys = new Set(
+    [...(input.suppressedProviderSessionKeys ?? [])].flatMap((identityKey) => {
+      const normalized = normalizeProviderSessionKey(identityKey);
+      return normalized === null ? [] : [normalized];
+    })
+  );
   const notificationIndex = new Map<string, CmuxNotification[]>();
   for (const notification of input.notifications) {
     const key = surfaceKey(notification);
@@ -45,13 +59,23 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
   );
   const providerMappingIndex = new Map<string, ExactProviderMapping>();
   const bindingProviderSurfaceIds = new Set<string>();
-  const claimedProviderSessions = new Set<string>();
+  const claimedProviderSessions = new Set(suppressedProviderSessionKeys);
   for (const mapping of input.automaticProviderMappings ?? []) {
     if (!isCurrentSurface(mapping, liveSurfaces)) continue;
     const surfaceId = normalizeCanonicalUuid(mapping.surfaceId);
     const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
-    if (surfaceId === null || providerSessionId === null) continue;
+    if (
+      surfaceId === null ||
+      providerSessionId === null ||
+      suppressedProviderSurfaceIds.has(surfaceId)
+    ) {
+      continue;
+    }
     const providerSessionKey = `${mapping.provider}:${providerSessionId}`;
+    if (suppressedProviderSessionKeys.has(providerSessionKey)) {
+      suppressedProviderSurfaceIds.add(surfaceId);
+      continue;
+    }
     if (
       providerMappingIndex.has(surfaceId) ||
       claimedProviderSessions.has(providerSessionKey)
@@ -74,7 +98,13 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
     if (!isCurrentSurface(mapping, liveSurfaces)) continue;
     const surfaceId = normalizeCanonicalUuid(mapping.surfaceId);
     const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
-    if (surfaceId === null || providerSessionId === null) continue;
+    if (
+      surfaceId === null ||
+      providerSessionId === null ||
+      suppressedProviderSurfaceIds.has(surfaceId)
+    ) {
+      continue;
+    }
     const providerSessionKey = `${mapping.provider}:${providerSessionId}`;
     const automatic = providerMappingIndex.get(surfaceId);
     if (automatic !== undefined) {
@@ -103,6 +133,7 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
     const surfaceId = normalizeCanonicalUuid(binding.surfaceId);
     if (
       surfaceId === null ||
+      suppressedProviderSurfaceIds.has(surfaceId) ||
       !isCurrentSurface(binding, liveSurfaces) ||
       providerMappingIndex.has(surfaceId) ||
       (binding.provider !== "claude" && binding.provider !== "codex") ||
@@ -341,6 +372,15 @@ function providerDetectionSource(
   source: ProviderMatchSource
 ): ProviderDetection["source"] {
   return source === "manual" ? "provider-session-mapping" : source;
+}
+
+function normalizeProviderSessionKey(identityKey: string): string | null {
+  const separator = identityKey.indexOf(":");
+  if (separator < 1) return null;
+  const provider = identityKey.slice(0, separator);
+  if (provider !== "claude" && provider !== "codex") return null;
+  const providerSessionId = normalizeCanonicalUuid(identityKey.slice(separator + 1));
+  return providerSessionId === null ? null : `${provider}:${providerSessionId}`;
 }
 
 function conversationFor(

@@ -142,6 +142,35 @@ describe("projectLiveSessions provider conversations", () => {
     expect(project(paneId, { ...metadata, cwd: "/workspace/other" }).conversation).toBeNull();
   });
 
+  it("does not restore a saved provider identity on a surface rejected this refresh", () => {
+    const session = projectLiveSessions({
+      snapshot: snapshot(),
+      notifications: [],
+      bindings: [],
+      providerMappings: [
+        {
+          workspaceId,
+          paneId,
+          surfaceId,
+          provider: "codex",
+          providerSessionId,
+          matchedAt: "2026-09-02T00:00:00.000Z"
+        }
+      ],
+      suppressedProviderSurfaceIds: new Set([surfaceId]),
+      providerMetadata: new Map([
+        [providerMetadataKey("codex", providerSessionId), metadata]
+      ]),
+      detector: new AgentDetector(),
+      providerEvidence: new Map(),
+      previewFor: () => null,
+      evidenceFor: () => []
+    })[0]!;
+
+    expect(session.provider.sessionId).toBeNull();
+    expect(session.conversation).toBeNull();
+  });
+
   it("keeps two same-repository surfaces distinct by exact provider session ID", () => {
     const secondSurfaceId = "66666666-6666-4666-8666-666666666666";
     const secondProviderSessionId = "77777777-7777-4777-8777-777777777777";

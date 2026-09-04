@@ -28,7 +28,8 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
 
   constructor(
     private readonly runner = new SafeProcessRunner(),
-    private readonly userHome = homedir()
+    private readonly userHome = homedir(),
+    private readonly isProcessLive: (pid: number) => boolean = processIsLive
   ) {}
 
   async listForegroundProviderProcesses(signal?: AbortSignal): Promise<ProviderProcess[]> {
@@ -65,7 +66,13 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
     try {
       const snapshot = await readBoundedUtf8File(filename, REGISTRY_FILE_LIMIT, signal);
       if (!snapshot || this.disposed) return null;
-      return decodeClaudeProcessSession(JSON.parse(snapshot.content) as unknown, processRecord, cwd);
+      const session = decodeClaudeProcessSession(
+        JSON.parse(snapshot.content) as unknown,
+        processRecord,
+        cwd
+      );
+      if (session === null || !this.isProcessLive(processRecord.pid) || this.disposed) return null;
+      return session;
     } catch (error) {
       if (isAbort(error)) throw error;
       return null;
@@ -170,6 +177,15 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
         finish(ids.size === 1 ? [...ids][0]! : null);
       });
     });
+  }
+}
+
+function processIsLive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
   }
 }
 
