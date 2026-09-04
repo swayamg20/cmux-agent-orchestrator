@@ -1418,6 +1418,87 @@ describe("BindingRepository", () => {
     expect(repository.list()).toHaveLength(2);
   });
 
+  it("reuses one exact provider run after its surface is detached and reattached", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const input = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex" as const,
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    };
+
+    const first = await repository.attach(input);
+    await repository.detach(input.surfaceId);
+    const reattached = await repository.attach({
+      ...input,
+      attachedAt: "2026-09-04T00:01:00.000Z"
+    });
+
+    expect(reattached).toMatchObject({
+      isNewRun: false,
+      run: {
+        runId: first.run.runId,
+        firstAttachedAt: input.attachedAt,
+        lastAttachedAt: "2026-09-04T00:01:00.000Z"
+      }
+    });
+    expect(repository.listRuns(input.taskId)).toHaveLength(1);
+    expect(repository.list()).toHaveLength(1);
+  });
+
+  it("refuses to choose between duplicate historical runs for one exact provider session", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => structuredClone(data),
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const input = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex" as const,
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    };
+    const seed = new BindingRepository(plugin);
+    await seed.load();
+    const first = await seed.attach(input);
+    await seed.detach(input.surfaceId);
+    const machine = Object.values(
+      (data as { machines: Record<string, { runs: Array<Record<string, unknown>> }> }).machines
+    )[0]!;
+    machine.runs.push({
+      ...first.run,
+      runId: "66666666-6666-4666-8666-666666666666",
+      relation: "resume",
+      parentRunId: first.run.runId,
+      firstAttachedAt: "2026-09-04T00:01:00.000Z",
+      lastAttachedAt: "2026-09-04T00:01:00.000Z"
+    });
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+
+    await expect(
+      repository.attach({ ...input, attachedAt: "2026-09-04T00:02:00.000Z" })
+    ).rejects.toThrow("ambiguous run history");
+    expect(repository.listRuns(input.taskId)).toHaveLength(2);
+    expect(repository.list()).toEqual([]);
+  });
+
   it("does not reuse a persisted run that belongs to another task", async () => {
     let data: unknown;
     const plugin = {

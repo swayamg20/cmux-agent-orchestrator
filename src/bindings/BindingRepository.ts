@@ -929,11 +929,26 @@ function attachToMachine(
   const existing = machine.bindings.find(
     (candidate) => candidate.surfaceId === input.surfaceId
   ) ?? null;
-  const reusableRun = existing && existing.taskId === input.taskId
+  const bindingRun = existing && existing.taskId === input.taskId
     ? machine.runs.find(
         (run) => run.runId === existing.runId && run.taskId === input.taskId
       ) ?? null
     : null;
+  const exactHistoricalRuns =
+    (input.provider === "claude" || input.provider === "codex") &&
+    input.providerSessionId !== null &&
+    isCanonicalUuid(input.providerSessionId)
+      ? machine.runs.filter(
+          (run) =>
+            run.taskId === input.taskId &&
+            run.provider === input.provider &&
+            run.providerSessionId === input.providerSessionId
+        )
+      : [];
+  if (exactHistoricalRuns.length > 1) {
+    throw new Error("The task has ambiguous run history for this provider conversation.");
+  }
+  const reusableRun = exactHistoricalRuns[0] ?? bindingRun;
   const isSameProviderSession =
     reusableRun !== null &&
     reusableRun.provider === input.provider &&
