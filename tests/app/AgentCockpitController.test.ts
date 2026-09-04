@@ -767,6 +767,8 @@ describe("AgentCockpitController connection failures", () => {
       snapshot: async () => structuredClone(currentSnapshot)
     };
     const { app, markdownWrites } = memoryTaskApp();
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
     const controller = new AgentCockpitController(
       app,
       plugin,
@@ -821,6 +823,9 @@ describe("AgentCockpitController connection failures", () => {
         item.reasons.some((reason) => reason.kind === "linked-surface-missing")
       )
     ).toBe(false);
+    expect(notices.slice(noticeStart)).toContain(
+      "Reconnected 1 exact agent run to existing Work task."
+    );
     controller.dispose();
   });
 

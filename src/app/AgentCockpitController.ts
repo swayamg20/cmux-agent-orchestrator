@@ -693,10 +693,6 @@ export class AgentCockpitController {
       this.store.getState().sessions,
       this.bindings.listRuns()
     );
-    if (candidates.length === 0) {
-      if (changed) this.publishAutomaticTrackingState();
-      return;
-    }
 
     let tracked = 0;
     for (const candidate of candidates) {
