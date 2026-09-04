@@ -382,17 +382,21 @@ export class AgentCockpitController {
   async updateSettings(next: AgentCockpitSettings): Promise<void> {
     const current = this.requireSettings();
     const parsed = parseSettings({ ...next, cmuxBinaryPath: validateBinarySetting(next.cmuxBinaryPath) });
-    const disablingAutomaticTracking = current.autoTrackAgentRuns && !parsed.autoTrackAgentRuns;
-    if (disablingAutomaticTracking) {
-      // Apply an opt-out immediately so identity and metadata work that finishes
-      // while settings are being saved cannot enqueue more task writes.
+    const cmuxBinaryChanged = current.cmuxBinaryPath !== parsed.cmuxBinaryPath;
+    const taskFolderChanged = current.taskFolder !== parsed.taskFolder;
+    const suspendingAutomaticTracking =
+      current.autoTrackAgentRuns &&
+      (!parsed.autoTrackAgentRuns || cmuxBinaryChanged || taskFolderChanged);
+    if (suspendingAutomaticTracking) {
+      // Pause immediately so identity and metadata work that finishes while
+      // connection or storage settings are being saved cannot use stale context.
       this.settings = { ...current, autoTrackAgentRuns: false };
       this.cancelAutomaticTaskTracking();
     }
     try {
       await this.bindings.updateSettings(parsed);
     } catch (error) {
-      if (disablingAutomaticTracking) {
+      if (suspendingAutomaticTracking) {
         this.settings = current;
         this.cancelAutomaticTaskTracking();
         this.scheduleAutomaticTaskTracking();
@@ -401,7 +405,8 @@ export class AgentCockpitController {
     }
     this.settings = parsed;
     this.requireTaskRepository().setTaskFolder(parsed.taskFolder);
-    if (current.cmuxBinaryPath !== parsed.cmuxBinaryPath) {
+    let connectionReadyForTracking = true;
+    if (cmuxBinaryChanged) {
       this.cancelIdentityResolution();
       this.automaticProviderMappings = [];
       this.refreshCoordinator.dispose();
@@ -409,9 +414,13 @@ export class AgentCockpitController {
       this.client = null;
       this.focusAction = null;
       await this.connect();
+      connectionReadyForTracking = this.client !== null;
+      if (connectionReadyForTracking) await this.refreshNow();
     }
     await this.reloadTasks();
-    if (parsed.autoTrackAgentRuns) this.scheduleAutomaticTaskTracking();
+    if (parsed.autoTrackAgentRuns && connectionReadyForTracking) {
+      this.scheduleAutomaticTaskTracking();
+    }
   }
 
   async testConnection(): Promise<void> {

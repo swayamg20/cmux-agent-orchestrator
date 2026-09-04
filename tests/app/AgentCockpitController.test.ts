@@ -15,10 +15,12 @@ function memoryTaskApp(options: {
 } = {}): {
   app: App;
   markdownWrites: string[];
+  createdPaths: string[];
 } {
   const entries = new Map<string, TFile | TFolder>();
   const cachedFrontmatter = new Map<TFile, Record<string, unknown>>();
   const markdownWrites: string[] = [];
+  const createdPaths: string[] = [];
   let frontmatterWriteAttempts = 0;
   const line = (markdown: string, key: string): string => {
     const match = markdown.match(new RegExp(`^${key}: (.+)$`, "m"));
@@ -38,6 +40,7 @@ function memoryTaskApp(options: {
       createFolder,
       create: async (path: string, markdown: string) => {
         await options.beforeCreate?.();
+        createdPaths.push(path);
         markdownWrites.push(markdown);
         const name = path.split("/").pop() ?? path;
         const created = Object.assign(new TFile(), {
@@ -84,7 +87,7 @@ function memoryTaskApp(options: {
       }
     }
   } as unknown as App;
-  return { app, markdownWrites };
+  return { app, markdownWrites, createdPaths };
 }
 
 function snapshot(observedAt: number): CmuxSnapshot {
@@ -1055,6 +1058,56 @@ describe("AgentCockpitController connection failures", () => {
     expect(saveAttempts).toBe(2);
     expect(markdownWrites).toHaveLength(1);
     expect(controller.store.getState().tasks).toMatchObject([{ runCount: 1 }]);
+    expect(controller.store.getState().bindings).toHaveLength(1);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("reconciles into the new task folder without binding stale queued work", async () => {
+    let persisted: unknown;
+    let releaseCreate: (() => void) | undefined;
+    let markCreateStarted: (() => void) | undefined;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const { app, markdownWrites, createdPaths } = memoryTaskApp({
+      beforeCreate: async () => {
+        markCreateStarted?.();
+        await createGate;
+      }
+    });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_700)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await createStarted;
+    await controller.updateSettings({
+      ...controller.getSettings(),
+      taskFolder: "New Agent Tasks"
+    });
+    releaseCreate?.();
+    await controller.waitForBackgroundWork();
+
+    expect(markdownWrites).toHaveLength(2);
+    expect(createdPaths[0]).toMatch(/^Agent Cockpit\/Tasks\//);
+    expect(createdPaths[1]).toMatch(/^New Agent Tasks\//);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { file: { path: createdPaths[1] }, runCount: 1 }
+    ]);
     expect(controller.store.getState().bindings).toHaveLength(1);
     expect(controller.store.getState().runs).toHaveLength(1);
     controller.dispose();

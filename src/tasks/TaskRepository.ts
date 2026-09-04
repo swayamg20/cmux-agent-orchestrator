@@ -30,22 +30,33 @@ export interface EnsureTaskResult {
 
 export class TaskRepository {
   private readonly recentTasks = new Map<string, TaskRecord>();
+  private taskFolder: string;
 
   constructor(
     private readonly app: App,
-    private taskFolder: string
-  ) {}
+    taskFolder: string
+  ) {
+    this.taskFolder = normalizePath(taskFolder);
+  }
 
   setTaskFolder(taskFolder: string): void {
-    this.taskFolder = normalizePath(taskFolder);
+    const normalized = normalizePath(taskFolder);
+    if (normalized !== this.taskFolder) this.recentTasks.clear();
+    this.taskFolder = normalized;
   }
 
   list(): TaskRecord[] {
     const indexed = this.indexedTasks();
     const byId = new Map(indexed.map((task) => [task.taskId, task]));
     for (const [taskId, task] of this.recentTasks) {
-      if (this.app.vault.getAbstractFileByPath(task.file.path) === null) this.recentTasks.delete(taskId);
-      else if (!byId.has(taskId)) byId.set(taskId, task);
+      if (
+        this.app.vault.getAbstractFileByPath(task.file.path) === null ||
+        !this.isInTaskFolder(task.file.path)
+      ) {
+        this.recentTasks.delete(taskId);
+      } else if (!byId.has(taskId)) {
+        byId.set(taskId, task);
+      }
     }
     return [...byId.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
@@ -90,7 +101,8 @@ export class TaskRepository {
     if (!title) throw new Error("Task title is required.");
     if (title.length > 512) throw new Error("Task title must be 512 characters or fewer.");
     if (!isCanonicalUuid(taskId)) throw new Error("Task ID is not a canonical UUID.");
-    await this.ensureFolder(this.taskFolder);
+    const taskFolder = this.taskFolder;
+    await this.ensureFolder(taskFolder);
     const now = new Date().toISOString();
     const input: NewTaskInput = {
       title,
@@ -103,7 +115,7 @@ export class TaskRepository {
       now
     };
     const baseName = slugify(title);
-    const path = this.availablePath(baseName);
+    const path = this.availablePath(baseName, taskFolder);
     const file = await this.app.vault.create(path, createTaskMarkdown(input));
     const task: TaskRecord = {
       file,
@@ -118,7 +130,7 @@ export class TaskRepository {
       updatedAt: now,
       runCount: 0
     };
-    this.recentTasks.set(task.taskId, task);
+    if (taskFolder === this.taskFolder) this.recentTasks.set(task.taskId, task);
     return task;
   }
 
@@ -188,8 +200,8 @@ export class TaskRepository {
     await leaf.openFile(latest.file);
   }
 
-  private availablePath(baseName: string): string {
-    const folder = normalizePath(this.taskFolder);
+  private availablePath(baseName: string, taskFolder: string): string {
+    const folder = normalizePath(taskFolder);
     let counter = 1;
     let path = normalizePath(`${folder}/${baseName}.md`);
     while (this.app.vault.getAbstractFileByPath(path) !== null) {
@@ -221,13 +233,20 @@ export class TaskRepository {
     const matches = this.indexedTasks().filter((task) => task.taskId === taskId);
     const recent = this.recentTasks.get(taskId);
     if (recent === undefined) return matches;
-    if (this.app.vault.getAbstractFileByPath(recent.file.path) === null) {
+    if (
+      this.app.vault.getAbstractFileByPath(recent.file.path) === null ||
+      !this.isInTaskFolder(recent.file.path)
+    ) {
       this.recentTasks.delete(taskId);
       return matches;
     }
     return matches.some((task) => task.file.path === recent.file.path)
       ? matches
       : [...matches, recent];
+  }
+
+  private isInTaskFolder(path: string): boolean {
+    return normalizePath(path).startsWith(`${this.taskFolder}/`);
   }
 }
 

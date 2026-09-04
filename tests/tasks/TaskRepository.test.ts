@@ -106,6 +106,9 @@ describe("TaskRepository", () => {
     expect(second).toMatchObject({ created: false, task: { taskId: options.taskId } });
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain(`task-id: "${options.taskId}"`);
+
+    repository.setTaskFolder("Different Tasks");
+    expect(repository.list()).toEqual([]);
   });
 
   it("fails closed when two Markdown notes claim the same task ID", async () => {
