@@ -1,5 +1,10 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { SafeProcessRunner } from "../../src/cmux/SafeProcessRunner";
 import {
+  MacOsProcessIdentitySource,
   decodeClaudeProcessSession,
   decodeProviderProcesses,
   decodeWriterLockSessionIds
@@ -67,5 +72,29 @@ describe("macOS provider identity decoding", () => {
         directory
       )
     ).toEqual(["55555555-5555-4555-8555-555555555555"]);
+  });
+
+  it("does not read a Claude registry after the identity source is disposed", async () => {
+    const userHome = await mkdtemp(path.join(tmpdir(), "cmux-agent-identity-"));
+    const registryDirectory = path.join(userHome, ".claude", "sessions");
+    await mkdir(registryDirectory, { recursive: true });
+    await writeFile(
+      path.join(registryDirectory, `${claudeProcess.pid}.json`),
+      JSON.stringify({
+        pid: claudeProcess.pid,
+        procStart: claudeProcess.startedAt,
+        sessionId: "44444444-4444-4444-8444-444444444444",
+        cwd: "/workspace/project",
+        status: "running"
+      })
+    );
+    const source = new MacOsProcessIdentitySource(new SafeProcessRunner(), userHome);
+    source.dispose();
+
+    try {
+      await expect(source.readClaudeSession(claudeProcess, "/workspace/project")).resolves.toBeNull();
+    } finally {
+      await rm(userHome, { recursive: true, force: true });
+    }
   });
 });

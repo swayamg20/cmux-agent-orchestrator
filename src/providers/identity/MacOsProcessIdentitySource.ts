@@ -1,10 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { homedir } from "node:os";
 import path from "node:path";
-import { readFile, stat } from "node:fs/promises";
 import { clearTimeout as cancelTimer, setTimeout as startTimer } from "node:timers";
 import { ProcessExecutionError, SafeProcessRunner } from "../../cmux/SafeProcessRunner";
 import { isCanonicalUuid } from "../../security/identifiers";
+import { readBoundedUtf8File } from "../readBoundedFile";
 import { sanitizeProviderTitle } from "../titleSanitizer";
 import type {
   ClaudeProcessSession,
@@ -60,12 +60,12 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
     assertPid(processRecord.pid);
     if (processRecord.provider !== "claude") return null;
     if (!path.isAbsolute(cwd) || cwd.includes("\0")) return null;
+    if (this.disposed) return null;
     const filename = path.join(this.userHome, ".claude", "sessions", `${processRecord.pid}.json`);
     try {
-      const details = await stat(filename);
-      if (!details.isFile() || details.size > REGISTRY_FILE_LIMIT) return null;
-      const content = await readFile(filename, { encoding: "utf8", signal });
-      return decodeClaudeProcessSession(JSON.parse(content) as unknown, processRecord, cwd);
+      const snapshot = await readBoundedUtf8File(filename, REGISTRY_FILE_LIMIT, signal);
+      if (!snapshot || this.disposed) return null;
+      return decodeClaudeProcessSession(JSON.parse(snapshot.content) as unknown, processRecord, cwd);
     } catch (error) {
       if (isAbort(error)) throw error;
       return null;

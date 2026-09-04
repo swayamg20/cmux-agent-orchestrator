@@ -1,7 +1,8 @@
 import { homedir } from "node:os";
 import path from "node:path";
-import { open, readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
 import { isCanonicalUuid } from "../security/identifiers";
+import { readBoundedUtf8File } from "./readBoundedFile";
 import { sanitizeProviderTitle } from "./titleSanitizer";
 import {
   ProviderMetadataError,
@@ -80,10 +81,13 @@ export class ClaudeSessionSource implements ProviderSessionSource {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       const filename = path.join(directory, entry.name);
       try {
-        const details = await stat(filename);
-        if (!details.isFile() || details.size > MAX_SESSION_FILE_BYTES) continue;
-        const content = await readFile(filename, { encoding: "utf8", signal });
-        const decoded = decodeClaudeSession(JSON.parse(content) as unknown, cwd, details.mtimeMs);
+        const snapshot = await readBoundedUtf8File(filename, MAX_SESSION_FILE_BYTES, signal);
+        if (!snapshot) continue;
+        const decoded = decodeClaudeSession(
+          JSON.parse(snapshot.content) as unknown,
+          cwd,
+          snapshot.modifiedAt
+        );
         if (decoded) sessions.push(decoded);
       } catch (error) {
         if (isAbort(error)) throw error;
