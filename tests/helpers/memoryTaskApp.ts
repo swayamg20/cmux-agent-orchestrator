@@ -10,6 +10,7 @@ export interface MemoryTaskApp {
   app: App;
   markdownWrites: string[];
   createdPaths: string[];
+  frontmatterWriteAttempts: () => number;
 }
 
 /**
@@ -94,5 +95,10 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
       }
     }
   } as unknown as App;
-  return { app, markdownWrites, createdPaths };
+  return {
+    app,
+    markdownWrites,
+    createdPaths,
+    frontmatterWriteAttempts: () => frontmatterWriteAttempts
+  };
 }

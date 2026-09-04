@@ -1,4 +1,4 @@
-import type { App, Plugin } from "obsidian";
+import { Notice, type App, type Plugin } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
 import { AgentCockpitController } from "../../src/app/AgentCockpitController";
 import { BindingRepository } from "../../src/bindings/BindingRepository";
@@ -877,6 +877,47 @@ describe("AgentCockpitController connection failures", () => {
     expect(controller.store.getState().bindings).toHaveLength(1);
     expect(controller.store.getState().runs).toHaveLength(1);
     controller.dispose();
+  });
+
+  it("reports a persistent automatic run-count failure only once while retries continue", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    notices.length = 0;
+    const { app, frontmatterWriteAttempts } = memoryTaskApp({ failFrontmatterWrites: 100 });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_100)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    try {
+      await controller.initialize();
+      await controller.waitForBackgroundWork();
+      await controller.refreshNow();
+      await controller.waitForBackgroundWork();
+
+      expect(controller.store.getState().tasks).toMatchObject([{ runCount: 0 }]);
+      expect(controller.store.getState().bindings).toHaveLength(1);
+      expect(frontmatterWriteAttempts()).toBeGreaterThan(1);
+      expect(
+        notices.filter((message) =>
+          message.startsWith(
+            "Automatic task tracking could not finish: The automatic task run count"
+          )
+        )
+      ).toHaveLength(1);
+    } finally {
+      controller.dispose();
+      notices.length = 0;
+    }
   });
 
   it("cancels stale automatic tracking work as soon as the user opts out", async () => {

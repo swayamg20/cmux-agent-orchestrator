@@ -10,6 +10,10 @@ All notable changes to this project will be documented in this file.
 - Show the memory-only provider conversation title on its live Work card while keeping automatically written Markdown free of conversation and terminal titles.
 - Add a default-on setting to disable creation of new automatic tasks without changing existing tasks or running agents.
 
+### Fixed
+
+- Keep retrying recoverable automatic run-count writes without repeating the same failure notice on every reconciliation.
+
 ### Security
 
 - Re-resolve the complete live cmux tuple and exact provider identity before persisting each automatic binding.

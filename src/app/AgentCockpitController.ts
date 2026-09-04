@@ -71,7 +71,7 @@ export class AgentCockpitController {
   private identityWork: Promise<void> = Promise.resolve();
   private automaticTrackingWork: Promise<void> = Promise.resolve();
   private automaticTrackingGeneration = 0;
-  private readonly reportedAutomaticTrackingIssues = new Set<string>();
+  private readonly reportedAutomaticTrackingIssues = new Map<string, string>();
   private identityAbortController: AbortController | null = null;
   private identityGeneration = 0;
   private automaticProviderMappings: AutomaticProviderSessionMapping[] = [];
@@ -735,7 +735,7 @@ export class AgentCockpitController {
           } catch (error) {
             this.reportAutomaticTrackingIssue(
               `${issueKey}:run-count`,
-              new Error(`The run was tracked, but its task count was not updated: ${readableError(error)}`)
+              automaticRunCountError(error)
             );
           }
         }
@@ -782,7 +782,7 @@ export class AgentCockpitController {
       } catch (error) {
         this.reportAutomaticTrackingIssue(
           issueKey,
-          new Error(`The tracked run count could not be repaired: ${readableError(error)}`)
+          automaticRunCountError(error)
         );
       }
     }
@@ -852,16 +852,13 @@ export class AgentCockpitController {
 
   private reportAutomaticTrackingIssue(key: string, error: unknown): void {
     const message = readableError(error);
-    const signature = `${key}:${message}`;
-    if (this.reportedAutomaticTrackingIssues.has(signature)) return;
-    this.reportedAutomaticTrackingIssues.add(signature);
+    if (this.reportedAutomaticTrackingIssues.get(key) === message) return;
+    this.reportedAutomaticTrackingIssues.set(key, message);
     new Notice(`Automatic task tracking could not finish: ${message}`);
   }
 
   private clearAutomaticTrackingIssues(key: string): void {
-    for (const signature of this.reportedAutomaticTrackingIssues) {
-      if (signature.startsWith(`${key}:`)) this.reportedAutomaticTrackingIssues.delete(signature);
-    }
+    this.reportedAutomaticTrackingIssues.delete(key);
   }
 
   private scheduleProviderIdentityResolution(snapshot: CmuxSnapshot): void {
@@ -1089,6 +1086,10 @@ export class AgentCockpitController {
     if (this.taskRepository === null) throw new Error("Task repository is not initialized.");
     return this.taskRepository;
   }
+}
+
+function automaticRunCountError(error: unknown): Error {
+  return new Error(`The automatic task run count could not be updated: ${readableError(error)}`);
 }
 
 function freshHealth(checkedAt: number, message: string): SourceHealth {
