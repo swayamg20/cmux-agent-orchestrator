@@ -1740,6 +1740,58 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not forget a newer conversation match from a stale session card", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const initialRepository = new BindingRepository(plugin);
+    await initialRepository.load();
+    await initialRepository.updateSettings({
+      ...initialRepository.getSettings(),
+      autoTrackAgentRuns: false
+    });
+    await initialRepository.mapProviderSession({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      matchedAt: "2026-09-04T00:00:00.000Z"
+    });
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_375)),
+      new ProviderMetadataService([emptyCodexMetadataSource()])
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const staleSession = controller.store.getState().sessions[0]!;
+    const controllerBindings = (
+      controller as unknown as { bindings: BindingRepository }
+    ).bindings;
+    await controllerBindings.mapProviderSession({
+      workspaceId: staleSession.workspaceId,
+      paneId: staleSession.paneId,
+      surfaceId: staleSession.surfaceId,
+      provider: "codex",
+      providerSessionId: "66666666-6666-4666-8666-666666666666",
+      matchedAt: "2026-09-04T00:01:00.000Z"
+    });
+
+    await controller.forgetConversation(staleSession);
+
+    expect(controllerBindings.listProviderSessions()).toMatchObject([
+      { providerSessionId: "66666666-6666-4666-8666-666666666666" }
+    ]);
+    controller.dispose();
+  });
+
   it("rejects a stale manual attachment after the provider conversation changes", async () => {
     let observedAt = 5_400;
     let providerSessionId = "55555555-5555-4555-8555-55555555555a";

@@ -254,7 +254,7 @@ export class AgentCockpitController {
 
   async forgetConversation(session: LiveSession): Promise<void> {
     try {
-      const current = this.resolveCurrentSession(session);
+      const current = this.resolveCurrentBindingSession(session);
       const mapping = this.bindings
         .listProviderSessions()
         .find(
@@ -267,7 +267,17 @@ export class AgentCockpitController {
         new Notice("This surface has no saved provider conversation match.");
         return;
       }
-      await this.bindings.forgetProviderSession(current.surfaceId);
+      if (
+        session.provider.source !== "provider-session-mapping" ||
+        session.provider.sessionId === null ||
+        mapping.provider !== session.provider.provider ||
+        !canonicalUuidEquals(mapping.providerSessionId, session.provider.sessionId)
+      ) {
+        throw new Error("The provider conversation changed before its saved match could be forgotten.");
+      }
+      if (!(await this.bindings.forgetProviderSessionIfUnchanged(mapping))) {
+        throw new Error("The provider conversation changed before its saved match could be forgotten.");
+      }
       this.providerMetadata.forget(mapping.provider, mapping.providerSessionId);
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
       this.recomputeSessions();

@@ -367,24 +367,23 @@ export class BindingRepository {
       const removed = machine.providerSessions.find(
         (mapping) => mapping.surfaceId === normalizedSurfaceId
       );
-      machine.providerSessions = machine.providerSessions.filter(
-        (mapping) => mapping.surfaceId !== normalizedSurfaceId
-      );
-      const binding = machine.bindings.find((candidate) => candidate.surfaceId === normalizedSurfaceId);
-      if (
-        removed &&
-        binding?.provider === removed.provider &&
-        binding.providerSessionId === removed.providerSessionId
-      ) {
-        binding.providerSessionId = null;
-        const run = machine.runs.find((candidate) => candidate.runId === binding.runId);
-        if (
-          run?.provider === removed.provider &&
-          run.providerSessionId === removed.providerSessionId
-        ) {
-          run.providerSessionId = null;
-        }
-      }
+      if (removed) forgetProviderSessionFromMachine(machine, removed);
+    });
+  }
+
+  async forgetProviderSessionIfUnchanged(expected: ProviderSessionMapping): Promise<boolean> {
+    if (!isProviderSessionMapping(expected)) {
+      throw new Error("Expected provider session mapping contains an invalid canonical identity or value.");
+    }
+    const normalizedExpected = normalizeProviderSessionMapping(expected);
+    return this.commitConditional((data) => {
+      const machine = this.machineFor(data);
+      const current = machine.providerSessions.find(
+        (mapping) => mapping.surfaceId === normalizedExpected.surfaceId
+      ) ?? null;
+      if (!sameProviderSessionMapping(current, normalizedExpected)) return false;
+      forgetProviderSessionFromMachine(machine, normalizedExpected);
+      return true;
     });
   }
 
@@ -783,4 +782,47 @@ function sameBinding(left: BindingRecord | null, right: BindingRecord | null): b
     left.providerSessionId === right.providerSessionId &&
     left.attachedAt === right.attachedAt
   );
+}
+
+function sameProviderSessionMapping(
+  left: ProviderSessionMapping | null,
+  right: ProviderSessionMapping | null
+): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.workspaceId === right.workspaceId &&
+    left.paneId === right.paneId &&
+    left.surfaceId === right.surfaceId &&
+    left.provider === right.provider &&
+    left.providerSessionId === right.providerSessionId &&
+    left.matchedAt === right.matchedAt
+  );
+}
+
+function forgetProviderSessionFromMachine(
+  machine: MachineBindings,
+  removed: ProviderSessionMapping
+): void {
+  machine.providerSessions = machine.providerSessions.filter(
+    (mapping) => mapping.surfaceId !== removed.surfaceId
+  );
+  const binding = machine.bindings.find(
+    (candidate) =>
+      candidate.workspaceId === removed.workspaceId &&
+      candidate.paneId === removed.paneId &&
+      candidate.surfaceId === removed.surfaceId
+  );
+  if (
+    binding?.provider === removed.provider &&
+    binding.providerSessionId === removed.providerSessionId
+  ) {
+    binding.providerSessionId = null;
+    const run = machine.runs.find((candidate) => candidate.runId === binding.runId);
+    if (
+      run?.provider === removed.provider &&
+      run.providerSessionId === removed.providerSessionId
+    ) {
+      run.providerSessionId = null;
+    }
+  }
 }
