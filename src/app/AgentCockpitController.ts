@@ -40,6 +40,7 @@ import type { CreateTaskOptions } from "../tasks/TaskRepository";
 import { TaskRepository } from "../tasks/TaskRepository";
 import type { TaskRecord, WorkflowStatus } from "../tasks/TaskSchema";
 import {
+  automaticTaskId,
   automaticTaskTitle,
   exactTrackableIdentity,
   providerSessionKey,
@@ -646,13 +647,16 @@ export class AgentCockpitController {
       return;
     }
 
+    let changed = await this.repairAutomaticRunCounts();
     const candidates = selectAutomaticTrackCandidates(
       this.store.getState().sessions,
       this.bindings.listRuns()
     );
-    if (candidates.length === 0) return;
+    if (candidates.length === 0) {
+      if (changed) this.publishAutomaticTrackingState();
+      return;
+    }
 
-    let changed = false;
     let tracked = 0;
     for (const candidate of candidates) {
       if (this.disposed || this.settings?.autoTrackAgentRuns !== true) break;
@@ -707,18 +711,55 @@ export class AgentCockpitController {
     }
 
     if (changed) {
-      this.store.update({
-        tasks: this.taskRepository.list(),
-        bindings: this.bindings.list(),
-        runs: this.bindings.listRuns()
-      });
-      this.recomputeSessions();
+      this.publishAutomaticTrackingState();
     }
     if (tracked > 0) {
       new Notice(
         `Automatically tracked ${String(tracked)} exact agent ${tracked === 1 ? "run" : "runs"} on the Work board.`
       );
     }
+  }
+
+  private async repairAutomaticRunCounts(): Promise<boolean> {
+    const repository = this.taskRepository;
+    if (repository === null) return false;
+    const tasks = new Map(repository.list().map((task) => [task.taskId, task] as const));
+    let changed = false;
+
+    for (const run of this.bindings.listRuns()) {
+      if (
+        (run.provider !== "claude" && run.provider !== "codex") ||
+        run.providerSessionId === null ||
+        !isCanonicalUuid(run.providerSessionId) ||
+        run.taskId !== automaticTaskId(run.provider, run.providerSessionId)
+      ) {
+        continue;
+      }
+      const task = tasks.get(run.taskId);
+      if (task === undefined || task.runCount >= 1) continue;
+      const issueKey = `${providerSessionKey(run.provider, run.providerSessionId)}:run-count`;
+      try {
+        await repository.ensureRunCountAtLeast(task, 1);
+        changed = true;
+        this.clearAutomaticTrackingIssues(issueKey);
+      } catch (error) {
+        this.reportAutomaticTrackingIssue(
+          issueKey,
+          new Error(`The tracked run count could not be repaired: ${readableError(error)}`)
+        );
+      }
+    }
+    return changed;
+  }
+
+  private publishAutomaticTrackingState(): void {
+    if (this.taskRepository === null) return;
+    this.store.update({
+      tasks: this.taskRepository.list(),
+      bindings: this.bindings.list(),
+      runs: this.bindings.listRuns()
+    });
+    this.recomputeSessions();
   }
 
   private resolveCurrentAutomaticCandidate(candidate: AutomaticTrackCandidate): LiveSession | null {
@@ -848,6 +889,7 @@ export class AgentCockpitController {
       health: { ...state.health, lifecycle }
     }));
     this.recomputeSessions();
+    this.scheduleAutomaticTaskTracking();
   }
 
   private cancelIdentityResolution(): void {

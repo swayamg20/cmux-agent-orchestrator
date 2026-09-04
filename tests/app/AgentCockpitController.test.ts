@@ -1,5 +1,5 @@
 import { TFile, TFolder, type App, type Plugin } from "obsidian";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentCockpitController } from "../../src/app/AgentCockpitController";
 import { BindingRepository } from "../../src/bindings/BindingRepository";
 import { CmuxClient } from "../../src/cmux/CmuxClient";
@@ -9,10 +9,14 @@ import { ProviderMetadataService } from "../../src/providers/ProviderMetadataSer
 import type { ProviderSessionResolver } from "../../src/providers/identity/types";
 import type { ProviderSessionSource } from "../../src/providers/types";
 
-function memoryTaskApp(): { app: App; markdownWrites: string[] } {
+function memoryTaskApp(options: { failFrontmatterWrites?: number } = {}): {
+  app: App;
+  markdownWrites: string[];
+} {
   const entries = new Map<string, TFile | TFolder>();
   const cachedFrontmatter = new Map<TFile, Record<string, unknown>>();
   const markdownWrites: string[] = [];
+  let frontmatterWriteAttempts = 0;
   const line = (markdown: string, key: string): string => {
     const match = markdown.match(new RegExp(`^${key}: (.+)$`, "m"));
     if (!match?.[1]) throw new Error(`Missing ${key} in task fixture.`);
@@ -66,6 +70,10 @@ function memoryTaskApp(): { app: App; markdownWrites: string[] } {
         file: TFile,
         update: (frontmatter: Record<string, unknown>) => void
       ) => {
+        frontmatterWriteAttempts += 1;
+        if (frontmatterWriteAttempts <= (options.failFrontmatterWrites ?? 0)) {
+          throw new Error("simulated task frontmatter write failure");
+        }
         const frontmatter = cachedFrontmatter.get(file);
         if (!frontmatter) throw new Error("Missing task frontmatter fixture.");
         update(frontmatter);
@@ -728,6 +736,159 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("tracks an exact session before optional provider-title metadata finishes loading", async () => {
+    let persisted: unknown;
+    let finishMetadata: ((sessions: []) => void) | undefined;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => new Promise<[]>((resolve) => {
+        finishMetadata = resolve;
+      }),
+      get: async () => null,
+      dispose: () => undefined
+    };
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        checkedAt: currentSnapshot.observedAt + 1,
+        nativeLifecycleAvailable: false,
+        issues: [],
+        mappings: [
+          {
+            workspaceId: "22222222-2222-4222-8222-222222222222",
+            paneId: "33333333-3333-4333-8333-333333333333",
+            surfaceId: "44444444-4444-4444-8444-444444444444",
+            provider: "codex",
+            providerSessionId: "55555555-5555-4555-8555-555555555555",
+            matchSource: "codex-writer-lock",
+            confidence: "high",
+            explanation: "Verified exact writer identity.",
+            observedAt: currentSnapshot.observedAt + 1
+          }
+        ],
+        lifecycle: []
+      }),
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      probe: async () => ({
+        binaryPath: "/cmux",
+        versionText: "cmux 0.62.2",
+        capabilities: {
+          version: 2,
+          protocol: "cmux-socket",
+          accessMode: "password",
+          methods: new Set()
+        },
+        latencyMs: 1
+      }),
+      snapshot: async () => snapshot(3_000),
+      notifications: async () => [],
+      readPreview: async (target) => ({ ...target, text: "", observedAt: 3_000, truncated: false }),
+      focusedTarget: async () => null,
+      focus: async () => undefined,
+      dispose: () => undefined
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([source]),
+      resolver
+    );
+
+    await controller.initialize();
+    await vi.waitFor(() => {
+      expect(controller.store.getState().tasks).toHaveLength(1);
+      expect(controller.store.getState().bindings).toHaveLength(1);
+    });
+    expect(markdownWrites).toHaveLength(1);
+
+    finishMetadata?.([]);
+    await controller.waitForBackgroundWork();
+    controller.dispose();
+  });
+
+  it("repairs a tracked automatic task after a transient run-count write failure", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async () => null,
+      dispose: () => undefined
+    };
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        checkedAt: currentSnapshot.observedAt + 1,
+        nativeLifecycleAvailable: false,
+        issues: [],
+        mappings: [
+          {
+            workspaceId: "22222222-2222-4222-8222-222222222222",
+            paneId: "33333333-3333-4333-8333-333333333333",
+            surfaceId: "44444444-4444-4444-8444-444444444444",
+            provider: "codex",
+            providerSessionId: "55555555-5555-4555-8555-555555555555",
+            matchSource: "codex-writer-lock",
+            confidence: "high",
+            explanation: "Verified exact writer identity.",
+            observedAt: currentSnapshot.observedAt + 1
+          }
+        ],
+        lifecycle: []
+      }),
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      probe: async () => ({
+        binaryPath: "/cmux",
+        versionText: "cmux 0.62.2",
+        capabilities: {
+          version: 2,
+          protocol: "cmux-socket",
+          accessMode: "password",
+          methods: new Set()
+        },
+        latencyMs: 1
+      }),
+      snapshot: async () => snapshot(4_000),
+      notifications: async () => [],
+      readPreview: async (target) => ({ ...target, text: "", observedAt: 4_000, truncated: false }),
+      focusedTarget: async () => null,
+      focus: async () => undefined,
+      dispose: () => undefined
+    };
+    const { app, markdownWrites } = memoryTaskApp({ failFrontmatterWrites: 1 });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([source]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().tasks).toMatchObject([{ runCount: 1 }]);
+    expect(controller.store.getState().bindings).toHaveLength(1);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    controller.dispose();
+  });
+
   it("reuses the deterministic note when binding persistence recovers on a later refresh", async () => {
     let persisted: unknown;
     let saveAttempts = 0;
@@ -736,7 +897,7 @@ describe("AgentCockpitController connection failures", () => {
       loadData: async () => persisted,
       saveData: async (next: unknown) => {
         saveAttempts += 1;
-        if (saveAttempts === 1) throw new Error("simulated plugin-data write failure");
+        if (saveAttempts <= 2) throw new Error("simulated plugin-data write failure");
         persisted = structuredClone(next);
       }
     } as unknown as Plugin;
@@ -805,7 +966,7 @@ describe("AgentCockpitController connection failures", () => {
 
     await controller.refreshNow();
     await controller.waitForBackgroundWork();
-    expect(saveAttempts).toBe(2);
+    expect(saveAttempts).toBe(3);
     expect(markdownWrites).toHaveLength(1);
     expect(controller.store.getState().tasks).toMatchObject([{ runCount: 1 }]);
     expect(controller.store.getState().bindings).toHaveLength(1);
@@ -813,7 +974,7 @@ describe("AgentCockpitController connection failures", () => {
 
     await controller.refreshNow();
     await controller.waitForBackgroundWork();
-    expect(saveAttempts).toBe(2);
+    expect(saveAttempts).toBe(3);
     expect(markdownWrites).toHaveLength(1);
     controller.dispose();
   });

@@ -107,4 +107,33 @@ describe("TaskRepository", () => {
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain(`task-id: "${options.taskId}"`);
   });
+
+  it("fails closed when two Markdown notes claim the same task ID", async () => {
+    const first = file("Agent Cockpit/Tasks/first.md");
+    const second = file("Agent Cockpit/Tasks/second.md");
+    const root = folder("Agent Cockpit/Tasks", [first, second]);
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const app = {
+      vault: {
+        getAbstractFileByPath: (path: string) => (path === root.path ? root : null)
+      },
+      metadataCache: {
+        getFileCache: (candidate: TFile) => ({
+          frontmatter: {
+            "agent-cockpit": "task",
+            "schema-version": 1,
+            "task-id": taskId,
+            title: candidate.basename,
+            "workflow-status": "active"
+          }
+        })
+      }
+    } as unknown as App;
+    const repository = new TaskRepository(app, root.path);
+
+    expect(() => repository.findById(taskId)).toThrow("The task ID is duplicated in the vault.");
+    await expect(
+      repository.ensure({ taskId, title: "Codex run · repository", repository: "/repository" })
+    ).rejects.toThrow("The automatic task ID is duplicated in the vault.");
+  });
 });

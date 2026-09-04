@@ -41,9 +41,7 @@ export class TaskRepository {
   }
 
   list(): TaskRecord[] {
-    const indexed = this.taskFiles()
-      .map((file) => parseTaskRecord(file, this.app.metadataCache.getFileCache(file)?.frontmatter))
-      .filter((task): task is TaskRecord => task !== null);
+    const indexed = this.indexedTasks();
     const byId = new Map(indexed.map((task) => [task.taskId, task]));
     for (const [taskId, task] of this.recentTasks) {
       if (this.app.vault.getAbstractFileByPath(task.file.path) === null) this.recentTasks.delete(taskId);
@@ -68,7 +66,7 @@ export class TaskRepository {
   }
 
   findById(taskId: string): TaskRecord {
-    const matches = this.list().filter((task) => task.taskId === taskId);
+    const matches = this.findMatchesById(taskId);
     if (matches.length !== 1) {
       throw new Error(matches.length === 0 ? "The linked task no longer exists." : "The task ID is duplicated in the vault.");
     }
@@ -81,7 +79,7 @@ export class TaskRepository {
 
   async ensure(options: EnsureTaskOptions): Promise<EnsureTaskResult> {
     if (!isCanonicalUuid(options.taskId)) throw new Error("Task ID is not a canonical UUID.");
-    const matches = this.list().filter((task) => task.taskId === options.taskId);
+    const matches = this.findMatchesById(options.taskId);
     if (matches.length > 1) throw new Error("The automatic task ID is duplicated in the vault.");
     if (matches[0]) return { task: matches[0], created: false };
     return { task: await this.createWithId(options, options.taskId), created: true };
@@ -156,6 +154,34 @@ export class TaskRepository {
     return nextCount;
   }
 
+  async ensureRunCountAtLeast(task: TaskRecord, minimum: number): Promise<number> {
+    if (!Number.isSafeInteger(minimum) || minimum < 0 || minimum > 1_000_000) {
+      throw new Error("Minimum run count must be an integer between 0 and 1000000.");
+    }
+    const latest = this.findById(task.taskId);
+    if (latest.runCount >= minimum) return latest.runCount;
+
+    let nextCount = latest.runCount;
+    let changed = false;
+    const updatedAt = new Date().toISOString();
+    await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
+      if (frontmatter["task-id"] !== task.taskId) throw new Error("Task identity changed before the update.");
+      const current =
+        typeof frontmatter["run-count"] === "number" &&
+        Number.isFinite(frontmatter["run-count"]) &&
+        frontmatter["run-count"] >= 0
+          ? Math.min(Math.floor(frontmatter["run-count"]), 1_000_000)
+          : 0;
+      nextCount = Math.max(current, minimum);
+      if (nextCount === current) return;
+      changed = true;
+      frontmatter["run-count"] = nextCount;
+      frontmatter["updated-at"] = updatedAt;
+    });
+    if (changed) this.recentTasks.set(task.taskId, { ...latest, runCount: nextCount, updatedAt });
+    return nextCount;
+  }
+
   async open(task: TaskRecord): Promise<void> {
     const latest = this.findById(task.taskId);
     const leaf = this.app.workspace.getLeaf("tab");
@@ -183,6 +209,25 @@ export class TaskRepository {
       if (existing === null) await this.app.vault.createFolder(current);
       else if (!(existing instanceof TFolder)) throw new Error(`${current} is not a folder.`);
     }
+  }
+
+  private indexedTasks(): TaskRecord[] {
+    return this.taskFiles()
+      .map((file) => parseTaskRecord(file, this.app.metadataCache.getFileCache(file)?.frontmatter))
+      .filter((task): task is TaskRecord => task !== null);
+  }
+
+  private findMatchesById(taskId: string): TaskRecord[] {
+    const matches = this.indexedTasks().filter((task) => task.taskId === taskId);
+    const recent = this.recentTasks.get(taskId);
+    if (recent === undefined) return matches;
+    if (this.app.vault.getAbstractFileByPath(recent.file.path) === null) {
+      this.recentTasks.delete(taskId);
+      return matches;
+    }
+    return matches.some((task) => task.file.path === recent.file.path)
+      ? matches
+      : [...matches, recent];
   }
 }
 
