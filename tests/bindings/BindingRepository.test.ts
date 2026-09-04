@@ -203,7 +203,7 @@ describe("BindingRepository", () => {
     expect(repository.listProviderSessions()).toEqual([]);
   });
 
-  it("retains the current machine when synced data contains the maximum other namespaces", async () => {
+  it("refuses to truncate foreign namespaces when synced data exceeds the machine limit", async () => {
     let data: unknown;
     const plugin = {
       loadData: async () => data,
@@ -243,10 +243,426 @@ describe("BindingRepository", () => {
     await reloaded.load();
     expect(reloaded.list()).toHaveLength(1);
 
-    await reloaded.updateSettings(reloaded.getSettings());
+    await expect(reloaded.updateSettings(reloaded.getSettings())).rejects.toThrow(
+      /too many machine namespaces/
+    );
     const persistedMachines = (data as { machines: Record<string, unknown> }).machines;
-    expect(Object.keys(persistedMachines)).toHaveLength(100);
+    expect(Object.keys(persistedMachines)).toHaveLength(101);
     expect(persistedMachines[currentMachineId]).toBeDefined();
+    expect(reloaded.list()).toHaveLength(1);
+  });
+
+  it("preserves a foreign machine namespace added after this repository loaded", async () => {
+    let persisted: {
+      schemaVersion: number;
+      settings: Record<string, unknown>;
+      machines: Record<string, unknown>;
+    } = { schemaVersion: 3, settings: {}, machines: {} };
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next) as typeof persisted;
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const currentMachineId = (
+      repository as unknown as { currentMachineId: string }
+    ).currentMachineId;
+    const foreignMachineId =
+      currentMachineId === "00000000000000000000"
+        ? "11111111111111111111"
+        : "00000000000000000000";
+    const foreignMachine = {
+      bindings: [],
+      runs: [
+        {
+          runId: "11111111-1111-4111-8111-111111111111",
+          taskId: "22222222-2222-4222-8222-222222222222",
+          provider: "codex",
+          providerSessionId: "33333333-3333-4333-8333-333333333333",
+          relation: "initial",
+          parentRunId: null,
+          firstAttachedAt: "2026-09-04T00:00:00.000Z",
+          lastAttachedAt: "2026-09-04T00:00:00.000Z"
+        }
+      ],
+      providerSessions: []
+    };
+    persisted.machines[foreignMachineId] = structuredClone(foreignMachine);
+
+    await repository.updateSettings({
+      ...repository.getSettings(),
+      staleAfterMs: 60 * 60_000
+    });
+
+    expect(persisted.machines[foreignMachineId]).toEqual(foreignMachine);
+  });
+
+  it("preserves a foreign namespace update while attaching local work", async () => {
+    let persisted: {
+      schemaVersion: number;
+      settings: Record<string, unknown>;
+      machines: Record<string, unknown>;
+    } = { schemaVersion: 3, settings: {}, machines: {} };
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next) as typeof persisted;
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    const currentMachineId = (
+      repository as unknown as { currentMachineId: string }
+    ).currentMachineId;
+    const foreignMachineId =
+      currentMachineId === "00000000000000000000"
+        ? "11111111111111111111"
+        : "00000000000000000000";
+    const originalForeignMachine = {
+      bindings: [],
+      runs: [],
+      providerSessions: []
+    };
+    persisted.machines[foreignMachineId] = structuredClone(originalForeignMachine);
+    await repository.load();
+    const updatedForeignMachine = {
+      ...originalForeignMachine,
+      runs: [
+        {
+          runId: "11111111-1111-4111-8111-111111111111",
+          taskId: "22222222-2222-4222-8222-222222222222",
+          provider: "claude",
+          providerSessionId: "33333333-3333-4333-8333-333333333333",
+          relation: "resume",
+          parentRunId: null,
+          firstAttachedAt: "2026-09-04T00:00:00.000Z",
+          lastAttachedAt: "2026-09-04T00:01:00.000Z"
+        }
+      ]
+    };
+    persisted.machines[foreignMachineId] = structuredClone(updatedForeignMachine);
+
+    await repository.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      paneId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      surfaceId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      provider: "codex",
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:02:00.000Z"
+    });
+
+    expect(persisted.machines[foreignMachineId]).toEqual(updatedForeignMachine);
+    expect(repository.list()).toHaveLength(1);
+  });
+
+  it("serializes concurrent repositories before rebasing their saves", async () => {
+    let persisted: unknown = { schemaVersion: 3, settings: {}, machines: {} };
+    let saveCount = 0;
+    let releaseFirstSave: (() => void) | undefined;
+    let markFirstSaveStarted: (() => void) | undefined;
+    const firstSaveStarted = new Promise<void>((resolve) => {
+      markFirstSaveStarted = resolve;
+    });
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        if (saveCount === 1) {
+          markFirstSaveStarted?.();
+          await firstSaveGate;
+        }
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const first = new BindingRepository(plugin);
+    const second = new BindingRepository(plugin);
+    await first.load();
+    await second.load();
+    const common = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      paneId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      provider: "codex" as const,
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    };
+
+    const firstAttach = first.attach({
+      ...common,
+      surfaceId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+    });
+    await firstSaveStarted;
+    const secondAttach = second.attach({
+      ...common,
+      taskId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      surfaceId: "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    releaseFirstSave?.();
+
+    await Promise.all([firstAttach, secondAttach]);
+    const reloaded = new BindingRepository(plugin);
+    await reloaded.load();
+    expect(reloaded.list().map((binding) => binding.surfaceId).sort()).toEqual([
+      "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    ]);
+  });
+
+  it("rebases a conditional local attachment onto another repository's saved binding", async () => {
+    let persisted: unknown = { schemaVersion: 3, settings: {}, machines: {} };
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const first = new BindingRepository(plugin);
+    const second = new BindingRepository(plugin);
+    await first.load();
+    await second.load();
+    const common = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      paneId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      provider: "codex" as const,
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    };
+    await second.attach({
+      ...common,
+      surfaceId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+    });
+
+    await expect(
+      first.attachIfSurfaceUnchanged(
+        {
+          ...common,
+          taskId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+          surfaceId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          attachedAt: "2026-09-04T00:01:00.000Z"
+        },
+        null
+      )
+    ).resolves.toMatchObject({ isNewRun: true });
+
+    expect(first.list().map((binding) => binding.surfaceId).sort()).toEqual([
+      "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    ]);
+  });
+
+  it("rejects a stale conditional detach after another repository replaced the binding", async () => {
+    let persisted: unknown = { schemaVersion: 3, settings: {}, machines: {} };
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const first = new BindingRepository(plugin);
+    await first.load();
+    const common = {
+      workspaceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      paneId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      surfaceId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      provider: "codex" as const,
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    };
+    const original = await first.attach({
+      ...common,
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    });
+    const second = new BindingRepository(plugin);
+    await second.load();
+    await second.attach({
+      ...common,
+      taskId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      attachedAt: "2026-09-04T00:01:00.000Z"
+    });
+    const savesBeforeStaleDetach = saveCount;
+
+    await expect(first.detachIfUnchanged(original.binding)).resolves.toBe(false);
+
+    expect(saveCount).toBe(savesBeforeStaleDetach);
+    expect(first.list()).toMatchObject([
+      { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }
+    ]);
+    const reloaded = new BindingRepository(plugin);
+    await reloaded.load();
+    expect(reloaded.list()).toMatchObject([
+      { taskId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }
+    ]);
+  });
+
+  it("refuses to downgrade a newer persisted schema during an unrelated save", async () => {
+    const persisted = {
+      schemaVersion: 4,
+      settings: {},
+      machines: {},
+      futureState: { enabled: true }
+    };
+    const saveData = vi.fn(async () => undefined);
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+
+    await expect(
+      repository.updateSettings({ ...repository.getSettings(), previewLines: 40 })
+    ).rejects.toThrow(/newer schema|cannot be saved safely/);
+
+    expect(saveData).not.toHaveBeenCalled();
+    expect(persisted).toMatchObject({ schemaVersion: 4, futureState: { enabled: true } });
+  });
+
+  it("refuses to strip unknown persisted fields during an unrelated save", async () => {
+    const persisted = {
+      schemaVersion: 3,
+      settings: {},
+      machines: {},
+      futureState: { enabled: true }
+    };
+    const saveData = vi.fn(async () => undefined);
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+
+    await expect(
+      repository.updateSettings({ ...repository.getSettings(), previewLines: 40 })
+    ).rejects.toThrow(/unknown persisted fields|cannot be saved safely/);
+
+    expect(saveData).not.toHaveBeenCalled();
+  });
+
+  it("refuses to discard an invalid foreign-machine record during a local save", async () => {
+    const repositorySeed = {
+      schemaVersion: 3,
+      settings: {},
+      machines: {
+        "00000000000000000000": {
+          bindings: [],
+          runs: [{ futureRecord: true }],
+          providerSessions: []
+        }
+      }
+    };
+    const saveData = vi.fn(async () => undefined);
+    const plugin = {
+      loadData: async () => structuredClone(repositorySeed),
+      saveData
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+
+    await expect(
+      repository.updateSettings({ ...repository.getSettings(), previewLines: 40 })
+    ).rejects.toThrow(/invalid.*runs|cannot be saved safely/);
+
+    expect(saveData).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when data disappears after the first successful save", async () => {
+    let persisted: unknown;
+    let unavailable = false;
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => unavailable ? undefined : structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    await repository.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      paneId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      surfaceId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      provider: "codex",
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+    unavailable = true;
+
+    await expect(
+      repository.updateSettings({ ...repository.getSettings(), previewLines: 40 })
+    ).rejects.toThrow(/data became unavailable/);
+
+    expect(saveCount).toBe(1);
+    expect(repository.list()).toHaveLength(1);
+  });
+
+  it("rejects conflicting synced settings without overwriting them", async () => {
+    let persisted: unknown = { schemaVersion: 3, settings: {}, machines: {} };
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const first = new BindingRepository(plugin);
+    const second = new BindingRepository(plugin);
+    await first.load();
+    await second.load();
+    const remoteSettings = {
+      ...second.getSettings(),
+      staleAfterMs: 60 * 60_000
+    };
+    await second.updateSettings(remoteSettings);
+    const savesBeforeConflict = saveCount;
+
+    await expect(
+      first.updateSettings({
+        ...first.getSettings(),
+        previewLines: 40
+      })
+    ).rejects.toThrow(/settings changed on disk/);
+
+    expect(saveCount).toBe(savesBeforeConflict);
+    expect((persisted as { settings: unknown }).settings).toEqual(remoteSettings);
+    await expect(first.updateSettings(remoteSettings)).resolves.toBeUndefined();
+    expect(first.getSettings()).toEqual(remoteSettings);
+  });
+
+  it("does not save from stale memory when refreshing persisted data fails", async () => {
+    const persisted = { schemaVersion: 3, settings: {}, machines: {} };
+    let loadCount = 0;
+    const saveData = vi.fn(async () => undefined);
+    const plugin = {
+      loadData: async () => {
+        loadCount += 1;
+        if (loadCount > 1) throw new Error("synced data unavailable");
+        return structuredClone(persisted);
+      },
+      saveData
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const before = repository.getSettings();
+
+    await expect(
+      repository.updateSettings({ ...before, previewLines: 40 })
+    ).rejects.toThrow(/synced data unavailable/);
+
+    expect(saveData).not.toHaveBeenCalled();
+    expect(repository.getSettings()).toEqual(before);
   });
 
   it("drops every conflicting persisted task binding claim", async () => {
@@ -754,9 +1170,12 @@ describe("BindingRepository", () => {
   });
 
   it("rejects assigning one provider conversation to two surfaces", async () => {
+    let data: unknown;
     const plugin = {
-      loadData: async () => undefined,
-      saveData: async () => undefined
+      loadData: async () => structuredClone(data),
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
     } as unknown as Plugin;
     const repository = new BindingRepository(plugin);
     await repository.load();
@@ -850,9 +1269,12 @@ describe("BindingRepository", () => {
   });
 
   it("rejects a provider conversation already claimed by another task binding", async () => {
+    let data: unknown;
     const plugin = {
-      loadData: async () => undefined,
-      saveData: async () => undefined
+      loadData: async () => structuredClone(data),
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
     } as unknown as Plugin;
     const repository = new BindingRepository(plugin);
     await repository.load();
@@ -881,9 +1303,12 @@ describe("BindingRepository", () => {
   });
 
   it("rejects attaching a provider conversation already claimed by another surface", async () => {
+    let data: unknown;
     const plugin = {
-      loadData: async () => undefined,
-      saveData: async () => undefined
+      loadData: async () => structuredClone(data),
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
     } as unknown as Plugin;
     const repository = new BindingRepository(plugin);
     await repository.load();
@@ -912,9 +1337,12 @@ describe("BindingRepository", () => {
   });
 
   it("rejects attachment when a saved conversation mapping claims another surface", async () => {
+    let data: unknown;
     const plugin = {
-      loadData: async () => undefined,
-      saveData: async () => undefined
+      loadData: async () => structuredClone(data),
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
     } as unknown as Plugin;
     const repository = new BindingRepository(plugin);
     await repository.load();
@@ -1084,9 +1512,12 @@ describe("BindingRepository", () => {
   });
 
   it("rejects relocation when the expected source binding has changed", async () => {
+    let data: unknown;
     const plugin = {
-      loadData: async () => undefined,
-      saveData: async () => undefined
+      loadData: async () => structuredClone(data),
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
     } as unknown as Plugin;
     const repository = new BindingRepository(plugin);
     await repository.load();
@@ -1121,9 +1552,12 @@ describe("BindingRepository", () => {
   });
 
   it("updates and clears the attached run identity with the provider match", async () => {
+    let data: unknown;
     const plugin = {
-      loadData: async () => undefined,
-      saveData: async () => undefined
+      loadData: async () => structuredClone(data),
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
     } as unknown as Plugin;
     const repository = new BindingRepository(plugin);
     await repository.load();
@@ -1158,11 +1592,13 @@ describe("BindingRepository", () => {
     expect(repository.listRuns()[0]?.providerSessionId).toBeNull();
   });
 
-  it("drops a cross-task binding before mapping and leaves the unrelated run unchanged", async () => {
+  it("refuses to discard a cross-task binding while saving a provider mapping", async () => {
     let data: unknown;
+    let saveCount = 0;
     const plugin = {
       loadData: async () => data,
       saveData: async (next: unknown) => {
+        saveCount += 1;
         data = structuredClone(next);
       }
     } as unknown as Plugin;
@@ -1199,18 +1635,22 @@ describe("BindingRepository", () => {
       providerSessionId: "55555555-5555-4555-8555-555555555555",
       matchedAt: "2026-09-04T00:01:00.000Z"
     };
-    await expect(repository.mapProviderSession(mapping)).resolves.toBeUndefined();
+    expect(repository.findBySurface(target.surfaceId)).toBeNull();
+    await expect(repository.mapProviderSession(mapping)).rejects.toThrow(/ambiguous bindings/);
 
-    expect(repository.listProviderSessions()).toEqual([mapping]);
+    expect(saveCount).toBe(1);
+    expect(repository.listProviderSessions()).toEqual([]);
     expect(repository.findBySurface(target.surfaceId)).toBeNull();
     expect(repository.listRuns(taskB)).toEqual([original.run]);
   });
 
-  it("forgets a mapping after its malformed binding was dropped without clearing another task's run", async () => {
+  it("refuses to erase a malformed binding while forgetting a provider mapping", async () => {
     let data: unknown;
+    let saveCount = 0;
     const plugin = {
       loadData: async () => data,
       saveData: async (next: unknown) => {
+        saveCount += 1;
         data = structuredClone(next);
       }
     } as unknown as Plugin;
@@ -1248,9 +1688,14 @@ describe("BindingRepository", () => {
 
     const repository = new BindingRepository(plugin);
     await repository.load();
-    await repository.forgetProviderSession(target.surfaceId);
+    await expect(repository.forgetProviderSession(target.surfaceId)).rejects.toThrow(
+      /ambiguous bindings/
+    );
 
-    expect(repository.listProviderSessions()).toEqual([]);
+    expect(saveCount).toBe(2);
+    expect(repository.listProviderSessions()).toMatchObject([
+      { surfaceId: target.surfaceId, providerSessionId }
+    ]);
     expect(repository.findBySurface(target.surfaceId)).toBeNull();
     expect(repository.listRuns(taskB)).toEqual([
       { ...original.run, providerSessionId }
@@ -1583,11 +2028,13 @@ describe("BindingRepository", () => {
     expect(repository.list()).toEqual([]);
   });
 
-  it("does not reuse a persisted run that belongs to another task", async () => {
+  it("refuses to repair a persisted binding whose run belongs to another task", async () => {
     let data: unknown;
+    let saveCount = 0;
     const plugin = {
       loadData: async () => data,
       saveData: async (next: unknown) => {
+        saveCount += 1;
         data = structuredClone(next);
       }
     } as unknown as Plugin;
@@ -1617,17 +2064,17 @@ describe("BindingRepository", () => {
 
     const second = new BindingRepository(plugin);
     await second.load();
-    const repaired = await second.attach({
-      ...input,
-      taskId: taskA,
-      attachedAt: "2026-09-04T00:01:00.000Z"
-    });
+    await expect(
+      second.attach({
+        ...input,
+        taskId: taskA,
+        attachedAt: "2026-09-04T00:01:00.000Z"
+      })
+    ).rejects.toThrow(/ambiguous bindings/);
 
-    expect(repaired.isNewRun).toBe(true);
-    expect(repaired.run).toMatchObject({ taskId: taskA });
-    expect(repaired.run.runId).not.toBe(original.run.runId);
-    expect(repaired.binding.runId).toBe(repaired.run.runId);
-    expect(second.listRuns(taskA)).toHaveLength(1);
+    expect(saveCount).toBe(1);
+    expect(second.list()).toEqual([]);
+    expect(second.listRuns(taskA)).toEqual([]);
     expect(second.listRuns(taskB)).toEqual([original.run]);
   });
 

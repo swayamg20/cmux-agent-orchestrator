@@ -1147,6 +1147,51 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("publishes bindings absorbed while saving settings", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: false } };
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_315))
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+
+    const concurrentRepository = new BindingRepository(plugin);
+    await concurrentRepository.load();
+    await concurrentRepository.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+
+    await controller.updateSettings({
+      ...controller.getSettings(),
+      previewLines: 40
+    });
+
+    expect(controller.store.getState().bindings).toMatchObject([
+      { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }
+    ]);
+    expect(controller.store.getState().runs).toMatchObject([
+      { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }
+    ]);
+    controller.dispose();
+  });
+
   it("reports whether a workflow move persisted so rejected controls can roll back", async () => {
     const plugin = {
       loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
@@ -3350,9 +3395,12 @@ describe("AgentCockpitController connection failures", () => {
   it("does not detach a newer task binding from a stale session card", async () => {
     const notices = (Notice as unknown as { messages: string[] }).messages;
     const noticeStart = notices.length;
+    let persisted: unknown = { settings: { autoTrackAgentRuns: false } };
     const plugin = {
-      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
-      saveData: async () => undefined
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
     } as unknown as Plugin;
     const { app } = memoryTaskApp();
     const controller = new AgentCockpitController(
@@ -3381,9 +3429,12 @@ describe("AgentCockpitController connection failures", () => {
   });
 
   it("does not replace a newer task binding from a stale picker", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: false } };
     const plugin = {
-      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
-      saveData: async () => undefined
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
     } as unknown as Plugin;
     const controller = new AgentCockpitController(
       memoryTaskApp().app,

@@ -22,6 +22,49 @@ const MAX_BINDINGS_PER_MACHINE = 5_000;
 const MAX_RUNS_PER_MACHINE = 20_000;
 const MAX_PROVIDER_SESSIONS_PER_MACHINE = 5_000;
 const MACHINE_ID_PATTERN = /^[0-9a-f]{20}$/;
+const TOP_LEVEL_KEYS = new Set(["schemaVersion", "settings", "machines"]);
+const SETTINGS_KEYS = new Set([
+  "cmuxBinaryPath",
+  "taskFolder",
+  "autoTrackAgentRuns",
+  "previewLines",
+  "previewMaxBytes",
+  "staleAfterMs"
+]);
+const MACHINE_KEYS = new Set(["bindings", "runs", "providerSessions"]);
+const LEGACY_BINDING_KEYS = new Set([
+  "taskId",
+  "workspaceId",
+  "paneId",
+  "surfaceId",
+  "provider",
+  "providerSessionId",
+  "attachedAt"
+]);
+const BINDING_KEYS = new Set([...LEGACY_BINDING_KEYS, "bindingId", "runId"]);
+const RUN_KEYS = new Set([
+  "runId",
+  "taskId",
+  "provider",
+  "providerSessionId",
+  "relation",
+  "parentRunId",
+  "firstAttachedAt",
+  "lastAttachedAt"
+]);
+const PROVIDER_SESSION_KEYS = new Set([
+  "workspaceId",
+  "paneId",
+  "surfaceId",
+  "provider",
+  "providerSessionId",
+  "matchedAt"
+]);
+
+// Obsidian does not expose compare-and-swap for plugin data. This process-local
+// queue still prevents two repository instances from reading the same snapshot
+// and then overwriting one another inside one Obsidian process.
+const pluginSaveChains = new WeakMap<object, Promise<void>>();
 
 interface PersistedPluginData {
   schemaVersion: 3;
@@ -30,6 +73,23 @@ interface PersistedPluginData {
 }
 
 type MutationGuard = () => boolean;
+
+interface DecodePluginDataOptions {
+  strictForWrite?: boolean;
+}
+
+function enqueuePluginSave<T>(plugin: Plugin, work: () => Promise<T>): Promise<T> {
+  const previous = pluginSaveChains.get(plugin) ?? Promise.resolve();
+  const operation = previous.catch(() => undefined).then(work);
+  pluginSaveChains.set(
+    plugin,
+    operation.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return operation;
+}
 
 function machineId(): string {
   let user = "unknown";
@@ -110,30 +170,34 @@ function isProviderSessionMapping(value: unknown): value is ProviderSessionMappi
 
 function normalizeNewBindingRecord(binding: NewBindingRecord): NewBindingRecord {
   return {
-    ...binding,
     taskId: normalizeCanonicalUuid(binding.taskId)!,
     workspaceId: normalizeCanonicalUuid(binding.workspaceId)!,
     paneId: normalizeCanonicalUuid(binding.paneId)!,
     surfaceId: normalizeCanonicalUuid(binding.surfaceId)!,
-    providerSessionId: normalizeProviderSessionId(binding.providerSessionId)
+    provider: binding.provider,
+    providerSessionId: normalizeProviderSessionId(binding.providerSessionId),
+    attachedAt: binding.attachedAt
   };
 }
 
 function normalizeBindingRecord(binding: BindingRecord): BindingRecord {
   return {
-    ...normalizeNewBindingRecord(binding),
     bindingId: normalizeCanonicalUuid(binding.bindingId)!,
-    runId: normalizeCanonicalUuid(binding.runId)!
+    runId: normalizeCanonicalUuid(binding.runId)!,
+    ...normalizeNewBindingRecord(binding)
   };
 }
 
 function normalizeRunRecord(run: AgentRunRecord): AgentRunRecord {
   return {
-    ...run,
     runId: normalizeCanonicalUuid(run.runId)!,
     taskId: normalizeCanonicalUuid(run.taskId)!,
+    provider: run.provider,
     providerSessionId: normalizeProviderSessionId(run.providerSessionId),
-    parentRunId: run.parentRunId === null ? null : normalizeCanonicalUuid(run.parentRunId)!
+    relation: run.relation,
+    parentRunId: run.parentRunId === null ? null : normalizeCanonicalUuid(run.parentRunId)!,
+    firstAttachedAt: run.firstAttachedAt,
+    lastAttachedAt: run.lastAttachedAt
   };
 }
 
@@ -141,11 +205,12 @@ function normalizeProviderSessionMapping(
   mapping: ProviderSessionMapping
 ): ProviderSessionMapping {
   return {
-    ...mapping,
     workspaceId: normalizeCanonicalUuid(mapping.workspaceId)!,
     paneId: normalizeCanonicalUuid(mapping.paneId)!,
     surfaceId: normalizeCanonicalUuid(mapping.surfaceId)!,
-    providerSessionId: normalizeCanonicalUuid(mapping.providerSessionId)!
+    provider: mapping.provider,
+    providerSessionId: normalizeCanonicalUuid(mapping.providerSessionId)!,
+    matchedAt: mapping.matchedAt
   };
 }
 
@@ -213,6 +278,181 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
     runs,
     providerSessions
   };
+}
+
+function decodePluginData(
+  value: unknown,
+  currentMachineId: string,
+  options: DecodePluginDataOptions = {}
+): PersistedPluginData {
+  const raw = typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : {};
+  if (options.strictForWrite) assertPluginDataCanBeSaved(raw, currentMachineId);
+  const hasMachineObject =
+    typeof raw.machines === "object" && raw.machines !== null && !Array.isArray(raw.machines);
+  const rawMachines = hasMachineObject
+    ? (raw.machines as Record<string, unknown>)
+    : {};
+  const foreignMachineIds = Object.keys(rawMachines)
+    .filter((id) => id !== currentMachineId && MACHINE_ID_PATTERN.test(id))
+    .sort();
+  const machines: Record<string, MachineBindings> = {
+    [currentMachineId]: decodeMachine(rawMachines[currentMachineId], currentMachineId)
+  };
+  for (const id of foreignMachineIds.slice(0, MAX_MACHINES - 1)) {
+    machines[id] = decodeMachine(rawMachines[id], id);
+  }
+  return {
+    schemaVersion: 3,
+    settings: parseSettings(raw.settings),
+    machines
+  };
+}
+
+function assertPluginDataCanBeSaved(raw: Record<string, unknown>, currentMachineId: string): void {
+  if (
+    raw.schemaVersion !== undefined &&
+    (typeof raw.schemaVersion !== "number" ||
+      !Number.isInteger(raw.schemaVersion) ||
+      raw.schemaVersion < 1 ||
+      raw.schemaVersion > 3)
+  ) {
+    const qualifier = typeof raw.schemaVersion === "number" && raw.schemaVersion > 3
+      ? "uses a newer schema"
+      : "uses an unsupported schema";
+    throw new Error(`${PRODUCT_NAME} data ${qualifier} and cannot be saved safely.`);
+  }
+  assertOnlyKnownKeys(raw, TOP_LEVEL_KEYS, `${PRODUCT_NAME} data contains unknown persisted fields`);
+  assertSettingsCanBeSaved(raw.settings);
+
+  if (raw.machines === undefined) return;
+  if (!isRecord(raw.machines)) {
+    throw new Error(`${PRODUCT_NAME} data changed to an invalid machine registry before it could be saved.`);
+  }
+  const rawMachines = raw.machines;
+  const machineIds = Object.keys(rawMachines);
+  if (machineIds.some((id) => !MACHINE_ID_PATTERN.test(id))) {
+    throw new Error(`${PRODUCT_NAME} data contains an invalid machine namespace and cannot be saved safely.`);
+  }
+  const foreignMachineCount = machineIds.filter((id) => id !== currentMachineId).length;
+  if (foreignMachineCount > MAX_MACHINES - 1) {
+    throw new Error(`${PRODUCT_NAME} data contains too many machine namespaces to save safely.`);
+  }
+  for (const id of machineIds) assertMachineCanBeSaved(rawMachines[id], id);
+}
+
+function assertSettingsCanBeSaved(value: unknown): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    throw new Error(`${PRODUCT_NAME} settings are malformed and cannot be saved safely.`);
+  }
+  assertOnlyKnownKeys(value, SETTINGS_KEYS, `${PRODUCT_NAME} settings contain unknown persisted fields`);
+  const parsed = parseSettings(value);
+  for (const key of Object.keys(value) as Array<keyof AgentCockpitSettings>) {
+    if (!isDeepStrictEqual(value[key], parsed[key])) {
+      throw new Error(`${PRODUCT_NAME} settings contain an invalid ${key} value and cannot be saved safely.`);
+    }
+  }
+}
+
+function assertMachineCanBeSaved(value: unknown, id: string): void {
+  if (!isRecord(value)) {
+    throw new Error(`${PRODUCT_NAME} machine namespace ${id} is malformed and cannot be saved safely.`);
+  }
+  assertOnlyKnownKeys(
+    value,
+    MACHINE_KEYS,
+    `${PRODUCT_NAME} machine namespace ${id} contains unknown persisted fields`
+  );
+  const bindings = assertRecordArrayWithinLimit(
+    value.bindings,
+    MAX_BINDINGS_PER_MACHINE,
+    "bindings",
+    id,
+    isSavableBindingRecord
+  );
+  const runs = assertRecordArrayWithinLimit(
+    value.runs,
+    MAX_RUNS_PER_MACHINE,
+    "runs",
+    id,
+    isSavableRunRecord
+  );
+  const providerSessions = assertRecordArrayWithinLimit(
+    value.providerSessions,
+    MAX_PROVIDER_SESSIONS_PER_MACHINE,
+    "provider sessions",
+    id,
+    isSavableProviderSessionRecord
+  );
+
+  const decoded = decodeMachine(value, id);
+  if (decoded.bindings.length !== bindings.length) {
+    throw new Error(`${PRODUCT_NAME} machine namespace ${id} has ambiguous bindings and cannot be saved safely.`);
+  }
+  const rawRunFingerprints = runs.map((run) => runFingerprint(normalizeRunRecord(run)));
+  const decodedRunFingerprints = new Set(decoded.runs.map(runFingerprint));
+  if (
+    new Set(rawRunFingerprints).size !== rawRunFingerprints.length ||
+    rawRunFingerprints.some((fingerprint) => !decodedRunFingerprints.has(fingerprint))
+  ) {
+    throw new Error(`${PRODUCT_NAME} machine namespace ${id} has ambiguous runs and cannot be saved safely.`);
+  }
+  if (decoded.providerSessions.length !== providerSessions.length) {
+    throw new Error(
+      `${PRODUCT_NAME} machine namespace ${id} has ambiguous provider sessions and cannot be saved safely.`
+    );
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSavableBindingRecord(value: unknown): value is BindingRecord | NewBindingRecord {
+  return (
+    (isBinding(value) && hasOnlyKnownKeys(value, BINDING_KEYS)) ||
+    (isLegacyBinding(value) && hasOnlyKnownKeys(value, LEGACY_BINDING_KEYS))
+  );
+}
+
+function isSavableRunRecord(value: unknown): value is AgentRunRecord {
+  return isRun(value) && hasOnlyKnownKeys(value, RUN_KEYS);
+}
+
+function isSavableProviderSessionRecord(value: unknown): value is ProviderSessionMapping {
+  return isProviderSessionMapping(value) && hasOnlyKnownKeys(value, PROVIDER_SESSION_KEYS);
+}
+
+function hasOnlyKnownKeys(value: unknown, allowed: ReadonlySet<string>): boolean {
+  return isRecord(value) && Object.keys(value).every((key) => allowed.has(key));
+}
+
+function assertOnlyKnownKeys(
+  value: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  message: string
+): void {
+  if (!hasOnlyKnownKeys(value, allowed)) {
+    throw new Error(`${message} and cannot be saved safely.`);
+  }
+}
+
+function assertRecordArrayWithinLimit<T>(
+  value: unknown,
+  maximum: number,
+  label: string,
+  machineId: string,
+  validate: (candidate: unknown) => candidate is T
+): T[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > maximum || !value.every(validate)) {
+    throw new Error(
+      `${PRODUCT_NAME} machine namespace ${machineId} has invalid or excessive ${label} and cannot be saved safely.`
+    );
+  }
+  return value;
 }
 
 function unambiguousBindings(candidates: BindingRecord[]): BindingRecord[] {
@@ -432,7 +672,7 @@ function decodeProviderSessions(value: unknown): ProviderSessionMapping[] {
 export class BindingRepository {
   private readonly currentMachineId = machineId();
   private data: PersistedPluginData | null = null;
-  private saveChain: Promise<void> = Promise.resolve();
+  private hasObservedCurrentData = false;
 
   constructor(
     private readonly plugin: Plugin,
@@ -441,6 +681,7 @@ export class BindingRepository {
 
   async load(): Promise<void> {
     let loaded: unknown = await this.plugin.loadData();
+    this.hasObservedCurrentData = hasPersistedPluginData(loaded);
     let importedLegacyData = false;
     if (!hasPersistedPluginData(loaded)) {
       const legacyData = await this.loadLegacyData();
@@ -449,28 +690,19 @@ export class BindingRepository {
         importedLegacyData = true;
       }
     }
-    const raw = typeof loaded === "object" && loaded !== null ? (loaded as Record<string, unknown>) : {};
-    const rawMachines =
-      typeof raw.machines === "object" && raw.machines !== null
-        ? (raw.machines as Record<string, unknown>)
-        : {};
-    const machines: Record<string, MachineBindings> = {
-      [this.currentMachineId]: decodeMachine(rawMachines[this.currentMachineId], this.currentMachineId)
-    };
-    let examinedOtherMachines = 0;
-    for (const [id, value] of Object.entries(rawMachines)) {
-      if (id === this.currentMachineId) continue;
-      if (examinedOtherMachines >= MAX_MACHINES - 1) break;
-      examinedOtherMachines += 1;
-      if (!MACHINE_ID_PATTERN.test(id)) continue;
-      machines[id] = decodeMachine(value, id);
+    this.data = decodePluginData(loaded, this.currentMachineId);
+    if (importedLegacyData) {
+      const imported = structuredClone(this.data);
+      await enqueuePluginSave(this.plugin, async () => {
+        const current = (await this.plugin.loadData()) as unknown;
+        if (hasPersistedPluginData(current)) {
+          this.hasObservedCurrentData = true;
+          this.data = decodePluginData(current, this.currentMachineId, { strictForWrite: true });
+          return;
+        }
+        await this.persistDraft(imported);
+      });
     }
-    this.data = {
-      schemaVersion: 3,
-      settings: parseSettings(raw.settings),
-      machines
-    };
-    if (importedLegacyData) await this.persistDraft(structuredClone(this.data));
   }
 
   getSettings(): AgentCockpitSettings {
@@ -479,9 +711,7 @@ export class BindingRepository {
 
   async updateSettings(settings: AgentCockpitSettings): Promise<void> {
     const parsed = parseSettings(settings);
-    await this.commit((data) => {
-      data.settings = parsed;
-    });
+    await this.commitSettings(parsed);
   }
 
   list(): BindingRecord[] {
@@ -764,27 +994,60 @@ export class BindingRepository {
   }
 
   private commit(mutate: (draft: PersistedPluginData) => void): Promise<void> {
-    const operation = this.saveChain.catch(() => undefined).then(async () => {
-      const draft = structuredClone(this.requireData());
+    return enqueuePluginSave(this.plugin, async () => {
+      const latest = await this.loadLatestForMutation(this.requireData());
+      const draft = structuredClone(latest);
       mutate(draft);
       await this.persistDraft(draft);
     });
-    this.saveChain = operation;
-    return operation;
   }
 
   private commitConditional(mutate: (draft: PersistedPluginData) => boolean): Promise<boolean> {
-    const operation = this.saveChain.catch(() => undefined).then(async () => {
-      const draft = structuredClone(this.requireData());
+    return enqueuePluginSave(this.plugin, async () => {
+      const latest = await this.loadLatestForMutation(this.requireData());
+      const draft = structuredClone(latest);
       if (!mutate(draft)) return false;
       await this.persistDraft(draft);
       return true;
     });
-    this.saveChain = operation.then(
-      () => undefined,
-      () => undefined
-    );
-    return operation;
+  }
+
+  private commitSettings(desired: AgentCockpitSettings): Promise<void> {
+    return enqueuePluginSave(this.plugin, async () => {
+      const base = this.requireData();
+      const latest = await this.loadLatest(base);
+      if (
+        !isDeepStrictEqual(latest.settings, base.settings) &&
+        !isDeepStrictEqual(latest.settings, desired)
+      ) {
+        throw new Error(`${PRODUCT_NAME} settings changed on disk. Reload the plugin before saving.`);
+      }
+      const draft = structuredClone(latest);
+      draft.settings = desired;
+      await this.persistDraft(draft);
+    });
+  }
+
+  private async loadLatestForMutation(
+    base: PersistedPluginData
+  ): Promise<PersistedPluginData> {
+    const latest = await this.loadLatest(base);
+    if (!isDeepStrictEqual(latest.settings, base.settings)) {
+      throw new Error(`${PRODUCT_NAME} settings changed on disk. Reload the plugin before continuing.`);
+    }
+    return latest;
+  }
+
+  private async loadLatest(base: PersistedPluginData): Promise<PersistedPluginData> {
+    const loaded = (await this.plugin.loadData()) as unknown;
+    if (!hasPersistedPluginData(loaded)) {
+      if (this.hasObservedCurrentData) {
+        throw new Error(`${PRODUCT_NAME} data became unavailable before it could be saved.`);
+      }
+      return structuredClone(base);
+    }
+    this.hasObservedCurrentData = true;
+    return decodePluginData(loaded, this.currentMachineId, { strictForWrite: true });
   }
 
   private async persistDraft(draft: PersistedPluginData): Promise<void> {
@@ -794,6 +1057,7 @@ export class BindingRepository {
       try {
         const persisted = (await this.plugin.loadData()) as unknown;
         if (isDeepStrictEqual(persisted, draft)) {
+          this.hasObservedCurrentData = true;
           this.data = draft;
           return;
         }
@@ -802,6 +1066,7 @@ export class BindingRepository {
       }
       throw saveError;
     }
+    this.hasObservedCurrentData = true;
     this.data = draft;
   }
 }

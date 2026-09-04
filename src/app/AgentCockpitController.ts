@@ -366,7 +366,9 @@ export class AgentCockpitController {
       const forgotten = await this.bindings.forgetProviderSessionIfUnchanged(mapping);
       if (this.disposed) return;
       if (!forgotten) {
-        throw new Error("The provider conversation changed before its saved match could be forgotten.");
+        throw new Error(
+          "The provider conversation changed on disk before its saved match could be forgotten. Reload the plugin and try again."
+        );
       }
       this.providerMetadata.forget(mapping.provider, mapping.providerSessionId);
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
@@ -409,7 +411,9 @@ export class AgentCockpitController {
       const detached = await this.bindings.detachIfUnchanged(expected);
       if (this.disposed) return;
       if (!detached) {
-        throw new Error("The task binding changed before it could be detached. Refresh and try again.");
+        throw new Error(
+          "The task binding changed on disk before it could be detached. Reload the plugin and try again."
+        );
       }
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
       this.recomputeSessions();
@@ -553,6 +557,7 @@ export class AgentCockpitController {
     await this.bindings.updateSettings(parsed);
     if (this.disposed) return;
     this.settings = parsed;
+    this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
     this.requireTaskRepository().setTaskFolder(parsed.taskFolder);
     if (cmuxBinaryChanged) {
       this.cancelIdentityResolution();
@@ -1462,7 +1467,9 @@ export class AgentCockpitController {
       const matched = await this.bindings.mapProviderSessionIfUnchanged(mapping, expectedMapping);
       if (this.disposed) return;
       if (!matched) {
-        throw new Error("The saved provider conversation changed while the picker was open. Refresh and try again.");
+        throw new Error(
+          "The saved provider conversation changed on disk while the picker was open. Reload the plugin and try again."
+        );
       }
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
       this.recomputeSessions();
@@ -1581,7 +1588,9 @@ export class AgentCockpitController {
     );
     if (this.disposed) return;
     if (result === null) {
-      throw new Error("The task binding changed while the picker was open. Refresh and try again.");
+      throw new Error(
+        "The task binding changed on disk while the picker was open. Reload the plugin and try again."
+      );
     }
     this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
     if (result.isNewRun) {
