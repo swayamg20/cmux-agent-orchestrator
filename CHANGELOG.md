@@ -34,6 +34,7 @@ All notable changes to this project will be documented in this file.
 - Let a user attach a newly proven provider conversation after cmux reuses an old surface, while retaining the previous task and run history.
 - Surface exact provider-conversation replacement as an Attention item when a persisted task binding still points at the reused surface.
 - Remove the obsolete v0.1 label from rejected-action messages so the security policy remains accurate across releases.
+- Report ribbon and command-palette view failures as notices instead of leaking rejected workspace promises into the console.
 
 ### Security
 

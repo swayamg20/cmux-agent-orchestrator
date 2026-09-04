@@ -1,5 +1,6 @@
 import { Notice, Plugin } from "obsidian";
 import { AgentCockpitController } from "./app/AgentCockpitController";
+import { runUiAction } from "./app/runUiAction";
 import { CmuxClient } from "./cmux/CmuxClient";
 import { PRODUCT_NAME } from "./identity";
 import { ProviderMetadataService } from "./providers/ProviderMetadataService";
@@ -22,16 +23,24 @@ export default class AgentCockpitPlugin extends Plugin {
       new AutomaticProviderSessionResolver(providerMetadata)
     );
     this.registerView(AGENT_COCKPIT_VIEW_TYPE, (leaf) => new AgentCockpitView(leaf, this.requireController()));
-    this.addRibbonIcon("layout-dashboard", `Open ${PRODUCT_NAME}`, () => void this.activateView());
+    this.addRibbonIcon("layout-dashboard", `Open ${PRODUCT_NAME}`, () => {
+      void runUiAction(() => this.activateView(), `Could not open ${PRODUCT_NAME}.`);
+    });
     this.addCommand({
       id: "open",
       name: "Open orchestrator",
-      callback: () => void this.activateView()
+      callback: () => void runUiAction(
+        () => this.activateView(),
+        `Could not open ${PRODUCT_NAME}.`
+      )
     });
     this.addCommand({
       id: "refresh",
       name: "Refresh orchestrator",
-      callback: () => void this.requireController().refreshNow()
+      callback: () => void runUiAction(
+        () => this.requireController().refreshNow(),
+        `Could not refresh ${PRODUCT_NAME}.`
+      )
     });
     this.addSettingTab(new AgentCockpitSettingsTab(this.app, this, this.controller));
 
