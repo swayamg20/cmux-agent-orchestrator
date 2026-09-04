@@ -1256,13 +1256,20 @@ export class AgentCockpitController {
             toSurfaceId: current.surfaceId,
             relocatedAt
           },
-          () =>
-            this.automaticTrackingAllowed(generation) &&
-            this.resolveUniqueUnlinkedProviderSession(
-              current,
-              provider,
-              providerSessionId
-            ) !== null
+          () => {
+            if (
+              !this.automaticTrackingAllowed(generation) ||
+              this.resolveUniqueUnlinkedProviderSession(
+                current,
+                provider,
+                providerSessionId
+              ) === null
+            ) {
+              return false;
+            }
+            this.resolveCurrentTask(task);
+            return true;
+          }
         );
         if (result === null) continue;
         relocated += 1;

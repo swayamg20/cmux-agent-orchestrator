@@ -2108,6 +2108,104 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not relocate an automatic binding when the exact task file changes while its write is queued", async () => {
+    let persisted: unknown;
+    let saveCount = 0;
+    let currentSnapshot = snapshot(2_350);
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const resolver: ProviderSessionResolver = {
+      resolve: async (nextSnapshot) => {
+        const workspace = nextSnapshot.windows[0]!.workspaces[0]!;
+        const pane = workspace.panes[0]!;
+        const surface = pane.surfaces[0]!;
+        return {
+          checkedAt: nextSnapshot.observedAt + 1,
+          nativeLifecycleAvailable: false,
+          issues: [],
+          mappings: [
+            {
+              workspaceId: workspace.id,
+              paneId: pane.id,
+              surfaceId: surface.id,
+              provider: "codex",
+              providerSessionId: "55555555-5555-4555-8555-555555555555",
+              matchSource: "codex-writer-lock",
+              confidence: "high",
+              explanation: "Verified exact writer identity.",
+              observedAt: nextSnapshot.observedAt + 1
+            }
+          ],
+          lifecycle: []
+        };
+      },
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(2_350),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const memory = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const internal = controller as unknown as { bindings: BindingRepository };
+    const originalBinding = internal.bindings.list()[0]!;
+    const persistedBefore = structuredClone(persisted);
+    const savesBefore = saveCount;
+    const relocator = internal.bindings as unknown as {
+      relocateProviderSession: (
+        input: Parameters<BindingRepository["relocateProviderSession"]>[0],
+        canMutate: () => boolean
+      ) => ReturnType<BindingRepository["relocateProviderSession"]>;
+    };
+    const relocateProviderSession = relocator.relocateProviderSession.bind(relocator);
+    let relocationAttempted = false;
+    relocator.relocateProviderSession = async (input, canMutate) => {
+      const taskPath = memory.createdPaths[0];
+      if (taskPath === undefined) throw new Error("Expected the automatic task to exist.");
+      memory.replaceFile(taskPath);
+      relocationAttempted = true;
+      try {
+        return await relocateProviderSession(input, canMutate);
+      } finally {
+        controller.dispose();
+      }
+    };
+
+    currentSnapshot = snapshot(2_351);
+    const workspace = currentSnapshot.windows[0]!.workspaces[0]!;
+    const pane = workspace.panes[0]!;
+    const surface = pane.surfaces[0]!;
+    workspace.id = "66666666-6666-4666-8666-666666666666";
+    currentSnapshot.windows[0]!.selectedWorkspaceId = workspace.id;
+    pane.id = "77777777-7777-4777-8777-777777777777";
+    pane.selectedSurfaceId = "88888888-8888-4888-8888-888888888888";
+    surface.id = pane.selectedSurfaceId;
+    surface.paneId = pane.id;
+
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    expect(relocationAttempted).toBe(true);
+    expect(saveCount).toBe(savesBefore);
+    expect(persisted).toEqual(persistedBefore);
+    expect(internal.bindings.list()).toEqual([originalBinding]);
+    controller.dispose();
+  });
+
   it("tracks an exact session before optional provider-title metadata finishes loading", async () => {
     let persisted: unknown;
     let finishMetadata: ((sessions: []) => void) | undefined;
