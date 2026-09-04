@@ -47,11 +47,19 @@ export class ProviderMetadataService {
     signal?: AbortSignal
   ): Promise<ProviderSessionMetadata[]> {
     const request = this.beginRequest(signal);
+    const listKey = providerMetadataListKey(provider, cwd);
+    this.markRequest(listKey, request.revision);
     try {
       const sessions = (await this.requireSource(provider).list(cwd, request.controller.signal))
         .map((session) => normalizeMetadata(session, provider, cwd))
         .filter((session): session is ProviderSessionMetadata => session !== null);
-      if (this.disposed || request.controller.signal.aborted) return [];
+      if (
+        this.disposed ||
+        request.controller.signal.aborted ||
+        !this.isLatestRequest(listKey, request.revision)
+      ) {
+        return [];
+      }
       const current: ProviderSessionMetadata[] = [];
       for (const session of sessions) {
         this.cache(session, request.revision);
@@ -383,6 +391,10 @@ export class ProviderMetadataService {
 
 export function providerMetadataKey(provider: ProviderSessionKind, sessionId: string): string {
   return `${provider}:${normalizeCanonicalUuid(sessionId) ?? sessionId}`;
+}
+
+function providerMetadataListKey(provider: ProviderSessionKind, cwd: string): string {
+  return `list:${JSON.stringify([provider, cwd])}`;
 }
 
 function normalizeMetadata(

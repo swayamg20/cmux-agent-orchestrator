@@ -267,6 +267,27 @@ describe("ProviderMetadataService", () => {
     service.dispose();
   });
 
+  it("does not publish an older list after a newer list finds no conversations", async () => {
+    const resolvers: Array<(value: ProviderSessionMetadata[]) => void> = [];
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => new Promise<ProviderSessionMetadata[]>((resolve) => resolvers.push(resolve)),
+      get: async () => null,
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const older = service.list("codex", metadata.cwd);
+    const newer = service.list("codex", metadata.cwd);
+
+    resolvers[1]!([]);
+    await expect(newer).resolves.toEqual([]);
+    resolvers[0]!([metadata]);
+
+    await expect(older).resolves.toEqual([]);
+    expect(service.evidence.has(`codex:${metadata.sessionId}`)).toBe(false);
+    service.dispose();
+  });
+
   it("returns newer listed metadata to a superseded exact reader", async () => {
     let resolveGet!: (value: ProviderSessionMetadata | null) => void;
     const source: ProviderSessionSource = {
