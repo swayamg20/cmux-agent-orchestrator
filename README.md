@@ -58,6 +58,8 @@ Exact, uniquely resolved Claude and Codex sessions become one neutral Active Mar
 
 If a linked task note is moved outside the configured task folder or deleted, the machine-local binding and run history are preserved and Work shows `Linked task note missing`. The plugin never recreates or deletes that note automatically; the user can explicitly attach the live session to an existing task or create a replacement.
 
+Task-note content changes, moves, and deletions are observed only for the configured task tree and its containing folders. Unrelated vault paths are ignored, and these events do not trigger cmux or provider reads.
+
 `Track in board` remains available for manual cases: it opens a prefilled form, writes an Active durable task note, and attaches the exact cmux surface. The row's overflow menu provides Focus in cmux, Attach to existing task, and Choose provider conversation. Choosing a provider conversation manually overrides the automatic identity. Moving any Work card changes workflow only; runtime state never changes Backlog, Active, Review, Parked, or Done on the user's behalf.
 
 ## Build

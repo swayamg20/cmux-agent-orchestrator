@@ -26,6 +26,7 @@ All notable changes to this project will be documented in this file.
 - Refuse to overwrite a newer Kanban workflow decision from a stale task card.
 - Report a failed Detach action as an Obsidian notice without leaking an unhandled promise rejection into the console.
 - Preserve the newest proven activity timestamp when an older structured lifecycle event arrives after a terminal preview observation.
+- Refresh durable task state when a task note or containing folder is moved or deleted, so stale bindings become visible immediately.
 
 ### Security
 

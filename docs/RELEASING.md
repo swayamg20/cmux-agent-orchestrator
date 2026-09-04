@@ -46,6 +46,7 @@ Verify manually:
 - Manually detaching an automatically tracked run preserves the task and run history and does not silently recreate the binding after Refresh.
 - If the same exact provider conversation is deliberately resumed on one new cmux surface after its previous full target disappears, Refresh reconnects the existing task without creating another task or run. Skip this controlled test when preserving current session placement takes priority.
 - Creating a task and attaching a session persists through reload without changing the agent.
+- Moving or deleting a linked task note updates the Work board and missing-task attention state without requiring an Obsidian restart.
 - Moving a task changes workflow only.
 - With structured lifecycle evidence available, lowering the stale-working threshold and saving settings can surface an aged Working session in Attention without moving its task; Idle and State unknown sessions remain unflagged.
 - A structured or notification-backed finished turn appears in Attention for review without moving its task to Review or Done.

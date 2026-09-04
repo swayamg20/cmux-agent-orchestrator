@@ -5,10 +5,12 @@ import { PRODUCT_NAME } from "./identity";
 import { ProviderMetadataService } from "./providers/ProviderMetadataService";
 import { AutomaticProviderSessionResolver } from "./providers/identity/AutomaticProviderSessionResolver";
 import { AgentCockpitSettingsTab } from "./settings/AgentCockpitSettingsTab";
+import { pathAffectsTaskFolder } from "./tasks/TaskFolderEvents";
 import { AGENT_COCKPIT_VIEW_TYPE, AgentCockpitView } from "./views/AgentCockpitView";
 
 export default class AgentCockpitPlugin extends Plugin {
   private controller: AgentCockpitController | null = null;
+  private taskReloadQueued = false;
 
   override async onload(): Promise<void> {
     const providerMetadata = new ProviderMetadataService();
@@ -35,8 +37,19 @@ export default class AgentCockpitPlugin extends Plugin {
 
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
-        const folder = this.requireController().getSettings().taskFolder;
-        if (file.path.startsWith(`${folder}/`)) void this.requireController().reloadTasks();
+        if (this.taskFolderAffected(file.path)) this.reloadTasksFromVaultEvent();
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        if (this.taskFolderAffected(file.path)) this.reloadTasksFromVaultEvent();
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (this.taskFolderAffected(file.path) || this.taskFolderAffected(oldPath)) {
+          this.reloadTasksFromVaultEvent();
+        }
       })
     );
 
@@ -64,5 +77,23 @@ export default class AgentCockpitPlugin extends Plugin {
   private requireController(): AgentCockpitController {
     if (this.controller === null) throw new Error(`${PRODUCT_NAME} has been unloaded.`);
     return this.controller;
+  }
+
+  private taskFolderAffected(path: string): boolean {
+    const controller = this.controller;
+    return controller !== null && pathAffectsTaskFolder(path, controller.getSettings().taskFolder);
+  }
+
+  private reloadTasksFromVaultEvent(): void {
+    if (this.taskReloadQueued) return;
+    this.taskReloadQueued = true;
+    queueMicrotask(() => {
+      this.taskReloadQueued = false;
+      const controller = this.controller;
+      if (controller === null) return;
+      void controller.reloadTasks().catch((error: unknown) => {
+        new Notice(error instanceof Error ? error.message : "Could not refresh agent task notes.");
+      });
+    });
   }
 }
