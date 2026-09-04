@@ -2268,10 +2268,11 @@ describe("BindingRepository", () => {
       attachedAt: "2026-09-04T00:00:00.000Z"
     });
     await repository.mapProviderSession(original);
+    const originalBinding = repository.findBySurface(target.surfaceId);
 
     const replacementWrite = repository.mapProviderSession(replacement);
     await replacementSaveStarted;
-    const staleForget = repository.forgetProviderSessionIfUnchanged(original);
+    const staleForget = repository.forgetProviderSessionIfUnchanged(original, originalBinding);
     releaseReplacementSave?.();
 
     await expect(replacementWrite).resolves.toBeUndefined();

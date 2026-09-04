@@ -4985,23 +4985,110 @@ describe("AgentCockpitController connection failures", () => {
     const forgetter = internal.bindings as unknown as {
       forgetProviderSessionIfUnchanged: (
         expected: Parameters<BindingRepository["forgetProviderSessionIfUnchanged"]>[0],
+        expectedBinding: Parameters<BindingRepository["forgetProviderSessionIfUnchanged"]>[1],
         canMutate?: () => boolean
       ) => Promise<boolean>;
     };
     const forgetProviderSessionIfUnchanged =
       forgetter.forgetProviderSessionIfUnchanged.bind(forgetter);
-    forgetter.forgetProviderSessionIfUnchanged = async (expected, canMutate) => {
+    forgetter.forgetProviderSessionIfUnchanged = async (
+      expected,
+      expectedBinding,
+      canMutate
+    ) => {
       currentSnapshot = snapshot(5_381);
       currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces = [];
       currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.selectedSurfaceId = null;
       await controller.refreshNow();
-      return forgetProviderSessionIfUnchanged(expected, canMutate);
+      return forgetProviderSessionIfUnchanged(expected, expectedBinding, canMutate);
     };
 
     await controller.forgetConversation(session);
 
     expect(persisted).toEqual(persistedBefore);
     expect(internal.bindings.listProviderSessions()).toEqual([originalMapping]);
+    controller.dispose();
+  });
+
+  it("does not forget identity from a task binding replaced by another repository", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const mapping: ProviderSessionMapping = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      matchedAt: "2026-09-04T00:00:00.000Z"
+    };
+    const initial = new BindingRepository(plugin);
+    await initial.load();
+    await initial.updateSettings({
+      ...initial.getSettings(),
+      autoTrackAgentRuns: false
+    });
+    await initial.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: mapping.workspaceId,
+      paneId: mapping.paneId,
+      surfaceId: mapping.surfaceId,
+      provider: mapping.provider,
+      providerSessionId: mapping.providerSessionId,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+    await initial.mapProviderSession(mapping);
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_382)),
+      new ProviderMetadataService([emptyCodexMetadataSource()])
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const staleSession = controller.store.getState().sessions[0]!;
+    const internal = controller as unknown as { bindings: BindingRepository };
+    const concurrent = new BindingRepository(plugin);
+    await concurrent.load();
+    const forgetProviderSessionIfUnchanged =
+      internal.bindings.forgetProviderSessionIfUnchanged.bind(internal.bindings);
+    internal.bindings.forgetProviderSessionIfUnchanged = async (
+      expected,
+      expectedBinding,
+      canMutate
+    ) => {
+      await concurrent.attach({
+        taskId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        workspaceId: mapping.workspaceId,
+        paneId: mapping.paneId,
+        surfaceId: mapping.surfaceId,
+        provider: mapping.provider,
+        providerSessionId: mapping.providerSessionId,
+        attachedAt: "2026-09-04T00:01:00.000Z"
+      });
+      return forgetProviderSessionIfUnchanged(expected, expectedBinding, canMutate);
+    };
+
+    await controller.forgetConversation(staleSession);
+
+    const reloaded = new BindingRepository(plugin);
+    await reloaded.load();
+    expect(reloaded.listProviderSessions()).toEqual([mapping]);
+    expect(reloaded.list()).toMatchObject([
+      {
+        taskId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        provider: "codex",
+        providerSessionId: mapping.providerSessionId
+      }
+    ]);
+    expect(reloaded.listRuns("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")).toMatchObject([
+      { provider: "codex", providerSessionId: mapping.providerSessionId }
+    ]);
     controller.dispose();
   });
 

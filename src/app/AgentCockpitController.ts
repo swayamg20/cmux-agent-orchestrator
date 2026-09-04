@@ -375,18 +375,21 @@ export class AgentCockpitController {
       ) {
         throw new Error("The provider conversation changed before its saved match could be forgotten.");
       }
+      const expectedBinding = this.expectedTaskBinding(session, current);
       const forgotten = await this.bindings.forgetProviderSessionIfUnchanged(
         mapping,
+        expectedBinding,
         () => {
           if (this.disposed) return false;
-          this.resolveCurrentBindingSession(current);
+          const guardedCurrent = this.resolveCurrentBindingSession(current);
+          this.expectedTaskBinding(session, guardedCurrent);
           return true;
         }
       );
       if (this.disposed) return;
       if (!forgotten) {
         throw new Error(
-          "The provider conversation changed on disk before its saved match could be forgotten. Reload the plugin and try again."
+          "The provider conversation or task binding changed on disk before its saved match could be forgotten. Reload the plugin and try again."
         );
       }
       this.providerMetadata.forget(mapping.provider, mapping.providerSessionId);
