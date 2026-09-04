@@ -192,6 +192,40 @@ describe("BindingRepository", () => {
     expect(repository.list()).toHaveLength(1);
   });
 
+  it("accepts a reported save failure only when read-back proves the exact binding persisted", async () => {
+    let persisted: unknown;
+    let rejectAfterWrite = true;
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+        if (rejectAfterWrite) {
+          rejectAfterWrite = false;
+          throw new Error("write acknowledgement lost");
+        }
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const binding = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex" as const,
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    };
+
+    const first = await repository.attachIfSurfaceUnchanged(binding, null);
+    const repeated = await repository.attachIfSurfaceUnchanged(binding, first?.binding ?? null);
+
+    expect(first).toMatchObject({ isNewRun: true });
+    expect(repeated).toMatchObject({ isNewRun: false, run: { runId: first?.run.runId } });
+    expect(repository.list()).toHaveLength(1);
+    expect(repository.listRuns()).toHaveLength(1);
+  });
+
   it("does not let a conditional automatic attachment replace a queued explicit binding", async () => {
     let data: unknown;
     let releaseFirstSave: (() => void) | undefined;

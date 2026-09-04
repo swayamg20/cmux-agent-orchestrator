@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { hostname, userInfo } from "node:os";
+import { isDeepStrictEqual } from "node:util";
 import type { Plugin } from "obsidian";
 import { PRODUCT_NAME } from "../identity";
 import { isCanonicalUuid, normalizeCanonicalUuid } from "../security/identifiers";
@@ -535,8 +536,7 @@ export class BindingRepository {
     const operation = this.saveChain.catch(() => undefined).then(async () => {
       const draft = structuredClone(this.requireData());
       mutate(draft);
-      await this.plugin.saveData(draft);
-      this.data = draft;
+      await this.persistDraft(draft);
     });
     this.saveChain = operation;
     return operation;
@@ -546,8 +546,7 @@ export class BindingRepository {
     const operation = this.saveChain.catch(() => undefined).then(async () => {
       const draft = structuredClone(this.requireData());
       if (!mutate(draft)) return false;
-      await this.plugin.saveData(draft);
-      this.data = draft;
+      await this.persistDraft(draft);
       return true;
     });
     this.saveChain = operation.then(
@@ -555,6 +554,24 @@ export class BindingRepository {
       () => undefined
     );
     return operation;
+  }
+
+  private async persistDraft(draft: PersistedPluginData): Promise<void> {
+    try {
+      await this.plugin.saveData(draft);
+    } catch (saveError) {
+      try {
+        const persisted = (await this.plugin.loadData()) as unknown;
+        if (isDeepStrictEqual(persisted, draft)) {
+          this.data = draft;
+          return;
+        }
+      } catch {
+        // Preserve the original write error when its postcondition cannot be proven.
+      }
+      throw saveError;
+    }
+    this.data = draft;
   }
 }
 
