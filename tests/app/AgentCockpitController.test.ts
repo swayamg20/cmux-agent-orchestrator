@@ -1947,6 +1947,71 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not bind stale automatic work after topology fails and resumes from a fresh snapshot", async () => {
+    let persisted: unknown;
+    let snapshotCalls = 0;
+    let releaseCreate: (() => void) | undefined;
+    let markCreateStarted: (() => void) | undefined;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const transport: CmuxTransport = {
+      ...connectedTransport(4_650),
+      snapshot: async () => {
+        snapshotCalls += 1;
+        if (snapshotCalls === 2) throw new Error("simulated topology refresh failure");
+        return snapshot(4_650 + snapshotCalls);
+      }
+    };
+    const { app, markdownWrites } = memoryTaskApp({
+      beforeCreate: async () => {
+        markCreateStarted?.();
+        await createGate;
+      }
+    });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await createStarted;
+    await controller.refreshNow();
+    expect(controller.store.getState()).toMatchObject({
+      connection: { status: "error" },
+      health: {
+        topology: { status: "stale" },
+        lifecycle: { status: "unavailable" }
+      }
+    });
+
+    releaseCreate?.();
+    await controller.waitForBackgroundWork();
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().bindings).toHaveLength(1);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(controller.store.getState().health.topology.status).toBe("fresh");
+    controller.dispose();
+  });
+
   it("keeps a concurrent explicit task attachment instead of replacing it automatically", async () => {
     let persisted: unknown;
     let gateAutomaticCreate = false;

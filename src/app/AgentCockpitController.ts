@@ -605,6 +605,10 @@ export class AgentCockpitController {
   }
 
   private applyTopology(snapshot: CmuxSnapshot): void {
+    // Every topology snapshot is a new authority boundary. Work selected from
+    // the prior snapshot may finish creating a note, but it must not bind a
+    // provider session after this point without being selected again.
+    this.cancelAutomaticTaskTracking();
     const checkedAt = snapshot.observedAt;
     this.automaticProviderMappings = [];
     this.store.update((state) => ({
@@ -647,13 +651,24 @@ export class AgentCockpitController {
   }
 
   private applyTopologyFailure(error: unknown): void {
+    // A cached tree remains useful for display, but it is no longer current
+    // enough to authorize automatic durable bindings.
+    this.cancelIdentityResolution();
+    this.cancelAutomaticTaskTracking();
+    this.automaticProviderMappings = [];
     const checkedAt = Date.now();
     const message = readableError(error);
     this.store.update((state) => ({
       connection: connectionAfterError(state.connection, error, checkedAt),
       health: {
         ...state.health,
-        topology: failedHealth(state.health.topology, checkedAt, message, state.snapshot !== null)
+        topology: failedHealth(state.health.topology, checkedAt, message, state.snapshot !== null),
+        lifecycle: failedHealth(
+          state.health.lifecycle,
+          checkedAt,
+          `Exact provider identity is stale because cmux topology could not be refreshed: ${message}`,
+          state.health.lifecycle.lastSuccessAt !== null
+        )
       },
       error: message
     }));
@@ -1031,10 +1046,13 @@ export class AgentCockpitController {
   }
 
   private automaticTrackingAllowed(generation: number): boolean {
+    const state = this.store.getState();
     return (
       !this.disposed &&
       this.settings?.autoTrackAgentRuns === true &&
-      generation === this.automaticTrackingGeneration
+      generation === this.automaticTrackingGeneration &&
+      state.connection.status === "connected" &&
+      state.health.topology.status === "fresh"
     );
   }
 
