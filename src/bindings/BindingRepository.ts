@@ -152,7 +152,7 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
   const rawBindings = Array.isArray(raw.bindings) ? raw.bindings : [];
   const bindingsBySurface = new Map<string, BindingRecord>();
   const migratedRuns = new Map<string, AgentRunRecord>();
-  for (const candidate of rawBindings) {
+  for (const candidate of rawBindings.slice(0, MAX_BINDINGS_PER_MACHINE)) {
     let binding: BindingRecord | null = null;
     if (isBinding(candidate)) {
       binding = normalizeBindingRecord(candidate);
@@ -182,7 +182,7 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
 
   const runsById = new Map<string, AgentRunRecord>();
   if (Array.isArray(raw.runs)) {
-    for (const candidate of raw.runs) {
+    for (const candidate of raw.runs.slice(0, MAX_RUNS_PER_MACHINE)) {
       if (isRun(candidate)) {
         const run = normalizeRunRecord(candidate);
         runsById.set(run.runId, run);
@@ -204,7 +204,7 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
 function decodeProviderSessions(value: unknown): ProviderSessionMapping[] {
   if (!Array.isArray(value)) return [];
   const candidates: ProviderSessionMapping[] = [];
-  for (const candidate of value) {
+  for (const candidate of value.slice(0, MAX_PROVIDER_SESSIONS_PER_MACHINE)) {
     if (isProviderSessionMapping(candidate)) {
       candidates.push(normalizeProviderSessionMapping(candidate));
     }

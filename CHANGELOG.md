@@ -16,6 +16,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Treat an exact read-back of an ambiguously failed plugin-data save as committed, preventing retries from creating duplicate run records.
+- Refuse to reuse a persisted run that belongs to another task, repairing the binding with a new task-owned run while retaining history.
+- Ignore task-note vault events until plugin settings finish loading, preventing startup races from throwing before initialization.
 - Discard cached or in-flight terminal previews when a surface identity, exact provider conversation, or cmux connection changes.
 - Invalidate heuristic provider labels when a live cmux UUID changes title, surface type, or working directory, and ignore late preview evidence captured before that change.
 - Invalidate short-lived task write-through records on vault change, rename, or delete events so manual Markdown schema or identity edits become authoritative immediately.
@@ -47,6 +50,7 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
+- Bound the number of persisted binding, run, and provider-session candidates examined during startup, including malformed synced data.
 - Re-resolve the complete live cmux tuple and exact provider identity before persisting each automatic binding.
 - Fail closed for ambiguous, duplicate, heuristic-only, invalid, shell, and unknown identities, and retain detached run history as a durable no-recreate marker.
 - Serialize automatic tracking, normalize canonical provider UUID casing, and derive stable task IDs so refreshes, reloads, source-format differences, and recoverable partial writes cannot duplicate a provider run.

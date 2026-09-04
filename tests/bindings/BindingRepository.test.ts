@@ -133,6 +133,54 @@ describe("BindingRepository", () => {
     expect(repository.list()).toEqual([]);
   });
 
+  it("bounds decoding work for malformed persisted record arrays", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const seed = new BindingRepository(plugin);
+    await seed.load();
+    await seed.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+    const machine = Object.values(
+      (data as {
+        machines: Record<string, {
+          bindings: unknown[];
+          runs: unknown[];
+          providerSessions: unknown[];
+        }>;
+      }).machines
+    )[0]!;
+    const guardedCandidates = (limit: number, label: string): unknown[] => {
+      const values = new Array<unknown>(limit + 1);
+      Object.defineProperty(values, limit, {
+        get: () => {
+          throw new Error(`${label} decoder exceeded its candidate limit`);
+        }
+      });
+      return values;
+    };
+    machine.bindings = guardedCandidates(5_000, "binding");
+    machine.runs = guardedCandidates(20_000, "run");
+    machine.providerSessions = guardedCandidates(5_000, "provider session");
+
+    const repository = new BindingRepository(plugin);
+    await expect(repository.load()).resolves.toBeUndefined();
+    expect(repository.list()).toEqual([]);
+    expect(repository.listRuns()).toEqual([]);
+    expect(repository.listProviderSessions()).toEqual([]);
+  });
+
   it("does not retain a binding when persistence fails and recovers the save queue", async () => {
     let shouldFail = true;
     const plugin = {
