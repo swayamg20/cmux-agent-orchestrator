@@ -106,6 +106,7 @@ export class AgentCockpitController {
   private automaticTrackingPass: AutomaticTrackingPass | null = null;
   private identityAbortController: AbortController | null = null;
   private identityGeneration = 0;
+  private identityResolvedGeneration: number | null = null;
   private automaticProviderMappings: AutomaticProviderSessionMapping[] = [];
   private client: CmuxClient | null = null;
   private clientGeneration = 0;
@@ -726,6 +727,7 @@ export class AgentCockpitController {
     // the prior snapshot may finish creating a note, but it must not bind a
     // provider session after this point without being selected again.
     this.cancelAutomaticTaskTracking();
+    this.identityResolvedGeneration = null;
     const checkedAt = snapshot.observedAt;
     this.automaticProviderMappings = [];
     this.store.update((state) => ({
@@ -1232,6 +1234,7 @@ export class AgentCockpitController {
       this.pendingSettingsUpdates === 0 &&
       this.settings?.autoTrackAgentRuns === true &&
       generation === this.automaticTrackingGeneration &&
+      this.identityResolvedGeneration === this.identityGeneration &&
       state.connection.status === "connected" &&
       state.health.topology.status === "fresh"
     );
@@ -1347,7 +1350,9 @@ export class AgentCockpitController {
           return;
         }
         this.applyIdentityResolution(snapshot, resolution);
+        this.identityResolvedGeneration = generation;
         this.scheduleProviderMetadataRefresh();
+        this.scheduleAutomaticTaskTracking();
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || this.disposed) return;
@@ -1402,11 +1407,11 @@ export class AgentCockpitController {
       health: { ...state.health, lifecycle }
     }));
     this.recomputeSessions();
-    this.scheduleAutomaticTaskTracking();
   }
 
   private cancelIdentityResolution(): void {
     this.identityGeneration += 1;
+    this.identityResolvedGeneration = null;
     this.identityAbortController?.abort();
     this.identityAbortController = null;
   }

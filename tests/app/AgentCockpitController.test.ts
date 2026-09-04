@@ -1363,6 +1363,100 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("waits for current topology identity before tracking a saved manual mapping", async () => {
+    let persisted: unknown;
+    const staleSessionId = "55555555-5555-4555-8555-555555555555";
+    const liveSessionId = "66666666-6666-4666-8666-666666666666";
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const seed = new BindingRepository(plugin);
+    await seed.load();
+    await seed.mapProviderSession({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: staleSessionId,
+      matchedAt: "2026-09-04T00:00:00.000Z"
+    });
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [{
+        provider: "codex",
+        sessionId: staleSessionId,
+        title: "Saved manual choice",
+        titleSource: "explicit-name",
+        cwd: "/repository",
+        updatedAt: 1_000,
+        status: "idle"
+      }],
+      get: async () => null,
+      dispose: () => undefined
+    };
+    let releaseIdentity!: () => void;
+    const identityGate = new Promise<void>((resolve) => {
+      releaseIdentity = resolve;
+    });
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => {
+        await identityGate;
+        return {
+          ...exactCodexResolverResult(currentSnapshot.observedAt),
+          mappings: [{
+            ...exactCodexResolverResult(currentSnapshot.observedAt).mappings[0]!,
+            providerSessionId: liveSessionId
+          }]
+        };
+      },
+      dispose: () => undefined
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(1_450)),
+      new ProviderMetadataService([source]),
+      resolver
+    );
+
+    await controller.initialize();
+    const internal = controller as unknown as {
+      metadataWork: Promise<void>;
+      automaticTrackingWork: Promise<void>;
+    };
+    await internal.metadataWork;
+    await internal.automaticTrackingWork;
+    const prematurelyTrackedRuns = controller.store.getState().runs;
+    releaseIdentity();
+    await controller.waitForBackgroundWork();
+
+    const liveTaskId = automaticTaskId("codex", liveSessionId);
+    expect(prematurelyTrackedRuns).toEqual([]);
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: liveTaskId, runCount: 1 }
+    ]);
+    expect(controller.store.getState().bindings).toMatchObject([
+      {
+        taskId: liveTaskId,
+        provider: "codex",
+        providerSessionId: liveSessionId
+      }
+    ]);
+    expect(controller.store.getState().runs).toMatchObject([
+      {
+        taskId: liveTaskId,
+        provider: "codex",
+        providerSessionId: liveSessionId
+      }
+    ]);
+    controller.dispose();
+  });
+
   it("starts a new automatic task when a different exact session reuses the same surface", async () => {
     let persisted: unknown;
     let observedAt = 1_500;
