@@ -1713,6 +1713,8 @@ describe("AgentCockpitController connection failures", () => {
   });
 
   it("does not detach a newer task binding from a stale session card", async () => {
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
     const plugin = {
       loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
       saveData: async () => undefined
@@ -1737,6 +1739,9 @@ describe("AgentCockpitController connection failures", () => {
       { taskId: secondTask.taskId }
     ]);
     expect(controller.store.getState().sessions[0]?.linkedTaskId).toBe(secondTask.taskId);
+    expect(notices.slice(noticeStart)).toContain(
+      "The task binding changed before it could be detached. Refresh and try again."
+    );
     controller.dispose();
   });
 

@@ -22,6 +22,7 @@ All notable changes to this project will be documented in this file.
 - Refuse to save a conversation choice from a stale picker when that surface's manual match changed while the picker was open.
 - Refuse to save a task choice from a stale picker when the surface's task binding changed while the picker was open.
 - Refuse to overwrite a newer Kanban workflow decision from a stale task card.
+- Report a failed Detach action as an Obsidian notice without leaking an unhandled promise rejection into the console.
 
 ### Security
 
