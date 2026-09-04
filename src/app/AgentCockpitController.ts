@@ -1639,9 +1639,18 @@ export class AgentCockpitController {
       provider === "claude" || provider === "codex"
         ? normalizeCanonicalUuid(original.provider.sessionId ?? "")
         : null;
-    if (originalSessionId === null) return current;
+    const currentProvider = current.provider.provider;
+    const currentSessionId =
+      currentProvider === "claude" || currentProvider === "codex"
+        ? normalizeCanonicalUuid(current.provider.sessionId ?? "")
+        : null;
+    if (originalSessionId === null) {
+      if (currentSessionId !== null) {
+        throw new Error("The exact provider conversation changed before the task binding was updated.");
+      }
+      return current;
+    }
 
-    const currentSessionId = normalizeCanonicalUuid(current.provider.sessionId ?? "");
     if (current.provider.provider !== provider || currentSessionId !== originalSessionId) {
       throw new Error("The exact provider conversation changed before the task binding was updated.");
     }

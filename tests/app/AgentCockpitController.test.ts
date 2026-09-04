@@ -4887,6 +4887,63 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("rejects a stale manual attachment when an unidentified surface gains an exact conversation", async () => {
+    let observedAt = 5_450;
+    let exposeExactIdentity = false;
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) =>
+        exposeExactIdentity
+          ? exactCodexResolverResult(currentSnapshot.observedAt)
+          : {
+              checkedAt: currentSnapshot.observedAt + 1,
+              nativeLifecycleAvailable: false,
+              issues: [],
+              mappings: [],
+              lifecycle: []
+            },
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(observedAt),
+      snapshot: async () => snapshot(++observedAt)
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const original = controller.store.getState().sessions[0]!;
+    expect(original.provider.sessionId).toBeNull();
+    const task = await controller.createTask({ title: "Do not attach a newly identified run" });
+
+    exposeExactIdentity = true;
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().sessions[0]?.provider).toMatchObject({
+      provider: "codex",
+      sessionId: "55555555-5555-4555-8555-555555555555"
+    });
+
+    await expect(controller.attachTask(original, task)).rejects.toThrow(/conversation changed/);
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, runCount: 0 }
+    ]);
+    controller.dispose();
+  });
+
   it("loads metadata from fresh process evidence when an old saved surface is absent", async () => {
     let persisted: unknown;
     const plugin = {
