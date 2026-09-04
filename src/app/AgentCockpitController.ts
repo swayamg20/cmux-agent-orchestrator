@@ -73,6 +73,7 @@ export class AgentCockpitController {
   private automaticTrackingWork: Promise<void> = Promise.resolve();
   private automaticTrackingGeneration = 0;
   private readonly reportedAutomaticTrackingIssues = new Map<string, string>();
+  private automaticTrackingMessagesThisPass: Set<string> | null = null;
   private identityAbortController: AbortController | null = null;
   private identityGeneration = 0;
   private automaticProviderMappings: AutomaticProviderSessionMapping[] = [];
@@ -467,6 +468,7 @@ export class AgentCockpitController {
     this.evidence.clear();
     this.providerClassifier.clear();
     this.reportedAutomaticTrackingIssues.clear();
+    this.automaticTrackingMessagesThisPass = null;
     this.store.clear();
   }
 
@@ -667,7 +669,17 @@ export class AgentCockpitController {
     const generation = this.automaticTrackingGeneration;
     this.automaticTrackingWork = this.automaticTrackingWork
       .catch(() => undefined)
-      .then(() => this.reconcileAutomaticTasks(generation))
+      .then(async () => {
+        const messages = new Set<string>();
+        this.automaticTrackingMessagesThisPass = messages;
+        try {
+          await this.reconcileAutomaticTasks(generation);
+        } finally {
+          if (this.automaticTrackingMessagesThisPass === messages) {
+            this.automaticTrackingMessagesThisPass = null;
+          }
+        }
+      })
       .then(() => {
         if (this.automaticTrackingAllowed(generation)) {
           this.clearAutomaticTrackingIssues("automatic-tracking");
@@ -962,8 +974,11 @@ export class AgentCockpitController {
 
   private reportAutomaticTrackingIssue(key: string, error: unknown): void {
     const message = readableError(error);
-    if (this.reportedAutomaticTrackingIssues.get(key) === message) return;
+    const alreadyReportedForKey = this.reportedAutomaticTrackingIssues.get(key) === message;
     this.reportedAutomaticTrackingIssues.set(key, message);
+    const alreadyReportedThisPass = this.automaticTrackingMessagesThisPass?.has(message) === true;
+    this.automaticTrackingMessagesThisPass?.add(message);
+    if (alreadyReportedForKey || alreadyReportedThisPass) return;
     new Notice(`Automatic task tracking could not finish: ${message}`);
   }
 

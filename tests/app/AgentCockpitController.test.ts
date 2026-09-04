@@ -1147,6 +1147,88 @@ describe("AgentCockpitController connection failures", () => {
     }
   });
 
+  it("coalesces the same automatic tracking failure across sessions in one reconciliation", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const currentSnapshot = snapshot(4_300);
+    const workspace = currentSnapshot.windows[0]!.workspaces[0]!;
+    const pane = workspace.panes[0]!;
+    pane.surfaces.push({
+      ...pane.surfaces[0]!,
+      id: "66666666-6666-4666-8666-666666666666",
+      index: 1,
+      indexInPane: 1,
+      title: "second repository session",
+      selected: false,
+      focused: false
+    });
+    const resolver: ProviderSessionResolver = {
+      resolve: async (nextSnapshot) => ({
+        checkedAt: nextSnapshot.observedAt + 1,
+        nativeLifecycleAvailable: false,
+        issues: [],
+        mappings: [
+          ...exactCodexResolverResult(nextSnapshot.observedAt).mappings,
+          {
+            workspaceId: workspace.id,
+            paneId: pane.id,
+            surfaceId: "66666666-6666-4666-8666-666666666666",
+            provider: "codex",
+            providerSessionId: "77777777-7777-4777-8777-777777777777",
+            matchSource: "codex-writer-lock",
+            confidence: "high",
+            explanation: "Verified second exact writer identity.",
+            observedAt: nextSnapshot.observedAt + 1
+          }
+        ],
+        lifecycle: []
+      }),
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(4_300),
+      snapshot: async () => currentSnapshot
+    };
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    notices.length = 0;
+    const { app } = memoryTaskApp({
+      beforeCreate: async () => {
+        throw new Error("simulated shared task creation failure");
+      }
+    });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    try {
+      await controller.initialize();
+      await controller.waitForBackgroundWork();
+
+      expect(
+        controller.store
+          .getState()
+          .sessions.filter((session) => session.provider.confidence === "high")
+      ).toHaveLength(2);
+      expect(
+        notices.filter((message) =>
+          message.endsWith("simulated shared task creation failure")
+        )
+      ).toHaveLength(1);
+    } finally {
+      controller.dispose();
+      notices.length = 0;
+    }
+  });
+
   it("cancels stale automatic tracking work as soon as the user opts out", async () => {
     let persisted: unknown;
     let releaseCreate: (() => void) | undefined;
