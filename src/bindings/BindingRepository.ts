@@ -104,6 +104,47 @@ function isProviderSessionMapping(value: unknown): value is ProviderSessionMappi
   );
 }
 
+function normalizeNewBindingRecord(binding: NewBindingRecord): NewBindingRecord {
+  return {
+    ...binding,
+    taskId: normalizeCanonicalUuid(binding.taskId)!,
+    workspaceId: normalizeCanonicalUuid(binding.workspaceId)!,
+    paneId: normalizeCanonicalUuid(binding.paneId)!,
+    surfaceId: normalizeCanonicalUuid(binding.surfaceId)!,
+    providerSessionId: normalizeProviderSessionId(binding.providerSessionId)
+  };
+}
+
+function normalizeBindingRecord(binding: BindingRecord): BindingRecord {
+  return {
+    ...normalizeNewBindingRecord(binding),
+    bindingId: normalizeCanonicalUuid(binding.bindingId)!,
+    runId: normalizeCanonicalUuid(binding.runId)!
+  };
+}
+
+function normalizeRunRecord(run: AgentRunRecord): AgentRunRecord {
+  return {
+    ...run,
+    runId: normalizeCanonicalUuid(run.runId)!,
+    taskId: normalizeCanonicalUuid(run.taskId)!,
+    providerSessionId: normalizeProviderSessionId(run.providerSessionId),
+    parentRunId: run.parentRunId === null ? null : normalizeCanonicalUuid(run.parentRunId)!
+  };
+}
+
+function normalizeProviderSessionMapping(
+  mapping: ProviderSessionMapping
+): ProviderSessionMapping {
+  return {
+    ...mapping,
+    workspaceId: normalizeCanonicalUuid(mapping.workspaceId)!,
+    paneId: normalizeCanonicalUuid(mapping.paneId)!,
+    surfaceId: normalizeCanonicalUuid(mapping.surfaceId)!,
+    providerSessionId: normalizeCanonicalUuid(mapping.providerSessionId)!
+  };
+}
+
 function decodeMachine(value: unknown, id: string): MachineBindings {
   const raw = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
   const rawBindings = Array.isArray(raw.bindings) ? raw.bindings : [];
@@ -112,28 +153,25 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
   for (const candidate of rawBindings) {
     let binding: BindingRecord | null = null;
     if (isBinding(candidate)) {
-      binding = {
-        ...candidate,
-        providerSessionId: normalizeProviderSessionId(candidate.providerSessionId)
-      };
+      binding = normalizeBindingRecord(candidate);
     }
     else if (isLegacyBinding(candidate)) {
-      const runId = stableUuid(`run\0${id}\0${candidate.taskId}\0${candidate.surfaceId}\0${candidate.attachedAt}`);
+      const normalized = normalizeNewBindingRecord(candidate);
+      const runId = stableUuid(`run\0${id}\0${normalized.taskId}\0${normalized.surfaceId}\0${normalized.attachedAt}`);
       binding = {
-        ...candidate,
-        providerSessionId: normalizeProviderSessionId(candidate.providerSessionId),
-        bindingId: stableUuid(`binding\0${id}\0${candidate.workspaceId}\0${candidate.surfaceId}\0${candidate.attachedAt}`),
+        ...normalized,
+        bindingId: stableUuid(`binding\0${id}\0${normalized.workspaceId}\0${normalized.surfaceId}\0${normalized.attachedAt}`),
         runId
       };
       migratedRuns.set(runId, {
         runId,
-        taskId: candidate.taskId,
-        provider: candidate.provider,
-        providerSessionId: normalizeProviderSessionId(candidate.providerSessionId),
+        taskId: normalized.taskId,
+        provider: normalized.provider,
+        providerSessionId: normalized.providerSessionId,
         relation: "unknown",
         parentRunId: null,
-        firstAttachedAt: candidate.attachedAt,
-        lastAttachedAt: candidate.attachedAt
+        firstAttachedAt: normalized.attachedAt,
+        lastAttachedAt: normalized.attachedAt
       });
     }
     if (binding) bindingsBySurface.set(binding.surfaceId, binding);
@@ -144,10 +182,8 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
   if (Array.isArray(raw.runs)) {
     for (const candidate of raw.runs) {
       if (isRun(candidate)) {
-        runsById.set(candidate.runId, {
-          ...candidate,
-          providerSessionId: normalizeProviderSessionId(candidate.providerSessionId)
-        });
+        const run = normalizeRunRecord(candidate);
+        runsById.set(run.runId, run);
       }
       if (runsById.size >= MAX_RUNS_PER_MACHINE) break;
     }
@@ -168,10 +204,7 @@ function decodeProviderSessions(value: unknown): ProviderSessionMapping[] {
   const candidates: ProviderSessionMapping[] = [];
   for (const candidate of value) {
     if (isProviderSessionMapping(candidate)) {
-      candidates.push({
-        ...candidate,
-        providerSessionId: normalizeCanonicalUuid(candidate.providerSessionId)!
-      });
+      candidates.push(normalizeProviderSessionMapping(candidate));
     }
     if (candidates.length >= MAX_PROVIDER_SESSIONS_PER_MACHINE) break;
   }
@@ -263,8 +296,9 @@ export class BindingRepository {
   }
 
   listRuns(taskId?: string): AgentRunRecord[] {
+    const normalizedTaskId = taskId === undefined ? undefined : normalizeCanonicalUuid(taskId) ?? taskId;
     return this.currentMachine().runs
-      .filter((run) => taskId === undefined || run.taskId === taskId)
+      .filter((run) => normalizedTaskId === undefined || run.taskId === normalizedTaskId)
       .map((run) => ({ ...run }))
       .sort((left, right) => right.lastAttachedAt.localeCompare(left.lastAttachedAt));
   }
@@ -277,10 +311,7 @@ export class BindingRepository {
     if (!isProviderSessionMapping(mapping)) {
       throw new Error("Provider session mapping contains an invalid canonical identity or value.");
     }
-    const normalized = {
-      ...mapping,
-      providerSessionId: normalizeCanonicalUuid(mapping.providerSessionId)!
-    };
+    const normalized = normalizeProviderSessionMapping(mapping);
     await this.commit((data) => {
       const machine = this.machineFor(data);
       const conflicting = machine.providerSessions.find(
@@ -328,16 +359,17 @@ export class BindingRepository {
   }
 
   async forgetProviderSession(surfaceId: string): Promise<void> {
-    if (!isCanonicalUuid(surfaceId)) throw new Error("Surface ID is not a canonical UUID.");
+    const normalizedSurfaceId = normalizeCanonicalUuid(surfaceId);
+    if (normalizedSurfaceId === null) throw new Error("Surface ID is not a canonical UUID.");
     await this.commit((data) => {
       const machine = this.machineFor(data);
       const removed = machine.providerSessions.find(
-        (mapping) => mapping.surfaceId === surfaceId
+        (mapping) => mapping.surfaceId === normalizedSurfaceId
       );
       machine.providerSessions = machine.providerSessions.filter(
-        (mapping) => mapping.surfaceId !== surfaceId
+        (mapping) => mapping.surfaceId !== normalizedSurfaceId
       );
-      const binding = machine.bindings.find((candidate) => candidate.surfaceId === surfaceId);
+      const binding = machine.bindings.find((candidate) => candidate.surfaceId === normalizedSurfaceId);
       if (
         removed &&
         binding?.provider === removed.provider &&
@@ -356,16 +388,17 @@ export class BindingRepository {
   }
 
   findBySurface(surfaceId: string): BindingRecord | null {
-    const binding = this.currentMachine().bindings.find((candidate) => candidate.surfaceId === surfaceId);
+    const normalizedSurfaceId = normalizeCanonicalUuid(surfaceId);
+    if (normalizedSurfaceId === null) return null;
+    const binding = this.currentMachine().bindings.find(
+      (candidate) => candidate.surfaceId === normalizedSurfaceId
+    );
     return binding ? { ...binding } : null;
   }
 
   async attach(input: NewBindingRecord): Promise<AttachBindingResult> {
     if (!isLegacyBinding(input)) throw new Error("Binding contains an invalid canonical identity or value.");
-    const normalizedInput = {
-      ...input,
-      providerSessionId: normalizeProviderSessionId(input.providerSessionId)
-    };
+    const normalizedInput = normalizeNewBindingRecord(input);
     let result: AttachBindingResult | null = null;
     await this.commit((data) => {
       const machine = this.machineFor(data);
@@ -417,10 +450,13 @@ export class BindingRepository {
   }
 
   async detach(surfaceId: string): Promise<void> {
-    if (!isCanonicalUuid(surfaceId)) throw new Error("Surface ID is not a canonical UUID.");
+    const normalizedSurfaceId = normalizeCanonicalUuid(surfaceId);
+    if (normalizedSurfaceId === null) throw new Error("Surface ID is not a canonical UUID.");
     await this.commit((data) => {
       const machine = this.machineFor(data);
-      machine.bindings = machine.bindings.filter((binding) => binding.surfaceId !== surfaceId);
+      machine.bindings = machine.bindings.filter(
+        (binding) => binding.surfaceId !== normalizedSurfaceId
+      );
     });
   }
 

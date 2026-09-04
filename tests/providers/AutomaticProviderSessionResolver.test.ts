@@ -11,11 +11,11 @@ import type {
 } from "../../src/providers/identity/types";
 import type { ProviderSessionSource } from "../../src/providers/types";
 
-const workspaceId = "22222222-2222-4222-8222-222222222222";
-const paneId = "33333333-3333-4333-8333-333333333333";
-const surfaceId = "44444444-4444-4444-8444-444444444444";
-const secondSurfaceId = "66666666-6666-4666-8666-666666666666";
-const sessionId = "55555555-5555-4555-8555-55555555555a";
+const workspaceId = "a2222222-a222-4222-8222-a22222222222";
+const paneId = "b3333333-b333-4333-8333-b33333333333";
+const surfaceId = "c4444444-c444-4444-8444-c44444444444";
+const secondSurfaceId = "e6666666-e666-4666-8666-e66666666666";
+const sessionId = "d5555555-d555-4555-8555-d5555555555a";
 
 function snapshot(): CmuxSnapshot {
   return {
@@ -194,6 +194,26 @@ describe("AutomaticProviderSessionResolver", () => {
     ]);
     expect(metadata.evidence.get(`codex:${sessionId}`)?.title).toBe("Fix exact provider titles");
     expect(processes.readLocks).toHaveBeenCalledWith(101);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("joins the uppercase macOS CMUX_SURFACE_ID to a lowercase cmux snapshot", async () => {
+    const metadata = new ProviderMetadataService([codexSource()]);
+    const processes = new FakeProcessSource([processRecord()]);
+    processes.readSurface.mockResolvedValue(surfaceId.toUpperCase());
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(result.mappings).toEqual([
+      expect.objectContaining({
+        workspaceId,
+        paneId,
+        surfaceId,
+        providerSessionId: sessionId
+      })
+    ]);
     resolver.dispose();
     metadata.dispose();
   });

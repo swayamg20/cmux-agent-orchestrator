@@ -1,5 +1,5 @@
 import type { LiveSession } from "../state/types";
-import { normalizeCanonicalUuid } from "../security/identifiers";
+import { canonicalUuidEquals, normalizeCanonicalUuid } from "../security/identifiers";
 import { ClaudeSessionSource } from "./ClaudeSessionSource";
 import { CodexAppServerSource } from "./CodexAppServerSource";
 import type {
@@ -77,12 +77,17 @@ export class ProviderMetadataService {
     sessions: readonly LiveSession[]
   ): Promise<void> {
     if (this.disposed) return;
-    const liveBySurface = new Map(sessions.map((session) => [session.surfaceId, session] as const));
+    const liveBySurface = new Map(
+      sessions.map((session) => [normalizeCanonicalUuid(session.surfaceId) ?? session.surfaceId, session] as const)
+    );
     const targets = mappings.flatMap((mapping) => {
-      const session = liveBySurface.get(mapping.surfaceId);
+      const surfaceId = normalizeCanonicalUuid(mapping.surfaceId);
+      if (surfaceId === null) return [];
+      const session = liveBySurface.get(surfaceId);
+      if (!session) return [];
       const exact =
-        session?.workspaceId === mapping.workspaceId &&
-        session.paneId === mapping.paneId &&
+        canonicalUuidEquals(session.workspaceId, mapping.workspaceId) &&
+        canonicalUuidEquals(session.paneId, mapping.paneId) &&
         session.currentDirectory !== null;
       return exact && session.currentDirectory
         ? [{ mapping, cwd: session.currentDirectory }]

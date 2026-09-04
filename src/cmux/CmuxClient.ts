@@ -3,6 +3,7 @@ import path from "node:path";
 import { constants } from "node:fs";
 import { clearTimeout as cancelTimer, setTimeout as startTimer } from "node:timers";
 import { PRODUCT_NAME } from "../identity";
+import { canonicalUuidEquals } from "../security/identifiers";
 import { CliCmuxTransport } from "./CliCmuxTransport";
 import type { CmuxTransport, PreviewRequest } from "./CmuxTransport";
 import {
@@ -91,9 +92,9 @@ export class CmuxClient {
 function sameTarget(left: CmuxTarget | null, right: CmuxTarget): boolean {
   return (
     left !== null &&
-    left.workspaceId === right.workspaceId &&
-    left.paneId === right.paneId &&
-    left.surfaceId === right.surfaceId
+    canonicalUuidEquals(left.workspaceId, right.workspaceId) &&
+    canonicalUuidEquals(left.paneId, right.paneId) &&
+    canonicalUuidEquals(left.surfaceId, right.surfaceId)
   );
 }
 
@@ -116,13 +117,15 @@ export function resolveTarget(snapshot: CmuxSnapshot, target: CmuxTarget): CmuxR
   const matches: CmuxResolvedTarget[] = [];
   for (const window of snapshot.windows) {
     for (const workspace of window.workspaces) {
-      if (workspace.id !== target.workspaceId) continue;
+      if (!canonicalUuidEquals(workspace.id, target.workspaceId)) continue;
       for (const pane of workspace.panes) {
-        if (pane.id !== target.paneId) continue;
+        if (!canonicalUuidEquals(pane.id, target.paneId)) continue;
         for (const surface of pane.surfaces) {
-          if (surface.id !== target.surfaceId) continue;
+          if (!canonicalUuidEquals(surface.id, target.surfaceId)) continue;
           matches.push({
-            ...target,
+            workspaceId: workspace.id,
+            paneId: pane.id,
+            surfaceId: surface.id,
             workspaceTitle: workspace.title,
             surfaceTitle: surface.title,
             currentDirectory: workspace.currentDirectory

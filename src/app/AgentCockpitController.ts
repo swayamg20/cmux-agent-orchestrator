@@ -27,7 +27,11 @@ import { AttentionEngine } from "../runtime/AttentionEngine";
 import { PreviewCache } from "../runtime/PreviewCache";
 import { PreviewScheduler } from "../runtime/PreviewScheduler";
 import { projectLiveSessions } from "../runtime/SessionProjection";
-import { isCanonicalUuid, normalizeCanonicalUuid } from "../security/identifiers";
+import {
+  canonicalUuidEquals,
+  isCanonicalUuid,
+  normalizeCanonicalUuid
+} from "../security/identifiers";
 import { parseSettings, type AgentCockpitSettings } from "../settings/AgentCockpitSettings";
 import { CockpitStore } from "../state/CockpitStore";
 import type {
@@ -248,9 +252,9 @@ export class AgentCockpitController {
         .listProviderSessions()
         .find(
           (candidate) =>
-            candidate.workspaceId === current.workspaceId &&
-            candidate.paneId === current.paneId &&
-            candidate.surfaceId === current.surfaceId
+            canonicalUuidEquals(candidate.workspaceId, current.workspaceId) &&
+            canonicalUuidEquals(candidate.paneId, current.paneId) &&
+            canonicalUuidEquals(candidate.surfaceId, current.surfaceId)
         );
       if (!mapping) {
         new Notice("This surface has no saved provider conversation match.");
@@ -811,9 +815,9 @@ export class AgentCockpitController {
     const state = this.store.getState();
     const current = state.sessions.find(
       (session) =>
-        session.workspaceId === candidate.session.workspaceId &&
-        session.paneId === candidate.session.paneId &&
-        session.surfaceId === candidate.session.surfaceId
+        canonicalUuidEquals(session.workspaceId, candidate.session.workspaceId) &&
+        canonicalUuidEquals(session.paneId, candidate.session.paneId) &&
+        canonicalUuidEquals(session.surfaceId, candidate.session.surfaceId)
     );
     if (current === undefined || current.linkedTaskId !== null) return null;
 
@@ -947,21 +951,31 @@ export class AgentCockpitController {
     const mappings = new Map<string, ProviderSessionReference>();
     const claimedProviderSessions = new Set<string>();
     const liveSessions = new Map(
-      this.store.getState().sessions.map((session) => [session.surfaceId, session] as const)
+      this.store.getState().sessions.map(
+        (session) => [normalizeCanonicalUuid(session.surfaceId) ?? session.surfaceId, session] as const
+      )
     );
     const addMapping = (mapping: ProviderSessionReference): void => {
-      const live = liveSessions.get(mapping.surfaceId);
+      const surfaceId = normalizeCanonicalUuid(mapping.surfaceId);
       const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
+      if (surfaceId === null || providerSessionId === null) return;
+      const live = liveSessions.get(surfaceId);
+      if (!live) return;
       if (
-        providerSessionId === null ||
-        live?.workspaceId !== mapping.workspaceId ||
-        live.paneId !== mapping.paneId
+        !canonicalUuidEquals(live.workspaceId, mapping.workspaceId) ||
+        !canonicalUuidEquals(live.paneId, mapping.paneId)
       ) {
         return;
       }
       const identityKey = providerSessionKey(mapping.provider, providerSessionId);
-      if (mappings.has(mapping.surfaceId) || claimedProviderSessions.has(identityKey)) return;
-      mappings.set(mapping.surfaceId, { ...mapping, providerSessionId });
+      if (mappings.has(surfaceId) || claimedProviderSessions.has(identityKey)) return;
+      mappings.set(surfaceId, {
+        ...mapping,
+        workspaceId: live.workspaceId,
+        paneId: live.paneId,
+        surfaceId: live.surfaceId,
+        providerSessionId
+      });
       claimedProviderSessions.add(identityKey);
     };
 
@@ -1023,9 +1037,9 @@ export class AgentCockpitController {
       .getState()
       .sessions.find(
         (candidate) =>
-          candidate.workspaceId === original.workspaceId &&
-          candidate.paneId === original.paneId &&
-          candidate.surfaceId === original.surfaceId
+          canonicalUuidEquals(candidate.workspaceId, original.workspaceId) &&
+          canonicalUuidEquals(candidate.paneId, original.paneId) &&
+          canonicalUuidEquals(candidate.surfaceId, original.surfaceId)
       );
     if (!current) throw new Error("The exact cmux surface no longer exists. Refresh and try again.");
     return current;

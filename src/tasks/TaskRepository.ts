@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizePath, TFile, TFolder, type App } from "obsidian";
-import { isCanonicalUuid } from "../security/identifiers";
+import { canonicalUuidEquals, normalizeCanonicalUuid } from "../security/identifiers";
 import { createTaskMarkdown, type NewTaskInput } from "./TaskTemplate";
 import {
   assertWorkflowTransition,
@@ -89,24 +89,26 @@ export class TaskRepository {
   }
 
   async ensure(options: EnsureTaskOptions): Promise<EnsureTaskResult> {
-    if (!isCanonicalUuid(options.taskId)) throw new Error("Task ID is not a canonical UUID.");
-    const matches = this.findMatchesById(options.taskId);
+    const taskId = normalizeCanonicalUuid(options.taskId);
+    if (taskId === null) throw new Error("Task ID is not a canonical UUID.");
+    const matches = this.findMatchesById(taskId);
     if (matches.length > 1) throw new Error("The automatic task ID is duplicated in the vault.");
     if (matches[0]) return { task: matches[0], created: false };
-    return { task: await this.createWithId(options, options.taskId), created: true };
+    return { task: await this.createWithId(options, taskId), created: true };
   }
 
   private async createWithId(options: CreateTaskOptions, taskId: string): Promise<TaskRecord> {
     const title = options.title.replace(/[\r\n]+/g, " ").trim();
     if (!title) throw new Error("Task title is required.");
     if (title.length > 512) throw new Error("Task title must be 512 characters or fewer.");
-    if (!isCanonicalUuid(taskId)) throw new Error("Task ID is not a canonical UUID.");
+    const normalizedTaskId = normalizeCanonicalUuid(taskId);
+    if (normalizedTaskId === null) throw new Error("Task ID is not a canonical UUID.");
     const taskFolder = this.taskFolder;
     await this.ensureFolder(taskFolder);
     const now = new Date().toISOString();
     const input: NewTaskInput = {
       title,
-      taskId,
+      taskId: normalizedTaskId,
       workflowStatus: options.workflowStatus ?? "active",
       priority: options.priority ?? "normal",
       repository: taskContext(options.repository, "Repository", 4_096),
@@ -139,7 +141,9 @@ export class TaskRepository {
     const latest = this.findById(task.taskId);
     const updatedAt = new Date().toISOString();
     await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
-      if (frontmatter["task-id"] !== task.taskId) throw new Error("Task identity changed before the update.");
+      if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
+        throw new Error("Task identity changed before the update.");
+      }
       frontmatter["workflow-status"] = workflowStatus;
       frontmatter["updated-at"] = updatedAt;
     });
@@ -151,7 +155,9 @@ export class TaskRepository {
     let nextCount = task.runCount + 1;
     const updatedAt = new Date().toISOString();
     await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
-      if (frontmatter["task-id"] !== task.taskId) throw new Error("Task identity changed before the update.");
+      if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
+        throw new Error("Task identity changed before the update.");
+      }
       const current =
         typeof frontmatter["run-count"] === "number" &&
         Number.isFinite(frontmatter["run-count"]) &&
@@ -177,7 +183,9 @@ export class TaskRepository {
     let changed = false;
     const updatedAt = new Date().toISOString();
     await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
-      if (frontmatter["task-id"] !== task.taskId) throw new Error("Task identity changed before the update.");
+      if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
+        throw new Error("Task identity changed before the update.");
+      }
       const current =
         typeof frontmatter["run-count"] === "number" &&
         Number.isFinite(frontmatter["run-count"]) &&
@@ -230,14 +238,16 @@ export class TaskRepository {
   }
 
   private findMatchesById(taskId: string): TaskRecord[] {
-    const matches = this.indexedTasks().filter((task) => task.taskId === taskId);
-    const recent = this.recentTasks.get(taskId);
+    const normalizedTaskId = normalizeCanonicalUuid(taskId);
+    if (normalizedTaskId === null) return [];
+    const matches = this.indexedTasks().filter((task) => task.taskId === normalizedTaskId);
+    const recent = this.recentTasks.get(normalizedTaskId);
     if (recent === undefined) return matches;
     if (
       this.app.vault.getAbstractFileByPath(recent.file.path) === null ||
       !this.isInTaskFolder(recent.file.path)
     ) {
-      this.recentTasks.delete(taskId);
+      this.recentTasks.delete(normalizedTaskId);
       return matches;
     }
     return matches.some((task) => task.file.path === recent.file.path)
@@ -248,6 +258,10 @@ export class TaskRepository {
   private isInTaskFolder(path: string): boolean {
     return normalizePath(path).startsWith(`${this.taskFolder}/`);
   }
+}
+
+function frontmatterTaskIdMatches(value: unknown, taskId: string): boolean {
+  return typeof value === "string" && canonicalUuidEquals(value, taskId);
 }
 
 export function slugify(value: string): string {

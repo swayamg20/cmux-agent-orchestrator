@@ -120,6 +120,40 @@ describe("ProviderMetadataService", () => {
     service.dispose();
   });
 
+  it("refreshes an exact target when the saved cmux tuple uses different UUID casing", async () => {
+    const list = vi.fn(async () => [metadata]);
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list,
+      get: vi.fn(async () => metadata),
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const session = {
+      ...liveSession(),
+      workspaceId: "a2222222-a222-4222-8222-a22222222222",
+      paneId: "b3333333-b333-4333-8333-b33333333333",
+      surfaceId: "c4444444-c444-4444-8444-c44444444444"
+    };
+
+    await service.refreshMapped(
+      [
+        {
+          workspaceId: session.workspaceId.toUpperCase(),
+          paneId: session.paneId.toUpperCase(),
+          surfaceId: session.surfaceId.toUpperCase(),
+          provider: "codex",
+          providerSessionId: metadata.sessionId,
+          matchedAt: "2026-09-02T00:00:00.000Z"
+        }
+      ],
+      [session]
+    );
+
+    expect(list).toHaveBeenCalledWith(metadata.cwd, expect.any(AbortSignal));
+    service.dispose();
+  });
+
   it("propagates caller cancellation into an active provider metadata request", async () => {
     let providerSignal: AbortSignal | undefined;
     const source: ProviderSessionSource = {

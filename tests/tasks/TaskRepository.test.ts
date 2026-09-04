@@ -139,4 +139,39 @@ describe("TaskRepository", () => {
       repository.ensure({ taskId, title: "Codex run · repository", repository: "/repository" })
     ).rejects.toThrow("The automatic task ID is duplicated in the vault.");
   });
+
+  it("reuses and safely updates a task whose frontmatter UUID uses uppercase", async () => {
+    const taskFile = file("Agent Cockpit/Tasks/task.md");
+    const root = folder("Agent Cockpit/Tasks", [taskFile]);
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const frontmatter: Record<string, unknown> = {
+      "agent-cockpit": "task",
+      "schema-version": 1,
+      "task-id": taskId.toUpperCase(),
+      title: "Existing task",
+      "workflow-status": "active"
+    };
+    const app = {
+      vault: {
+        getAbstractFileByPath: (path: string) =>
+          path === root.path ? root : path === taskFile.path ? taskFile : null
+      },
+      metadataCache: {
+        getFileCache: () => ({ frontmatter })
+      },
+      fileManager: {
+        processFrontMatter: async (
+          _file: TFile,
+          update: (value: Record<string, unknown>) => void
+        ) => update(frontmatter)
+      }
+    } as unknown as App;
+    const repository = new TaskRepository(app, root.path);
+
+    const ensured = await repository.ensure({ taskId, title: "Should not be created" });
+    await repository.updateWorkflow(ensured.task, "review");
+
+    expect(ensured).toMatchObject({ created: false, task: { taskId } });
+    expect(frontmatter["workflow-status"]).toBe("review");
+  });
 });

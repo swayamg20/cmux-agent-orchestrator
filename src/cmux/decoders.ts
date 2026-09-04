@@ -11,7 +11,7 @@ import {
   type CmuxWindow,
   type CmuxWorkspace
 } from "./types";
-import { isCanonicalUuid } from "../security/identifiers";
+import { normalizeCanonicalUuid } from "../security/identifiers";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -53,8 +53,9 @@ function nullableString(value: unknown): string | null {
 
 function canonicalUuid(value: unknown, label: string): string {
   const decoded = string(value, label);
-  if (!isCanonicalUuid(decoded)) throw new CmuxError("malformed-output", `${label} must be a canonical UUID.`);
-  return decoded;
+  const normalized = normalizeCanonicalUuid(decoded);
+  if (normalized === null) throw new CmuxError("malformed-output", `${label} must be a canonical UUID.`);
+  return normalized;
 }
 
 function nullableCanonicalUuid(value: unknown, label: string): string | null {

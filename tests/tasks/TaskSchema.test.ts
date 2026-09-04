@@ -45,6 +45,21 @@ describe("task schema", () => {
     ).toBeNull();
   });
 
+  it("normalizes task UUID casing at the Markdown trust boundary", () => {
+    const file = {
+      basename: "Task",
+      stat: { ctime: 1, mtime: 2 }
+    } as TaskRecord["file"];
+
+    expect(
+      parseTaskRecord(file, {
+        "agent-cockpit": "task",
+        "schema-version": 1,
+        "task-id": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
+      })?.taskId
+    ).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  });
+
   it("bounds untrusted frontmatter and normalizes invalid scalar values", () => {
     const file = {
       basename: "Task",

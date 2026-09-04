@@ -80,16 +80,23 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
       ],
       issues
     );
-    const mappingBySurface = new Map(mappings.map((mapping) => [mapping.surfaceId, mapping]));
+    const mappingBySurface = new Map(
+      mappings.map((mapping) => [normalizeCanonicalUuid(mapping.surfaceId)!, mapping])
+    );
     const nativeLifecycle = nativeAgents.records.flatMap((record) => {
-      const surface = surfaces.get(record.surfaceId);
+      const surfaceId = normalizeCanonicalUuid(record.surfaceId);
+      if (surfaceId === null) return [];
+      const surface = surfaces.get(surfaceId);
       if (!surface) return [];
-      const mapping = mappingBySurface.get(record.surfaceId);
+      const mapping = mappingBySurface.get(surfaceId);
       return [nativeLifecycleObservation(record, surface, mapping, checkedAt)];
     });
-    const nativeSurfaceIds = new Set(nativeLifecycle.map((observation) => observation.surfaceId));
+    const nativeSurfaceIds = new Set(
+      nativeLifecycle.map((observation) => normalizeCanonicalUuid(observation.surfaceId)!)
+    );
     const localLifecycle = processResolutions.flatMap((resolution) =>
-      resolution.lifecycle && !nativeSurfaceIds.has(resolution.lifecycle.surfaceId)
+      resolution.lifecycle &&
+      !nativeSurfaceIds.has(normalizeCanonicalUuid(resolution.lifecycle.surfaceId)!)
         ? [resolution.lifecycle]
         : []
     );
@@ -125,7 +132,8 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     const candidates = await mapLimited(before, RESOLUTION_CONCURRENCY, async (processRecord) => {
       try {
         const surfaceId = await this.processes.readSurfaceId(processRecord.pid, signal);
-        const surface = surfaceId ? surfaces.get(surfaceId) : undefined;
+        const normalizedSurfaceId = surfaceId ? normalizeCanonicalUuid(surfaceId) : null;
+        const surface = normalizedSurfaceId ? surfaces.get(normalizedSurfaceId) : undefined;
         return surface ? { process: processRecord, surface } : null;
       } catch {
         return null;
@@ -229,20 +237,25 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     signal: AbortSignal | undefined,
     issues: string[]
   ): Promise<AutomaticProviderSessionMapping[]> {
-    const processBySurface = new Map(processMappings.map((mapping) => [mapping.surfaceId, mapping]));
+    const processBySurface = new Map(
+      processMappings.map((mapping) => [normalizeCanonicalUuid(mapping.surfaceId)!, mapping])
+    );
     const candidates = records.filter(
       (record) =>
         record.sessionId !== null &&
         isCanonicalUuid(record.sessionId) &&
-        surfaces.get(record.surfaceId)?.currentDirectory !== null
+        normalizeCanonicalUuid(record.surfaceId) !== null &&
+        surfaces.get(normalizeCanonicalUuid(record.surfaceId)!)?.currentDirectory !== null
     );
     return (
       await mapLimited(candidates, RESOLUTION_CONCURRENCY, async (record) => {
-        const surface = surfaces.get(record.surfaceId);
+        const surfaceId = normalizeCanonicalUuid(record.surfaceId);
+        if (surfaceId === null) return null;
+        const surface = surfaces.get(surfaceId);
         if (!surface?.currentDirectory || !record.sessionId) return null;
         const providerSessionId = normalizeCanonicalUuid(record.sessionId);
         if (providerSessionId === null) return null;
-        const processMapping = processBySurface.get(record.surfaceId);
+        const processMapping = processBySurface.get(surfaceId);
         if (processMapping && processMapping.providerSessionId !== providerSessionId) return null;
         let provider: ProviderSessionKind | null =
           processMapping?.providerSessionId === providerSessionId ? processMapping.provider : null;
@@ -304,10 +317,14 @@ function indexSurfaces(snapshot: CmuxSnapshot): Map<string, IndexedSurface> {
     for (const workspace of window.workspaces) {
       for (const pane of workspace.panes) {
         for (const surface of pane.surfaces) {
-          surfaces.set(surface.id, {
-            workspaceId: workspace.id,
-            paneId: pane.id,
-            surfaceId: surface.id,
+          const workspaceId = normalizeCanonicalUuid(workspace.id);
+          const paneId = normalizeCanonicalUuid(pane.id);
+          const surfaceId = normalizeCanonicalUuid(surface.id);
+          if (workspaceId === null || paneId === null || surfaceId === null) continue;
+          surfaces.set(surfaceId, {
+            workspaceId,
+            paneId,
+            surfaceId,
             currentDirectory: workspace.currentDirectory
           });
         }
@@ -332,8 +349,13 @@ function normalizeMappings(
   issues: string[]
 ): AutomaticProviderSessionMapping[] {
   const normalized = mappings.flatMap((mapping) => {
+    const workspaceId = normalizeCanonicalUuid(mapping.workspaceId);
+    const paneId = normalizeCanonicalUuid(mapping.paneId);
+    const surfaceId = normalizeCanonicalUuid(mapping.surfaceId);
     const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
-    return providerSessionId === null ? [] : [{ ...mapping, providerSessionId }];
+    return workspaceId === null || paneId === null || surfaceId === null || providerSessionId === null
+      ? []
+      : [{ ...mapping, workspaceId, paneId, surfaceId, providerSessionId }];
   });
   const identitiesBySurface = new Map<string, Set<string>>();
   const surfacesByIdentity = new Map<string, Set<string>>();

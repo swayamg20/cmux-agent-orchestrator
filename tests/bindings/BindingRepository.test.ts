@@ -503,4 +503,83 @@ describe("BindingRepository", () => {
     expect(repository.listRuns(base.taskId)).toHaveLength(2);
     expect(repository.list()).toHaveLength(2);
   });
+
+  it("normalizes persisted identities and accepts canonical lookups with different casing", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const taskId = "a1111111-a111-4111-8111-a11111111111";
+    const workspaceId = "b2222222-b222-4222-8222-b22222222222";
+    const paneId = "c3333333-c333-4333-8333-c33333333333";
+    const surfaceId = "d4444444-d444-4444-8444-d44444444444";
+    const providerSessionId = "e5555555-e555-4555-8555-e55555555555";
+    const first = new BindingRepository(plugin);
+    await first.load();
+    await first.attach({
+      taskId,
+      workspaceId,
+      paneId,
+      surfaceId,
+      provider: "codex",
+      providerSessionId,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+    await first.mapProviderSession({
+      workspaceId,
+      paneId,
+      surfaceId,
+      provider: "codex",
+      providerSessionId,
+      matchedAt: "2026-09-04T00:01:00.000Z"
+    });
+
+    const machine = Object.values(
+      (data as {
+        machines: Record<string, {
+          bindings: Array<Record<string, string | null>>;
+          runs: Array<Record<string, string | null>>;
+          providerSessions: Array<Record<string, string>>;
+        }>;
+      }).machines
+    )[0]!;
+    for (const bindingRecord of machine.bindings) {
+      for (const key of ["bindingId", "runId", "taskId", "workspaceId", "paneId", "surfaceId", "providerSessionId"]) {
+        const value = bindingRecord[key];
+        if (typeof value === "string") bindingRecord[key] = value.toUpperCase();
+      }
+    }
+    for (const run of machine.runs) {
+      for (const key of ["runId", "taskId", "parentRunId", "providerSessionId"]) {
+        const value = run[key];
+        if (typeof value === "string") run[key] = value.toUpperCase();
+      }
+    }
+    for (const mapping of machine.providerSessions) {
+      for (const key of ["workspaceId", "paneId", "surfaceId", "providerSessionId"]) {
+        mapping[key] = mapping[key]!.toUpperCase();
+      }
+    }
+
+    const second = new BindingRepository(plugin);
+    await second.load();
+
+    expect(second.list()[0]).toMatchObject({ taskId, workspaceId, paneId, surfaceId, providerSessionId });
+    expect(second.listRuns()[0]).toMatchObject({ taskId, providerSessionId });
+    expect(second.listProviderSessions()[0]).toMatchObject({
+      workspaceId,
+      paneId,
+      surfaceId,
+      providerSessionId
+    });
+    expect(second.findBySurface(surfaceId.toUpperCase())?.surfaceId).toBe(surfaceId);
+
+    await second.forgetProviderSession(surfaceId.toUpperCase());
+    expect(second.listProviderSessions()).toEqual([]);
+    await second.detach(surfaceId.toUpperCase());
+    expect(second.list()).toEqual([]);
+  });
 });

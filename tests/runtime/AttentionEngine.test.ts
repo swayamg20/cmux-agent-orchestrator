@@ -43,6 +43,55 @@ describe("AttentionEngine", () => {
     expect(result.some((item) => item.reasons.some((reason) => reason.kind === "review-ready"))).toBe(true);
   });
 
+  it("does not report a bound surface missing because UUID casing differs", () => {
+    const workspaceId = "a2222222-a222-4222-8222-a22222222222";
+    const paneId = "b3333333-b333-4333-8333-b33333333333";
+    const surfaceId = "c4444444-c444-4444-8444-c44444444444";
+    const session: LiveSession = {
+      key: `${workspaceId}:${surfaceId}`,
+      workspaceId,
+      paneId,
+      surfaceId,
+      workspaceTitle: "Workspace",
+      workspaceIndex: 0,
+      paneIndex: 0,
+      surfaceIndex: 0,
+      surfaceTitle: "Surface",
+      surfaceType: "terminal",
+      currentDirectory: "/repo",
+      provider: {
+        provider: "codex",
+        confidence: "medium",
+        source: "screen-preview",
+        explanation: "fixture",
+        sessionId: null
+      },
+      assessment: assessment("unknown"),
+      observedAt: 1_000,
+      notifications: [],
+      linkedTaskId: binding.taskId,
+      conversation: null,
+      preview: null
+    };
+    const uppercaseBinding = {
+      ...binding,
+      workspaceId: workspaceId.toUpperCase(),
+      paneId: paneId.toUpperCase(),
+      surfaceId: surfaceId.toUpperCase()
+    };
+
+    const result = new AttentionEngine().build(
+      [session],
+      [task("active")],
+      [uppercaseBinding],
+      1_000
+    );
+
+    expect(result.some((item) =>
+      item.reasons.some((reason) => reason.kind === "linked-surface-missing")
+    )).toBe(false);
+  });
+
   it("sorts runtime errors above generic unread notifications", () => {
     const base: Omit<LiveSession, "key" | "surfaceId" | "assessment" | "notifications"> = {
       workspaceId: "workspace",

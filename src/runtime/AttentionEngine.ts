@@ -1,4 +1,5 @@
 import type { BindingRecord } from "../bindings/types";
+import { surfaceKey } from "../cmux/types";
 import type { AttentionItem, AttentionReason, LiveSession } from "../state/types";
 import type { TaskRecord } from "../tasks/TaskSchema";
 
@@ -16,7 +17,7 @@ export class AttentionEngine {
     const items = new Map<string, AttentionItem>();
     const taskById = new Map(tasks.map((task) => [task.taskId, task]));
     const sessionByTarget = new Map(
-      sessions.map((session) => [`${session.workspaceId}:${session.surfaceId}`, session] as const)
+      sessions.map((session) => [surfaceKey(session), session] as const)
     );
     const firstSessionByTask = new Map<string, LiveSession>();
     for (const session of sessions) {
@@ -76,9 +77,10 @@ export class AttentionEngine {
     }
 
     for (const binding of bindings) {
-      const exists = sessionByTarget.has(`${binding.workspaceId}:${binding.surfaceId}`);
+      const bindingKey = surfaceKey(binding);
+      const exists = sessionByTarget.has(bindingKey);
       if (exists) continue;
-      const key = `missing:${binding.workspaceId}:${binding.surfaceId}`;
+      const key = `missing:${bindingKey}`;
       add(key, null, taskById.get(binding.taskId) ?? null, {
         kind: "linked-surface-missing",
         label: "Linked surface disappeared",
