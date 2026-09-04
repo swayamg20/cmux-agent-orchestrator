@@ -22,7 +22,7 @@
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit && node esbuild.config.mjs production",
     "test": "vitest run",
-    "test:live:read-only": "CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX=1 CMUX_AGENT_ORCHESTRATOR_LIVE_PROVIDERS=1 CMUX_AGENT_ORCHESTRATOR_LIVE_IDENTITY=1 CMUX_AGENT_ORCHESTRATOR_LIVE_TRACKING=1 vitest run tests/smoke/cmux.live.test.ts tests/smoke/provider-metadata.live.test.ts tests/smoke/automatic-identity.live.test.ts tests/smoke/automatic-tracking.live.test.ts",
+    "test:live:read-only": "CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX=1 CMUX_AGENT_ORCHESTRATOR_LIVE_PROVIDERS=1 CMUX_AGENT_ORCHESTRATOR_LIVE_IDENTITY=1 CMUX_AGENT_ORCHESTRATOR_LIVE_TRACKING=1 vitest run --no-file-parallelism --maxWorkers=1 tests/smoke/cmux.live.test.ts tests/smoke/provider-metadata.live.test.ts tests/smoke/automatic-identity.live.test.ts tests/smoke/automatic-tracking.live.test.ts",
     "test:watch": "vitest",
     "lint": "eslint .",
     "validate:release": "node scripts/validate-release.mjs",
