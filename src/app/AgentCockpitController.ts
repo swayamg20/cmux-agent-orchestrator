@@ -1128,10 +1128,17 @@ export class AgentCockpitController {
             attachedAt
           },
           expectedBinding,
-          () =>
-            this.automaticTrackingAllowed(generation) &&
-            this.resolveCurrentAutomaticCandidate(candidate) !== null &&
-            !this.hasProviderRun(candidate)
+          () => {
+            if (
+              !this.automaticTrackingAllowed(generation) ||
+              this.resolveCurrentAutomaticCandidate(candidate) === null ||
+              this.hasProviderRun(candidate)
+            ) {
+              return false;
+            }
+            this.resolveCurrentTask(task);
+            return true;
+          }
         );
         if (result === null) continue;
         changed = true;

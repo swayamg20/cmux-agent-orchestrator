@@ -3838,6 +3838,51 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not persist an automatic attachment when the exact task file changes while its write is queued", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const memory = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_250)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+    const internal = controller as unknown as { bindings: BindingRepository };
+    const attachIfSurfaceUnchanged =
+      internal.bindings.attachIfSurfaceUnchanged.bind(internal.bindings);
+    let replacedTask = false;
+    internal.bindings.attachIfSurfaceUnchanged = async (input, expected, canMutate) => {
+      const taskPath = memory.createdPaths[0];
+      if (taskPath === undefined) throw new Error("Expected the automatic task to exist.");
+      memory.replaceFile(taskPath);
+      replacedTask = true;
+      try {
+        return await attachIfSurfaceUnchanged(input, expected, canMutate);
+      } finally {
+        // Keep the assertion scoped to this one commit attempt. Initialization can
+        // otherwise queue a later metadata-triggered reconciliation that creates a
+        // fresh deterministic task after the simulated external replacement.
+        controller.dispose();
+      }
+    };
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(replacedTask).toBe(true);
+    expect(persisted).toBeUndefined();
+    expect(internal.bindings.list()).toEqual([]);
+    expect(internal.bindings.listRuns()).toEqual([]);
+    controller.dispose();
+  });
+
   it("rejects a stale manual attachment after the exact cmux surface disappears", async () => {
     let currentSnapshot = snapshot(5_300);
     const plugin = {
