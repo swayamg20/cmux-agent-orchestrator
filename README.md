@@ -190,6 +190,12 @@ Sanitized fixtures under `tests/fixtures/cmux-0.62.2/`, `tests/fixtures/cmux-mod
 A read-only local smoke test is opt-in:
 
 ```bash
+npm run test:live:read-only
+```
+
+The aggregate command above runs all four guarded checks. Individual checks can also be run while diagnosing one boundary:
+
+```bash
 CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX=1 npm test -- tests/smoke/cmux.live.test.ts
 CMUX_AGENT_ORCHESTRATOR_LIVE_PROVIDERS=1 npm test -- tests/smoke/provider-metadata.live.test.ts
 CMUX_AGENT_ORCHESTRATOR_LIVE_IDENTITY=1 npm test -- tests/smoke/automatic-identity.live.test.ts

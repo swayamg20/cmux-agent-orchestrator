@@ -16,10 +16,7 @@ Run from the repository root:
 ```bash
 npm ci
 npm run check
-CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX=1 npm test -- tests/smoke/cmux.live.test.ts
-CMUX_AGENT_ORCHESTRATOR_LIVE_PROVIDERS=1 npm test -- tests/smoke/provider-metadata.live.test.ts
-CMUX_AGENT_ORCHESTRATOR_LIVE_IDENTITY=1 npm test -- tests/smoke/automatic-identity.live.test.ts
-CMUX_AGENT_ORCHESTRATOR_LIVE_TRACKING=1 npm test -- tests/smoke/automatic-tracking.live.test.ts
+npm run test:live:read-only
 RELEASE_VERSION="$(node -p "require('./manifest.json').version")"
 npm run validate:release -- --tag "$RELEASE_VERSION"
 ```
@@ -44,6 +41,10 @@ Verify manually:
 - A bounded preview loads on demand and disappears after plugin reload.
 - A detected agent can be matched to an exact local provider conversation; its title survives reload while raw title metadata remains absent from `data.json`.
 - Two same-repository surfaces can be assigned different provider conversations, and assigning one conversation to two surfaces fails closed.
+- With automatic tracking enabled, each uniquely resolved Claude or Codex conversation creates exactly one neutral Active Work task; conversation and terminal titles are absent from the generated Markdown.
+- Refreshing and reloading Obsidian do not duplicate an automatically tracked task or run, and disabling automatic tracking prevents new tasks without changing existing tasks or agents.
+- Manually detaching an automatically tracked run preserves the task and run history and does not silently recreate the binding after Refresh.
+- If the same exact provider conversation is deliberately resumed on one new cmux surface after its previous full target disappears, Refresh reconnects the existing task without creating another task or run. Skip this controlled test when preserving current session placement takes priority.
 - Creating a task and attaching a session persists through reload without changing the agent.
 - Moving a task changes workflow only.
 - Focus in cmux targets a user-approved development surface and sends no text.
