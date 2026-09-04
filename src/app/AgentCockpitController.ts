@@ -114,6 +114,8 @@ export class AgentCockpitController {
   private client: CmuxClient | null = null;
   private clientGeneration = 0;
   private refreshStateGeneration = 0;
+  private topologyRefreshGeneration = 0;
+  private notificationRefreshGeneration = 0;
   private focusAction: FocusSessionAction | null = null;
   private taskRepository: TaskRepository | null = null;
   private settings: AgentCockpitSettings | null = null;
@@ -174,12 +176,18 @@ export class AgentCockpitController {
       if (this.client === null) await this.connect();
       const client = this.client;
       if (client === null) return;
+      const topologyRefreshGeneration = ++this.topologyRefreshGeneration;
+      const notificationRefreshGeneration = ++this.notificationRefreshGeneration;
       const result = await this.refreshCoordinator.refresh({
         topology: (signal) => client.snapshot(signal),
         notifications: (signal) => client.notifications(signal)
       });
-      this.applyRefreshResult(result);
-      if (result.current && result.snapshot !== null) {
+      const topologyApplied = this.applyRefreshResult(
+        result,
+        topologyRefreshGeneration,
+        notificationRefreshGeneration
+      );
+      if (topologyApplied && result.snapshot !== null) {
         this.scheduleProviderClassification();
         this.scheduleProviderMetadataRefresh();
         this.scheduleProviderIdentityResolution(result.snapshot);
@@ -200,11 +208,13 @@ export class AgentCockpitController {
     const client = this.client;
     if (client === null || this.disposed) return;
     const clientGeneration = this.clientGeneration;
+    const topologyRefreshGeneration = ++this.topologyRefreshGeneration;
     try {
       const snapshot = await client.snapshot(signal);
       if (
         this.disposed ||
         clientGeneration !== this.clientGeneration ||
+        topologyRefreshGeneration !== this.topologyRefreshGeneration ||
         client !== this.client
       ) {
         return;
@@ -217,6 +227,7 @@ export class AgentCockpitController {
       if (
         this.disposed ||
         clientGeneration !== this.clientGeneration ||
+        topologyRefreshGeneration !== this.topologyRefreshGeneration ||
         client !== this.client ||
         isAbort(error)
       ) {
@@ -230,11 +241,13 @@ export class AgentCockpitController {
     const client = this.client;
     if (client === null || this.disposed) return;
     const clientGeneration = this.clientGeneration;
+    const notificationRefreshGeneration = ++this.notificationRefreshGeneration;
     try {
       const notifications = await client.notifications(signal);
       if (
         this.disposed ||
         clientGeneration !== this.clientGeneration ||
+        notificationRefreshGeneration !== this.notificationRefreshGeneration ||
         client !== this.client
       ) {
         return;
@@ -244,6 +257,7 @@ export class AgentCockpitController {
       if (
         this.disposed ||
         clientGeneration !== this.clientGeneration ||
+        notificationRefreshGeneration !== this.notificationRefreshGeneration ||
         client !== this.client ||
         isAbort(error)
       ) {
@@ -901,14 +915,28 @@ export class AgentCockpitController {
     if (sessionKeys.size > 0) this.recomputeSessions();
   }
 
-  private applyRefreshResult(result: RefreshResult): void {
-    if (!result.current || this.disposed) return;
+  private applyRefreshResult(
+    result: RefreshResult,
+    topologyRefreshGeneration: number,
+    notificationRefreshGeneration: number
+  ): boolean {
+    if (!result.current || this.disposed) return false;
+    const applyTopology = topologyRefreshGeneration === this.topologyRefreshGeneration;
+    const applyNotifications =
+      notificationRefreshGeneration === this.notificationRefreshGeneration;
     this.store.batch(() => {
-      if (result.snapshot !== null) this.applyTopology(result.snapshot);
-      else if (result.topologyError !== null) this.applyTopologyFailure(result.topologyError);
-      if (result.notifications !== null) this.applyNotifications(result.notifications);
-      else if (result.notificationError !== null) this.applyNotificationFailure(result.notificationError);
+      if (applyTopology) {
+        if (result.snapshot !== null) this.applyTopology(result.snapshot);
+        else if (result.topologyError !== null) this.applyTopologyFailure(result.topologyError);
+      }
+      if (applyNotifications) {
+        if (result.notifications !== null) this.applyNotifications(result.notifications);
+        else if (result.notificationError !== null) {
+          this.applyNotificationFailure(result.notificationError);
+        }
+      }
     });
+    return applyTopology && result.snapshot !== null;
   }
 
   private applyTopology(snapshot: CmuxSnapshot): void {

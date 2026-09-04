@@ -939,6 +939,97 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("keeps the newest overlapping direct topology refresh authoritative", async () => {
+    const pendingSnapshots: Array<(value: CmuxSnapshot) => void> = [];
+    let gateSnapshots = false;
+    const namedSnapshot = (title: string, observedAt: number): CmuxSnapshot => {
+      const result = snapshot(observedAt);
+      result.windows[0]!.workspaces[0]!.title = title;
+      return result;
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(1),
+      snapshot: async () => {
+        if (!gateSnapshots) return namedSnapshot("initial", 1);
+        return new Promise<CmuxSnapshot>((resolve) => {
+          pendingSnapshots.push(resolve);
+        });
+      }
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    gateSnapshots = true;
+    const olderRefresh = controller.refreshTopology();
+    const newerRefresh = controller.refreshTopology();
+    expect(pendingSnapshots).toHaveLength(2);
+
+    pendingSnapshots[1]!(namedSnapshot("newest", 3));
+    await newerRefresh;
+    pendingSnapshots[0]!(namedSnapshot("older", 2));
+    await olderRefresh;
+
+    expect(controller.store.getState().snapshot?.windows[0]?.workspaces[0]?.title).toBe(
+      "newest"
+    );
+    controller.dispose();
+  });
+
+  it("keeps the newest overlapping direct notification refresh authoritative", async () => {
+    const pendingNotifications: Array<(value: CmuxNotification[]) => void> = [];
+    let gateNotifications = false;
+    const notification = (id: string): CmuxNotification => ({
+      id,
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      title: id,
+      subtitle: "",
+      body: id,
+      isRead: false
+    });
+    const transport: CmuxTransport = {
+      ...connectedTransport(1),
+      notifications: async () => {
+        if (!gateNotifications) return [];
+        return new Promise<CmuxNotification[]>((resolve) => {
+          pendingNotifications.push(resolve);
+        });
+      }
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport)
+    );
+
+    await controller.initialize();
+    gateNotifications = true;
+    const olderRefresh = controller.refreshNotifications();
+    const newerRefresh = controller.refreshNotifications();
+    expect(pendingNotifications).toHaveLength(2);
+
+    pendingNotifications[1]!([notification("newest")]);
+    await newerRefresh;
+    pendingNotifications[0]!([notification("older")]);
+    await olderRefresh;
+
+    expect(controller.store.getState().notifications.map(({ id }) => id)).toEqual(["newest"]);
+    controller.dispose();
+  });
+
   it("re-probes and fully loads the cockpit after access setup succeeds", async () => {
     let clientAttempts = 0;
     let snapshotCalls = 0;
