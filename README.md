@@ -165,6 +165,7 @@ These adapters sit behind a `ProviderSessionSource` interface because both local
 - Workspace CWD metadata is cached for 30 seconds across closely spaced manual refreshes.
 - Display previews load only when a row is expanded or the user presses Load/Refresh preview; they allow at most two concurrent reads.
 - Displayed previews remain configurable up to 80 lines with a 16 KiB default ceiling and live in a 20-entry, 1 MiB in-memory LRU.
+- Cached and in-flight display previews are discarded if the cmux connection, surface identity, or associated provider conversation changes.
 - A newly discovered terminal that still lacks provider evidence may receive one provider-only background read, bounded to 500 lines and 64 KiB with two-process concurrency. That deeper text is discarded immediately after classification, is never displayed, and is not repeated by later global refreshes.
 - Every read-screen process retains a 96 KiB raw output ceiling.
 - Unloading the plugin terminates only its own short-lived cmux CLI children.

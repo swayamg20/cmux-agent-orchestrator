@@ -11,6 +11,9 @@ import { runUiAction } from "../app/runUiAction";
 import { PRODUCT_NAME } from "../identity";
 import type { AgentCockpitSettings } from "./AgentCockpitSettings";
 
+const PREVIEW_LINES_DESCRIPTION =
+  "Number of lines shown when a session is expanded or its preview is explicitly refreshed. Preview text stays in memory and is never persisted.";
+
 export class AgentCockpitSettingsTab extends PluginSettingTab {
   constructor(
     app: App,
@@ -56,7 +59,7 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
           },
           {
             name: "Preview lines",
-            desc: "Displayed preview size for startup, explicit refresh, and expanded sessions. Preview text is never persisted.",
+            desc: PREVIEW_LINES_DESCRIPTION,
             aliases: ["terminal preview", "screen lines"],
             render: (setting) => this.addPreviewLinesDropdown(setting, getDraft())
           },
@@ -113,7 +116,7 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
     this.addPreviewLinesDropdown(
       new Setting(this.containerEl)
         .setName("Preview lines")
-        .setDesc("Displayed preview size for startup, explicit refresh, and expanded sessions. Preview text is never persisted."),
+        .setDesc(PREVIEW_LINES_DESCRIPTION),
       draft
     );
 
