@@ -82,7 +82,8 @@ describe("CodexAppServerSource", () => {
 
   it("does not start an app-server after disposal while binary discovery is pending", async () => {
     const discovery = deferred<string>();
-    const client = new CodexAppServerClient(() => discovery.promise);
+    const client = new CodexAppServerClient();
+    (client as unknown as { binaryPath: Promise<string> | null }).binaryPath = discovery.promise;
 
     const request = client.request("thread/list", {});
     client.dispose();
