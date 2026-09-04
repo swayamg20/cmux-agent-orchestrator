@@ -982,6 +982,93 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("refreshes metadata for the exact live conversation instead of a stale manual mapping", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const staleSessionId = "55555555-5555-4555-8555-555555555555";
+    const liveSessionId = "66666666-6666-4666-8666-666666666666";
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    await repository.updateSettings({
+      ...repository.getSettings(),
+      autoTrackAgentRuns: false
+    });
+    await repository.mapProviderSession({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: staleSessionId,
+      matchedAt: "2026-09-04T00:00:00.000Z"
+    });
+    const list = vi.fn(async () => {
+      throw new Error("simulated list failure");
+    });
+    const get = vi.fn(async (sessionId: string) =>
+      sessionId === liveSessionId
+        ? {
+            provider: "codex" as const,
+            sessionId,
+            title: "Fresh replacement conversation",
+            titleSource: "explicit-name" as const,
+            cwd: "/repository",
+            updatedAt: 1_100,
+            status: "active"
+          }
+        : null
+    );
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list,
+      get,
+      dispose: () => undefined
+    };
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        ...exactCodexResolverResult(currentSnapshot.observedAt),
+        mappings: [{
+          ...exactCodexResolverResult(currentSnapshot.observedAt).mappings[0]!,
+          providerSessionId: liveSessionId
+        }]
+      }),
+      dispose: () => undefined
+    };
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(1_100)),
+      new ProviderMetadataService([source]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().sessions[0]?.provider).toMatchObject({
+      source: "codex-writer-lock",
+      sessionId: liveSessionId
+    });
+
+    get.mockClear();
+    const internal = controller as unknown as {
+      scheduleProviderMetadataRefresh(): void;
+      metadataWork: Promise<void>;
+    };
+    internal.scheduleProviderMetadataRefresh();
+    await internal.metadataWork;
+
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith(liveSessionId, "/repository", expect.any(AbortSignal));
+    expect(controller.store.getState().sessions[0]?.conversation?.title).toBe(
+      "Fresh replacement conversation"
+    );
+    controller.dispose();
+  });
+
   it("recomputes conservative stale-working attention from the configured threshold", async () => {
     let persisted: unknown = {
       settings: {

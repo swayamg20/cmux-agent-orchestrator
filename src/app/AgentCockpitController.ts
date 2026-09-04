@@ -70,6 +70,14 @@ interface AutomaticTrackingPass {
   failedIssueKeys: Set<string>;
 }
 
+const PROVIDER_METADATA_IDENTITY_SOURCES: ReadonlySet<LiveSession["provider"]["source"]> = new Set([
+  "provider-session-mapping",
+  "task-binding",
+  "cmux-agent-registry",
+  "claude-process-registry",
+  "codex-writer-lock"
+]);
+
 export class AgentCockpitController {
   readonly store = new CockpitStore();
 
@@ -1392,57 +1400,31 @@ export class AgentCockpitController {
   }
 
   private effectiveProviderMappings(): ProviderSessionReference[] {
-    const mappings = new Map<string, ProviderSessionReference>();
+    const mappings: ProviderSessionReference[] = [];
     const claimedProviderSessions = new Set<string>();
-    const liveSessions = new Map(
-      this.store.getState().sessions.map(
-        (session) => [normalizeCanonicalUuid(session.surfaceId) ?? session.surfaceId, session] as const
-      )
-    );
-    const addMapping = (mapping: ProviderSessionReference): void => {
-      const surfaceId = normalizeCanonicalUuid(mapping.surfaceId);
-      const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
-      if (surfaceId === null || providerSessionId === null) return;
-      const live = liveSessions.get(surfaceId);
-      if (!live) return;
+    for (const session of this.store.getState().sessions) {
+      const detection = session.provider;
       if (
-        !canonicalUuidEquals(live.workspaceId, mapping.workspaceId) ||
-        !canonicalUuidEquals(live.paneId, mapping.paneId)
-      ) {
-        return;
-      }
-      const identityKey = providerSessionKey(mapping.provider, providerSessionId);
-      if (mappings.has(surfaceId) || claimedProviderSessions.has(identityKey)) return;
-      mappings.set(surfaceId, {
-        ...mapping,
-        workspaceId: live.workspaceId,
-        paneId: live.paneId,
-        surfaceId: live.surfaceId,
-        providerSessionId
-      });
-      claimedProviderSessions.add(identityKey);
-    };
-
-    for (const mapping of this.bindings.listProviderSessions()) addMapping(mapping);
-    for (const mapping of this.automaticProviderMappings) addMapping(mapping);
-    for (const binding of this.bindings.list()) {
-      if (
-        (binding.provider !== "claude" && binding.provider !== "codex") ||
-        binding.providerSessionId === null ||
-        !isCanonicalUuid(binding.providerSessionId)
+        (detection.provider !== "claude" && detection.provider !== "codex") ||
+        detection.sessionId === null ||
+        !PROVIDER_METADATA_IDENTITY_SOURCES.has(detection.source)
       ) {
         continue;
       }
-      addMapping({
-        workspaceId: binding.workspaceId,
-        paneId: binding.paneId,
-        surfaceId: binding.surfaceId,
-        provider: binding.provider,
-        providerSessionId: binding.providerSessionId,
-        matchedAt: binding.attachedAt
+      const providerSessionId = normalizeCanonicalUuid(detection.sessionId);
+      if (providerSessionId === null) continue;
+      const identityKey = providerSessionKey(detection.provider, providerSessionId);
+      if (claimedProviderSessions.has(identityKey)) continue;
+      mappings.push({
+        workspaceId: session.workspaceId,
+        paneId: session.paneId,
+        surfaceId: session.surfaceId,
+        provider: detection.provider,
+        providerSessionId
       });
+      claimedProviderSessions.add(identityKey);
     }
-    return [...mappings.values()];
+    return mappings;
   }
 
   private async matchConversation(
