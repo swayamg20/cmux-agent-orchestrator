@@ -468,7 +468,7 @@ export class BindingRepository {
       settings: parseSettings(raw.settings),
       machines
     };
-    if (importedLegacyData) await this.plugin.saveData(structuredClone(this.data));
+    if (importedLegacyData) await this.persistDraft(structuredClone(this.data));
   }
 
   getSettings(): AgentCockpitSettings {

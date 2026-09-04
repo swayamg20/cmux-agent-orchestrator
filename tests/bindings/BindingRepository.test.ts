@@ -39,6 +39,28 @@ describe("BindingRepository", () => {
     expect(saved).toMatchObject({ schemaVersion: 3 });
   });
 
+  it("accepts a legacy import save failure only when exact read-back proves persistence", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+        throw new Error("migration acknowledgement lost");
+      }
+    } as unknown as Plugin;
+    const legacyData = {
+      schemaVersion: 1,
+      settings: { taskFolder: "Agent Cockpit/Tasks" },
+      machines: {}
+    };
+    const repository = new BindingRepository(plugin, async () => legacyData);
+
+    await expect(repository.load()).resolves.toBeUndefined();
+
+    expect(repository.getSettings().taskFolder).toBe("Agent Cockpit/Tasks");
+    expect(persisted).toMatchObject({ schemaVersion: 3 });
+  });
+
   it("prefers current plugin data without consulting the legacy loader", async () => {
     const loadLegacyData = vi.fn(async () => ({ settings: { taskFolder: "Legacy/Tasks" } }));
     const plugin = {

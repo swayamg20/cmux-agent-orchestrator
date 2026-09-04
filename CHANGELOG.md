@@ -23,6 +23,7 @@ All notable changes to this project will be documented in this file.
 - Keep a successful task-note write authoritative while Obsidian's metadata index catches up, preventing Kanban state or run counts from snapping backward.
 - Hide every duplicated Markdown task identity from the Work board and discard stale write-through identity when indexed frontmatter proves that the same file changed IDs.
 - Recover an ambiguously failed task-note creation only when exact Markdown read-back proves that the intended file was written.
+- Recover an ambiguously failed legacy-data migration only when exact plugin-data read-back proves that the normalized import persisted.
 - Prevent a malformed cross-task binding from rewriting or clearing another task's provider-run identity.
 - Drop conflicting persisted binding or run identity claims instead of resolving ambiguous synced records by array order.
 - Discard contradictory exact conversation claims across task bindings and saved surface mappings while retaining run history.
