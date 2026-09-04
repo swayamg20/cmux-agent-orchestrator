@@ -382,7 +382,7 @@ export class AgentCockpitController {
     }
   }
 
-  async updateWorkflow(task: TaskRecord, workflowStatus: WorkflowStatus): Promise<void> {
+  async updateWorkflow(task: TaskRecord, workflowStatus: WorkflowStatus): Promise<boolean> {
     try {
       await this.requireTaskRepository().updateWorkflow(task, workflowStatus);
       const updatedAt = new Date().toISOString();
@@ -392,8 +392,10 @@ export class AgentCockpitController {
         )
       }));
       this.recomputeSessions();
+      return true;
     } catch (error) {
       new Notice(readableError(error));
+      return false;
     }
   }
 

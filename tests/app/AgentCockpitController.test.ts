@@ -662,6 +662,33 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("reports whether a workflow move persisted so rejected controls can roll back", async () => {
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const { app } = memoryTaskApp({ failFrontmatterWrites: 1 });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(Date.now()))
+    );
+
+    await controller.initialize();
+    const task = await controller.createTask({ title: "Workflow result" });
+
+    await expect(controller.updateWorkflow(task, "review")).resolves.toBe(false);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, workflowStatus: "active" }
+    ]);
+
+    await expect(controller.updateWorkflow(task, "review")).resolves.toBe(true);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, workflowStatus: "review" }
+    ]);
+    controller.dispose();
+  });
+
   it("automatically creates one neutral active task for an exact session and never recreates it", async () => {
     let persisted: unknown;
     let observedAt = 1_000;

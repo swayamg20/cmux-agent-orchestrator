@@ -48,6 +48,7 @@ Verify manually:
 - Creating a task and attaching a session persists through reload without changing the agent.
 - Moving or deleting a linked task note updates the Work board and missing-task attention state without requiring an Obsidian restart.
 - Moving a task changes workflow only.
+- A rejected workflow move returns its selector to the persisted workflow state instead of displaying an unsaved value.
 - With structured lifecycle evidence available, lowering the stale-working threshold and saving settings can surface an aged Working session in Attention without moving its task; Idle and State unknown sessions remain unflagged.
 - A structured or notification-backed finished turn appears in Attention for review without moving its task to Review or Done.
 - Focus in cmux targets a user-approved development surface and sends no text.

@@ -7,7 +7,7 @@ import { renderRuntimeBadge } from "./StatusBadge";
 
 export interface TaskCardActions {
   open(task: TaskRecord): void;
-  move(task: TaskRecord, status: WorkflowStatus): void;
+  move(task: TaskRecord, status: WorkflowStatus): Promise<boolean>;
 }
 
 export function renderTaskCard(
@@ -96,7 +96,16 @@ export function renderTaskCard(
   }
   select.addEventListener("change", () => {
     const status = select.value as WorkflowStatus;
-    actions.move(task, status);
+    select.disabled = true;
+    void actions
+      .move(task, status)
+      .catch(() => false)
+      .then((moved) => {
+        if (!moved) select.value = task.workflowStatus;
+      })
+      .finally(() => {
+        select.disabled = false;
+      });
   });
   return card;
 }

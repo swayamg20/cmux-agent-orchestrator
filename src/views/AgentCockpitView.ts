@@ -128,7 +128,7 @@ export class AgentCockpitView extends ItemView {
       renderKanbanPanel(panel, state, {
         createTask: () => this.controller.showCreateTask(null),
         openTask: (task) => void this.controller.openTask(task),
-        moveTask: (task, status) => void this.controller.updateWorkflow(task, status)
+        moveTask: (task, status) => this.controller.updateWorkflow(task, status)
       });
     } else if (this.activeSection === "agents") {
       renderSessionInbox(panel, state, this.showAllInbox, {

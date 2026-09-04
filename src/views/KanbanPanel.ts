@@ -6,7 +6,7 @@ import { WORKFLOW_STATUSES, type TaskRecord, type WorkflowStatus } from "../task
 export interface KanbanPanelActions {
   createTask(): void;
   openTask(task: TaskRecord): void;
-  moveTask(task: TaskRecord, status: WorkflowStatus): void;
+  moveTask(task: TaskRecord, status: WorkflowStatus): Promise<boolean>;
 }
 
 export function renderKanbanPanel(
@@ -57,7 +57,7 @@ export function renderKanbanPanel(
       event.preventDefault();
       const taskId = event.dataTransfer?.getData("text/x-agent-cockpit-task");
       const task = state.tasks.find((candidate) => candidate.taskId === taskId);
-      if (task) actions.moveTask(task, status);
+      if (task) void actions.moveTask(task, status);
     });
     if (tasks.length === 0) {
       taskList.createDiv({
