@@ -1243,13 +1243,20 @@ export class AgentCockpitController {
       if ((provider !== "claude" && provider !== "codex") || providerSessionId === null) {
         continue;
       }
-      const oldSurfaceStillExists = sessions.some(
+      const oldSurface = sessions.find(
         (session) =>
           canonicalUuidEquals(session.workspaceId, binding.workspaceId) &&
           canonicalUuidEquals(session.paneId, binding.paneId) &&
           canonicalUuidEquals(session.surfaceId, binding.surfaceId)
       );
-      if (oldSurfaceStillExists) continue;
+      if (
+        oldSurface !== undefined &&
+        !bindingConflictsWithExactProviderIdentity(binding, oldSurface)
+      ) {
+        // A present surface with unknown or matching provider identity is not
+        // enough evidence that the run moved. Exact contradictory identity is.
+        continue;
+      }
 
       const matches = sessions.filter((session) => {
         const identity = exactTrackableIdentity(session);

@@ -1768,6 +1768,118 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("reconnects a resumed session when its previous surface is reused by another exact session", async () => {
+    let persisted: unknown;
+    let currentSnapshot = snapshot(1_650);
+    const previousSessionId = "55555555-5555-4555-8555-555555555555";
+    const replacementSessionId = "66666666-6666-4666-8666-666666666666";
+    const resumedSurfaceId = "77777777-7777-4777-8777-777777777777";
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const resolver: ProviderSessionResolver = {
+      resolve: async (nextSnapshot) => {
+        const workspace = nextSnapshot.windows[0]!.workspaces[0]!;
+        const pane = workspace.panes[0]!;
+        const previousSurface = pane.surfaces[0]!;
+        const resumedSurface = pane.surfaces.find((surface) => surface.id === resumedSurfaceId);
+        const mapping = (surfaceId: string, providerSessionId: string) => ({
+          workspaceId: workspace.id,
+          paneId: pane.id,
+          surfaceId,
+          provider: "codex" as const,
+          providerSessionId,
+          matchSource: "codex-writer-lock" as const,
+          confidence: "high" as const,
+          explanation: "Verified exact writer identity.",
+          observedAt: nextSnapshot.observedAt + 1
+        });
+        return {
+          checkedAt: nextSnapshot.observedAt + 1,
+          nativeLifecycleAvailable: false,
+          issues: [],
+          mappings: resumedSurface === undefined
+            ? [mapping(previousSurface.id, previousSessionId)]
+            : [
+                mapping(previousSurface.id, replacementSessionId),
+                mapping(resumedSurface.id, previousSessionId)
+              ],
+          lifecycle: []
+        };
+      },
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(currentSnapshot.observedAt),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const previousTaskId = automaticTaskId("codex", previousSessionId);
+    expect(controller.store.getState().sessions[0]?.linkedTaskId).toBe(previousTaskId);
+
+    currentSnapshot = snapshot(1_700);
+    const pane = currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!;
+    pane.surfaces.push({
+      id: resumedSurfaceId,
+      paneId: pane.id,
+      index: 1,
+      indexInPane: 1,
+      title: "repository resumed",
+      type: "terminal",
+      selected: false,
+      focused: false,
+      active: false
+    });
+
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    const replacementTaskId = automaticTaskId("codex", replacementSessionId);
+    expect(markdownWrites).toHaveLength(2);
+    expect(controller.store.getState().tasks).toHaveLength(2);
+    expect(controller.store.getState().runs).toHaveLength(2);
+    expect(controller.store.getState().bindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId: previousTaskId,
+          surfaceId: resumedSurfaceId,
+          providerSessionId: previousSessionId
+        }),
+        expect.objectContaining({
+          taskId: replacementTaskId,
+          surfaceId: "44444444-4444-4444-8444-444444444444",
+          providerSessionId: replacementSessionId
+        })
+      ])
+    );
+    expect(controller.store.getState().sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          surfaceId: resumedSurfaceId,
+          linkedTaskId: previousTaskId
+        }),
+        expect.objectContaining({
+          surfaceId: "44444444-4444-4444-8444-444444444444",
+          linkedTaskId: replacementTaskId
+        })
+      ])
+    );
+    controller.dispose();
+  });
+
   it("retires a stale manual mapping before tracking an exact replacement session", async () => {
     let persisted: unknown;
     const plugin = {
