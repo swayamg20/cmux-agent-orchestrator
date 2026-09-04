@@ -73,10 +73,13 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
       signal,
       issues
     );
-    const mappings = normalizeMappings([
-      ...nativeMappings,
-      ...processResolutions.map((resolution) => resolution.mapping)
-    ]);
+    const mappings = normalizeMappings(
+      [
+        ...nativeMappings,
+        ...processResolutions.map((resolution) => resolution.mapping)
+      ],
+      issues
+    );
     const mappingBySurface = new Map(mappings.map((mapping) => [mapping.surfaceId, mapping]));
     const nativeLifecycle = nativeAgents.records.flatMap((record) => {
       const surface = surfaces.get(record.surfaceId);
@@ -325,17 +328,46 @@ function unambiguousCandidates(candidates: readonly ProcessCandidate[]): Process
 }
 
 function normalizeMappings(
-  mappings: readonly AutomaticProviderSessionMapping[]
+  mappings: readonly AutomaticProviderSessionMapping[],
+  issues: string[]
 ): AutomaticProviderSessionMapping[] {
-  const bySurface = new Map<string, AutomaticProviderSessionMapping>();
-  const claimedSessions = new Set<string>();
-  for (const mapping of mappings) {
+  const normalized = mappings.flatMap((mapping) => {
     const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
-    if (providerSessionId === null) continue;
-    const sessionKey = `${mapping.provider}:${providerSessionId}`;
-    if (bySurface.has(mapping.surfaceId) || claimedSessions.has(sessionKey)) continue;
-    bySurface.set(mapping.surfaceId, { ...mapping, providerSessionId });
-    claimedSessions.add(sessionKey);
+    return providerSessionId === null ? [] : [{ ...mapping, providerSessionId }];
+  });
+  const identitiesBySurface = new Map<string, Set<string>>();
+  const surfacesByIdentity = new Map<string, Set<string>>();
+  for (const mapping of normalized) {
+    const identity = `${mapping.provider}:${mapping.providerSessionId}`;
+    const surfaceIdentities = identitiesBySurface.get(mapping.surfaceId) ?? new Set<string>();
+    surfaceIdentities.add(identity);
+    identitiesBySurface.set(mapping.surfaceId, surfaceIdentities);
+    const identitySurfaces = surfacesByIdentity.get(identity) ?? new Set<string>();
+    identitySurfaces.add(mapping.surfaceId);
+    surfacesByIdentity.set(identity, identitySurfaces);
+  }
+
+  const ambiguousSurfaces = new Set(
+    [...identitiesBySurface].filter(([, identities]) => identities.size > 1).map(([surfaceId]) => surfaceId)
+  );
+  const ambiguousIdentities = new Set(
+    [...surfacesByIdentity].filter(([, surfaces]) => surfaces.size > 1).map(([identity]) => identity)
+  );
+  if (ambiguousSurfaces.size > 0 || ambiguousIdentities.size > 0) {
+    issues.push("Conflicting provider conversation identities were discarded for safety.");
+  }
+
+  const bySurface = new Map<string, AutomaticProviderSessionMapping>();
+  for (const mapping of normalized) {
+    const identity = `${mapping.provider}:${mapping.providerSessionId}`;
+    if (
+      ambiguousSurfaces.has(mapping.surfaceId) ||
+      ambiguousIdentities.has(identity) ||
+      bySurface.has(mapping.surfaceId)
+    ) {
+      continue;
+    }
+    bySurface.set(mapping.surfaceId, mapping);
   }
   return [...bySurface.values()];
 }

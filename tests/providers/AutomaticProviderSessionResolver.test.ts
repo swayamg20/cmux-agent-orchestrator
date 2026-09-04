@@ -14,6 +14,7 @@ import type { ProviderSessionSource } from "../../src/providers/types";
 const workspaceId = "22222222-2222-4222-8222-222222222222";
 const paneId = "33333333-3333-4333-8333-333333333333";
 const surfaceId = "44444444-4444-4444-8444-444444444444";
+const secondSurfaceId = "66666666-6666-4666-8666-666666666666";
 const sessionId = "55555555-5555-4555-8555-55555555555a";
 
 function snapshot(): CmuxSnapshot {
@@ -63,6 +64,23 @@ function snapshot(): CmuxSnapshot {
       }
     ]
   };
+}
+
+function snapshotWithTwoSurfaces(): CmuxSnapshot {
+  const result = snapshot();
+  const pane = result.windows[0]!.workspaces[0]!.panes[0]!;
+  pane.surfaces.push({
+    id: secondSurfaceId,
+    paneId,
+    index: 1,
+    indexInPane: 1,
+    title: "project duplicate",
+    type: "terminal",
+    selected: false,
+    focused: false,
+    active: true
+  });
+  return result;
 }
 
 function processRecord(pid = 101, provider: "claude" | "codex" = "codex"): ProviderProcess {
@@ -189,6 +207,25 @@ describe("AutomaticProviderSessionResolver", () => {
 
     expect(result.mappings).toEqual([]);
     expect(processes.readLocks).not.toHaveBeenCalled();
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("fails closed when one provider conversation is claimed by two cmux surfaces", async () => {
+    const metadata = new ProviderMetadataService([codexSource()]);
+    const processes = new FakeProcessSource([processRecord(101), processRecord(102)]);
+    processes.readSurface.mockImplementation(async (pid) =>
+      pid === 101 ? surfaceId : secondSurfaceId
+    );
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshotWithTwoSurfaces(), client());
+
+    expect(result.mappings).toEqual([]);
+    expect(result.issues).toContain(
+      "Conflicting provider conversation identities were discarded for safety."
+    );
+    expect(processes.readLocks).toHaveBeenCalledTimes(2);
     resolver.dispose();
     metadata.dispose();
   });
