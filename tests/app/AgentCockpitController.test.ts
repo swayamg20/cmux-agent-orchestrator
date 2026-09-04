@@ -153,6 +153,43 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("reports an unavailable focus action without rejecting the UI callback", async () => {
+    let clientCreations = 0;
+    let focusCalls = 0;
+    const transport: CmuxTransport = {
+      ...connectedTransport(1_050),
+      focus: async () => {
+        focusCalls += 1;
+      }
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => {
+        clientCreations += 1;
+        if (clientCreations > 1) {
+          throw new CmuxError("cmux-not-running", "cmux is not running.");
+        }
+        return new CmuxClient(transport);
+      }
+    );
+
+    await controller.initialize();
+    const session = controller.store.getState().sessions[0]!;
+    await controller.testConnection();
+
+    await expect(controller.focusSession(session)).resolves.toBeUndefined();
+    expect(focusCalls).toBe(0);
+    expect(notices.slice(noticeStart)).toContain("cmux connection is not initialized.");
+    controller.dispose();
+  });
+
   it("classifies a new surface once without reading terminal output on later global refreshes", async () => {
     let snapshotCalls = 0;
     let notificationCalls = 0;

@@ -198,9 +198,11 @@ export class AgentCockpitController {
   }
 
   async focusSession(session: LiveSession): Promise<void> {
-    if (this.focusAction === null) throw new Error("cmux connection is not initialized.");
+    if (this.disposed) return;
     try {
-      const result = await this.focusAction.execute(this.store.getState().connection, session);
+      const focusAction = this.focusAction;
+      if (focusAction === null) throw new Error("cmux connection is not initialized.");
+      const result = await focusAction.execute(this.store.getState().connection, session);
       new Notice(
         result.verified
           ? `Focused ${result.target.workspaceTitle} / ${result.target.surfaceTitle} in cmux.`
@@ -507,6 +509,7 @@ export class AgentCockpitController {
     this.cancelIdentityResolution();
     this.client?.dispose();
     this.client = null;
+    this.focusAction = null;
     this.providerSessionResolver.dispose();
     this.providerMetadata.dispose();
     this.attentionEngine.clear();
