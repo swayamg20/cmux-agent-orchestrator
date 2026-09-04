@@ -2,6 +2,7 @@ import { TFile, TFolder, type App } from "obsidian";
 
 export interface MemoryTaskAppOptions {
   failFrontmatterWrites?: number;
+  failFrontmatterWritesAfterMutation?: number;
   beforeCreate?: () => Promise<void>;
   beforeLookup?: (path: string) => void;
   removeAfterCreate?: boolean;
@@ -96,6 +97,9 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
         const frontmatter = cachedFrontmatter.get(file);
         if (!frontmatter) throw new Error("Missing task frontmatter fixture.");
         update(frontmatter);
+        if (frontmatterWriteAttempts <= (options.failFrontmatterWritesAfterMutation ?? 0)) {
+          throw new Error("simulated post-mutation frontmatter write failure");
+        }
       }
     }
   } as unknown as App;

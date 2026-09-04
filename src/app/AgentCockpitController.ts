@@ -796,7 +796,7 @@ export class AgentCockpitController {
         changed = true;
         if (result.isNewRun) {
           try {
-            await this.taskRepository.incrementRunCount(task);
+            await this.persistNewRunCount(task);
           } catch (error) {
             this.reportAutomaticTrackingIssue(
               `${issueKey}:run-count`,
@@ -1323,7 +1323,7 @@ export class AgentCockpitController {
     this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
     if (result.isNewRun) {
       try {
-        const runCount = await this.requireTaskRepository().incrementRunCount(task);
+        const runCount = await this.persistNewRunCount(task);
         this.store.update((state) => ({
           tasks: state.tasks.map((candidate) =>
             candidate.taskId === task.taskId ? { ...candidate, runCount, updatedAt: attachedAt } : candidate
@@ -1334,6 +1334,20 @@ export class AgentCockpitController {
       }
     }
     this.recomputeSessions();
+  }
+
+  private async persistNewRunCount(task: TaskRecord): Promise<number> {
+    const repository = this.requireTaskRepository();
+    try {
+      return await repository.incrementRunCount(task);
+    } catch {
+      // The vault API may reject before or after applying a frontmatter edit.
+      // Reconcile to a minimum instead of repeating the increment, which keeps
+      // this recovery idempotent in both cases.
+      const recordedRuns = this.bindings.listRuns(task.taskId).length;
+      const expected = Math.min(1_000_000, Math.max(task.runCount + 1, recordedRuns));
+      return repository.ensureRunCountAtLeast(task, expected);
+    }
   }
 
   private handleError(error: unknown, connectionFailure = true): void {

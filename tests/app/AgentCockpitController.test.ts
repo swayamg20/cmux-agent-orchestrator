@@ -1981,6 +1981,68 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("repairs a transient manual run-count write without duplicating the run", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted ?? ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
+    const { app, frontmatterWriteAttempts } = memoryTaskApp({ failFrontmatterWrites: 1 });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_335))
+    );
+
+    await controller.initialize();
+    const task = await controller.createTask({ title: "Recover manual run count" });
+    await controller.attachTask(controller.store.getState().sessions[0]!, task);
+
+    expect(frontmatterWriteAttempts()).toBe(2);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, runCount: 1 }
+    ]);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(notices.slice(noticeStart)).toEqual([
+      "Created Recover manual run count.",
+      "Attached session to Recover manual run count."
+    ]);
+    controller.dispose();
+  });
+
+  it("does not double-count when a run-count write rejects after applying the edit", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted ?? ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const { app, frontmatterWriteAttempts } = memoryTaskApp({
+      failFrontmatterWritesAfterMutation: 1
+    });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_340))
+    );
+
+    await controller.initialize();
+    const task = await controller.createTask({ title: "Keep one run" });
+    await controller.attachTask(controller.store.getState().sessions[0]!, task);
+
+    expect(frontmatterWriteAttempts()).toBe(1);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, runCount: 1 }
+    ]);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    controller.dispose();
+  });
+
   it("does not detach a newer task binding from a stale session card", async () => {
     const notices = (Notice as unknown as { messages: string[] }).messages;
     const noticeStart = notices.length;
