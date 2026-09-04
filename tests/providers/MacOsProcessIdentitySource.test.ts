@@ -144,6 +144,20 @@ describe("macOS provider identity decoding", () => {
       await source.readCodexWriterSessionIds(123);
 
       expect(run).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenNthCalledWith(
+        2,
+        "/usr/sbin/lsof",
+        [
+          "-nP",
+          "-a",
+          "-p",
+          "123",
+          "+d",
+          "/tmp/test-codex-home/thread-writer-locks",
+          "-Fn"
+        ],
+        expect.any(Object)
+      );
       for (const call of run.mock.calls) {
         const environment = call[2].environment;
         expect(environment?.CODEX_HOME).toBe("/tmp/test-codex-home");

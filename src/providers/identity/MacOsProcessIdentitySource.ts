@@ -24,13 +24,19 @@ const FORCE_KILL_AFTER_MS = 250;
 
 export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
   private readonly cancelPipelineByChild = new Map<ChildProcess, () => void>();
+  private readonly codexHome: string;
   private disposed = false;
 
   constructor(
     private readonly runner = new SafeProcessRunner(),
     private readonly userHome = homedir(),
     private readonly isProcessLive: (pid: number) => boolean = processIsLive
-  ) {}
+  ) {
+    this.codexHome = resolveProviderHome(
+      process.env.CODEX_HOME,
+      path.join(this.userHome, ".codex")
+    );
+  }
 
   async listForegroundProviderProcesses(signal?: AbortSignal): Promise<ProviderProcess[]> {
     const result = await this.runner.run("/bin/ps", PROCESS_LIST_COMMAND, {
@@ -81,7 +87,7 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
 
   async readCodexWriterSessionIds(pid: number, signal?: AbortSignal): Promise<string[]> {
     assertPid(pid);
-    const lockDirectory = path.join(this.userHome, ".codex", "thread-writer-locks");
+    const lockDirectory = path.join(this.codexHome, "thread-writer-locks");
     try {
       const result = await this.runner.run(
         "/usr/sbin/lsof",
@@ -296,6 +302,12 @@ function localIdentityEnvironment(overrides: NodeJS.ProcessEnv): NodeJS.ProcessE
     ),
     ...overrides
   };
+}
+
+function resolveProviderHome(configured: string | undefined, fallback: string): string {
+  return configured && path.isAbsolute(configured) && !configured.includes("\0")
+    ? path.normalize(configured)
+    : fallback;
 }
 
 function terminateOwnedChild(child: ChildProcess): void {
