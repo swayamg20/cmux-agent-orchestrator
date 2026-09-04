@@ -89,6 +89,17 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
       const surface = surfaces.get(surfaceId);
       if (!surface) return [];
       const mapping = mappingBySurface.get(surfaceId);
+      const nativeSessionId =
+        record.sessionId === null ? null : normalizeCanonicalUuid(record.sessionId);
+      if (record.sessionId !== null && nativeSessionId === null) return [];
+      if (
+        mapping !== undefined &&
+        nativeSessionId !== null &&
+        mapping.providerSessionId !== nativeSessionId
+      ) {
+        issues.push("Conflicting cmux lifecycle identity was discarded for safety.");
+        return [];
+      }
       return [nativeLifecycleObservation(record, surface, mapping, checkedAt)];
     });
     const nativeSurfaceIds = new Set(

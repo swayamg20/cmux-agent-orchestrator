@@ -358,4 +358,36 @@ describe("AutomaticProviderSessionResolver", () => {
     resolver.dispose();
     metadata.dispose();
   });
+
+  it("does not attribute conflicting native lifecycle state to the locally proven conversation", async () => {
+    const metadata = new ProviderMetadataService([codexSource()]);
+    const processes = new FakeProcessSource([processRecord()]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+    const conflictingSessionId = "f7777777-f777-4777-8777-f77777777777";
+    const agents: CmuxAgentRecord[] = [
+      {
+        surfaceId,
+        state: "blocked",
+        source: "hook",
+        sessionId: conflictingSessionId,
+        updatedAt: 1_900
+      }
+    ];
+
+    const result = await resolver.resolve(snapshot(), client(agents));
+
+    expect(result.mappings).toEqual([
+      expect.objectContaining({
+        provider: "codex",
+        providerSessionId: sessionId,
+        matchSource: "codex-writer-lock"
+      })
+    ]);
+    expect(result.lifecycle).toEqual([]);
+    expect(result.issues).toContain(
+      "Conflicting cmux lifecycle identity was discarded for safety."
+    );
+    resolver.dispose();
+    metadata.dispose();
+  });
 });
