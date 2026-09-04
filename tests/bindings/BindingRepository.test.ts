@@ -909,6 +909,54 @@ describe("BindingRepository", () => {
     expect(repository.list()).toHaveLength(2);
   });
 
+  it("does not reuse a persisted run that belongs to another task", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const taskA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const taskB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const input = {
+      taskId: taskB,
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex" as const,
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    };
+    const first = new BindingRepository(plugin);
+    await first.load();
+    const original = await first.attach(input);
+
+    const machine = Object.values(
+      (data as {
+        machines: Record<string, {
+          bindings: Array<{ taskId: string }>;
+        }>;
+      }).machines
+    )[0]!;
+    machine.bindings[0]!.taskId = taskA;
+
+    const second = new BindingRepository(plugin);
+    await second.load();
+    const repaired = await second.attach({
+      ...input,
+      taskId: taskA,
+      attachedAt: "2026-09-04T00:01:00.000Z"
+    });
+
+    expect(repaired.isNewRun).toBe(true);
+    expect(repaired.run).toMatchObject({ taskId: taskA });
+    expect(repaired.run.runId).not.toBe(original.run.runId);
+    expect(repaired.binding.runId).toBe(repaired.run.runId);
+    expect(second.listRuns(taskA)).toHaveLength(1);
+    expect(second.listRuns(taskB)).toEqual([original.run]);
+  });
+
   it("normalizes persisted identities and accepts canonical lookups with different casing", async () => {
     let data: unknown;
     const plugin = {

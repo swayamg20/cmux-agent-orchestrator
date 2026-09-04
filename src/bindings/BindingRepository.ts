@@ -726,7 +726,9 @@ function attachToMachine(
     (candidate) => candidate.surfaceId === input.surfaceId
   ) ?? null;
   const reusableRun = existing && existing.taskId === input.taskId
-    ? machine.runs.find((run) => run.runId === existing.runId) ?? null
+    ? machine.runs.find(
+        (run) => run.runId === existing.runId && run.taskId === input.taskId
+      ) ?? null
     : null;
   const isSameProviderSession =
     reusableRun !== null &&
