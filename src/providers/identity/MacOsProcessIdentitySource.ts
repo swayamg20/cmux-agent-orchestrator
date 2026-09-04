@@ -38,7 +38,7 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
       maxStdoutBytes: PROCESS_LIST_LIMIT,
       maxStderrBytes: DIAGNOSTIC_LIMIT,
       signal,
-      environment: { ...process.env, LC_ALL: "C", TZ: "UTC" }
+      environment: localIdentityEnvironment({ LC_ALL: "C", TZ: "UTC" })
     });
     return decodeProviderProcesses(result.stdout).filter(
       (candidate) =>
@@ -91,7 +91,7 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
           maxStdoutBytes: DIAGNOSTIC_LIMIT,
           maxStderrBytes: DIAGNOSTIC_LIMIT,
           signal,
-          environment: { ...process.env, LC_ALL: "C" }
+          environment: localIdentityEnvironment({ LC_ALL: "C" })
         }
       );
       return decodeWriterLockSessionIds(result.stdout, lockDirectory);
@@ -117,7 +117,7 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
   private readSurfaceIdPipeline(pid: number, signal?: AbortSignal): Promise<string | null> {
     return new Promise((resolve) => {
       const ps = spawn("/bin/ps", ["eww", "-p", String(pid), "-o", "command="], {
-        env: { ...process.env, LC_ALL: "C" },
+        env: localIdentityEnvironment({ LC_ALL: "C" }),
         shell: false,
         stdio: ["ignore", "pipe", "ignore"],
         windowsHide: true
@@ -126,7 +126,7 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
         "/usr/bin/grep",
         ["-Eo", "CMUX_SURFACE_ID=[0-9A-Fa-f-]{36}"],
         {
-          env: { ...process.env, LC_ALL: "C" },
+          env: localIdentityEnvironment({ LC_ALL: "C" }),
           shell: false,
           stdio: ["pipe", "pipe", "ignore"],
           windowsHide: true
@@ -279,6 +279,15 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function isAbort(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function localIdentityEnvironment(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("CMUX_"))
+    ),
+    ...overrides
+  };
 }
 
 function terminateOwnedChild(child: ChildProcess): void {

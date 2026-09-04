@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SafeProcessRunner } from "../../src/cmux/SafeProcessRunner";
 import {
   MacOsProcessIdentitySource,
@@ -123,6 +123,36 @@ describe("macOS provider identity decoding", () => {
       await expect(source.readClaudeSession(claudeProcess, "/workspace/project")).resolves.toBeNull();
     } finally {
       await rm(userHome, { recursive: true, force: true });
+    }
+  });
+
+  it("does not pass cmux connection context to local identity commands", async () => {
+    const runner = new SafeProcessRunner();
+    const run = vi.spyOn(runner, "run").mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+      durationMs: 1
+    });
+    vi.stubEnv("CMUX_SOCKET_PASSWORD", "test-only-password");
+    vi.stubEnv("CMUX_SURFACE_ID", "44444444-4444-4444-8444-444444444444");
+    vi.stubEnv("CODEX_HOME", "/tmp/test-codex-home");
+    const source = new MacOsProcessIdentitySource(runner);
+
+    try {
+      await source.listForegroundProviderProcesses();
+      await source.readCodexWriterSessionIds(123);
+
+      expect(run).toHaveBeenCalledTimes(2);
+      for (const call of run.mock.calls) {
+        const environment = call[2].environment;
+        expect(environment?.CODEX_HOME).toBe("/tmp/test-codex-home");
+        expect(environment?.CMUX_SOCKET_PASSWORD).toBeUndefined();
+        expect(environment?.CMUX_SURFACE_ID).toBeUndefined();
+      }
+    } finally {
+      source.dispose();
+      vi.unstubAllEnvs();
     }
   });
 });
