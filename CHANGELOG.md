@@ -25,6 +25,7 @@ All notable changes to this project will be documented in this file.
 - Cancel queued automatic run-count repairs before they modify Markdown when tracking authority has been revoked.
 - Ignore delayed settings and task-reload continuations after plugin unload so disposed controller state stays cleared.
 - Stop automatic task and binding continuations after plugin unload before they can write run counts, republish cleared state, or show late notices.
+- Stop explicit task and conversation continuations after plugin unload before they can start follow-up writes, republish cleared state, open stale UI, or show late notices.
 - Hide every duplicated Markdown task identity from the Work board and discard stale write-through identity when indexed frontmatter proves that the same file changed IDs.
 - Recover an ambiguously failed task-note creation only when exact Markdown read-back proves that the intended file was written.
 - Recover an ambiguously failed legacy-data migration only when exact plugin-data read-back proves that the normalized import persisted.

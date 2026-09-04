@@ -2241,6 +2241,156 @@ describe("AgentCockpitController connection failures", () => {
     expect(notices.slice(noticeStart)).toEqual([]);
   });
 
+  it("does not republish or attach an explicit task whose vault create outlives disposal", async () => {
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    let markCreateStarted!: () => void;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const memory = memoryTaskApp({
+      beforeCreate: async () => {
+        markCreateStarted();
+        await createGate;
+      }
+    });
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_649))
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+    const noticeStart = notices.length;
+    const creation = controller.createTask({ title: "Finish after unload" }, session);
+    await createStarted;
+    controller.dispose();
+    releaseCreate();
+
+    await expect(creation).resolves.toMatchObject({ title: "Finish after unload" });
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().tasks).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    expect(notices.slice(noticeStart)).toEqual([]);
+  });
+
+  it("does not continue an explicit attachment after its save outlives disposal", async () => {
+    let persisted: unknown;
+    let gateSave = false;
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let markSaveStarted!: () => void;
+    const saveStarted = new Promise<void>((resolve) => {
+      markSaveStarted = resolve;
+    });
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        if (gateSave) {
+          markSaveStarted();
+          await saveGate;
+        }
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const memory = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_649))
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const task = await controller.createTask({ title: "Attach before unload" });
+    const session = controller.store.getState().sessions[0]!;
+    gateSave = true;
+    const noticeStart = notices.length;
+    const attachment = controller.attachTask(session, task);
+    await saveStarted;
+    controller.dispose();
+    releaseSave();
+    await attachment;
+
+    expect(persisted).toBeDefined();
+    expect(memory.frontmatterWriteAttempts()).toBe(0);
+    expect(controller.store.getState().tasks).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    expect(notices.slice(noticeStart)).toEqual([]);
+  });
+
+  it("does not publish or notify a conversation match whose save outlives disposal", async () => {
+    let persisted: unknown;
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let markSaveStarted!: () => void;
+    const saveStarted = new Promise<void>((resolve) => {
+      markSaveStarted = resolve;
+    });
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        markSaveStarted();
+        await saveGate;
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_649)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+    const matchingController = controller as unknown as {
+      matchConversation(
+        original: typeof session,
+        conversation: ProviderSessionMetadata
+      ): Promise<void>;
+    };
+    const noticeStart = notices.length;
+    const matching = matchingController.matchConversation(session, {
+      provider: "codex",
+      sessionId: "55555555-5555-4555-8555-555555555555",
+      title: "Match before unload",
+      titleSource: "explicit-name",
+      cwd: "/repository",
+      updatedAt: 4_649,
+      status: "idle"
+    });
+    await saveStarted;
+    controller.dispose();
+    releaseSave();
+    await matching;
+
+    expect(persisted).toBeDefined();
+    expect(controller.store.getState().tasks).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    expect(notices.slice(noticeStart)).toEqual([]);
+  });
+
   it("does not bind stale automatic work after topology fails and resumes from a fresh snapshot", async () => {
     let persisted: unknown;
     let snapshotCalls = 0;

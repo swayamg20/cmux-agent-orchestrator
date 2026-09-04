@@ -250,6 +250,7 @@ export class AgentCockpitController {
   }
 
   showTaskPicker(session: LiveSession): void {
+    if (this.disposed) return;
     const modal = new TaskPickerModal(this.app, this.store.getState().tasks, (task) => {
       void this.attachTask(session, task).catch(() => undefined);
     });
@@ -257,6 +258,7 @@ export class AgentCockpitController {
   }
 
   showCreateTask(session: LiveSession | null): void {
+    if (this.disposed) return;
     const modal = new CreateTaskModal(this.app, session, async (options) => {
       await this.createTask(options, session);
     });
@@ -264,6 +266,7 @@ export class AgentCockpitController {
   }
 
   async showConversationPicker(session: LiveSession): Promise<void> {
+    if (this.disposed) return;
     if (session.provider.provider !== "claude" && session.provider.provider !== "codex") {
       new Notice("Detect Claude or Codex before choosing a provider conversation.");
       return;
@@ -281,6 +284,7 @@ export class AgentCockpitController {
         session.provider.provider,
         session.currentDirectory
       );
+      if (this.disposed) return;
       if (conversations.length === 0) {
         new Notice(`No ${session.provider.provider === "claude" ? "Claude" : "Codex"} conversations were found for this repository.`);
         return;
@@ -289,11 +293,13 @@ export class AgentCockpitController {
         void this.matchConversation(session, conversation).catch(() => undefined);
       }).open();
     } catch (error) {
+      if (this.disposed) return;
       new Notice(readableError(error));
     }
   }
 
   async forgetConversation(session: LiveSession): Promise<void> {
+    if (this.disposed) return;
     try {
       const current = this.resolveCurrentBindingSession(session);
       const mapping = this.bindings
@@ -316,7 +322,9 @@ export class AgentCockpitController {
       ) {
         throw new Error("The provider conversation changed before its saved match could be forgotten.");
       }
-      if (!(await this.bindings.forgetProviderSessionIfUnchanged(mapping))) {
+      const forgotten = await this.bindings.forgetProviderSessionIfUnchanged(mapping);
+      if (this.disposed) return;
+      if (!forgotten) {
         throw new Error("The provider conversation changed before its saved match could be forgotten.");
       }
       this.providerMetadata.forget(mapping.provider, mapping.providerSessionId);
@@ -324,21 +332,26 @@ export class AgentCockpitController {
       this.recomputeSessions();
       new Notice("Forgot the conversation match. The provider conversation and task were not deleted.");
     } catch (error) {
+      if (this.disposed) return;
       new Notice(readableError(error));
     }
   }
 
   async attachTask(session: LiveSession, task: TaskRecord): Promise<void> {
+    if (this.disposed) return;
     try {
       await this.attachTaskInternal(session, task);
+      if (this.disposed) return;
       new Notice(`Attached session to ${task.title}.`);
     } catch (error) {
+      if (this.disposed) return;
       new Notice(readableError(error));
       throw error;
     }
   }
 
   async detachTask(session: LiveSession): Promise<void> {
+    if (this.disposed) return;
     try {
       const current = this.resolveCurrentBindingSession(session);
       const expected = this.bindings.findBySurface(current.surfaceId);
@@ -352,51 +365,62 @@ export class AgentCockpitController {
       ) {
         throw new Error("The task binding changed before it could be detached. Refresh and try again.");
       }
-      if (!(await this.bindings.detachIfUnchanged(expected))) {
+      const detached = await this.bindings.detachIfUnchanged(expected);
+      if (this.disposed) return;
+      if (!detached) {
         throw new Error("The task binding changed before it could be detached. Refresh and try again.");
       }
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
       this.recomputeSessions();
       new Notice("Detached the session. The task note and run history were not deleted.");
     } catch (error) {
+      if (this.disposed) return;
       new Notice(readableError(error));
       throw error;
     }
   }
 
   async createTask(options: CreateTaskOptions, session: LiveSession | null = null): Promise<TaskRecord> {
+    if (this.disposed) throw new Error(`${PRODUCT_NAME} is unloaded.`);
     try {
       const current = session === null ? null : this.resolveCurrentBindingSession(session);
       const task = await this.requireTaskRepository().create(options);
+      if (this.disposed) return task;
       this.store.update((state) => ({ tasks: [task, ...state.tasks] }));
       if (current === null) {
         new Notice(`Created ${task.title}.`);
       } else {
         try {
           await this.attachTaskInternal(current, task);
+          if (this.disposed) return task;
           new Notice(`Created ${task.title} and attached the session.`);
         } catch (error) {
+          if (this.disposed) return task;
           new Notice(`Created ${task.title}, but could not attach the session: ${readableError(error)}`);
         }
       }
       return task;
     } catch (error) {
-      new Notice(readableError(error));
+      if (!this.disposed) new Notice(readableError(error));
       throw error;
     }
   }
 
   async openTask(task: TaskRecord): Promise<void> {
+    if (this.disposed) return;
     try {
       await this.requireTaskRepository().open(task);
     } catch (error) {
+      if (this.disposed) return;
       new Notice(readableError(error));
     }
   }
 
   async updateWorkflow(task: TaskRecord, workflowStatus: WorkflowStatus): Promise<boolean> {
+    if (this.disposed) return false;
     try {
       await this.requireTaskRepository().updateWorkflow(task, workflowStatus);
+      if (this.disposed) return false;
       const updatedAt = new Date().toISOString();
       this.store.update((state) => ({
         tasks: state.tasks.map((candidate) =>
@@ -406,7 +430,7 @@ export class AgentCockpitController {
       this.recomputeSessions();
       return true;
     } catch (error) {
-      new Notice(readableError(error));
+      if (!this.disposed) new Notice(readableError(error));
       return false;
     }
   }
@@ -1324,6 +1348,7 @@ export class AgentCockpitController {
     original: LiveSession,
     conversation: ProviderSessionMetadata
   ): Promise<void> {
+    if (this.disposed) return;
     try {
       const expectedMapping = this.expectedProviderSessionMapping(original);
       const current = this.resolveCurrentBindingSession(original);
@@ -1351,7 +1376,9 @@ export class AgentCockpitController {
         providerSessionId: conversation.sessionId,
         matchedAt: new Date().toISOString()
       };
-      if (!(await this.bindings.mapProviderSessionIfUnchanged(mapping, expectedMapping))) {
+      const matched = await this.bindings.mapProviderSessionIfUnchanged(mapping, expectedMapping);
+      if (this.disposed) return;
+      if (!matched) {
         throw new Error("The saved provider conversation changed while the picker was open. Refresh and try again.");
       }
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
@@ -1359,6 +1386,7 @@ export class AgentCockpitController {
       this.scheduleAutomaticTaskTracking();
       new Notice(`Matched this cmux surface to “${conversation.title}”.`);
     } catch (error) {
+      if (this.disposed) return;
       new Notice(readableError(error));
       throw error;
     }
@@ -1450,6 +1478,7 @@ export class AgentCockpitController {
   }
 
   private async attachTaskInternal(session: LiveSession, task: TaskRecord): Promise<void> {
+    if (this.disposed) return;
     const current = this.resolveCurrentBindingSession(session);
     const expectedBinding = this.expectedTaskBinding(session, current);
     validateBindingIdentity(task.taskId, current);
@@ -1467,6 +1496,7 @@ export class AgentCockpitController {
       },
       expectedBinding
     );
+    if (this.disposed) return;
     if (result === null) {
       throw new Error("The task binding changed while the picker was open. Refresh and try again.");
     }
@@ -1474,12 +1504,14 @@ export class AgentCockpitController {
     if (result.isNewRun) {
       try {
         const runCount = await this.persistNewRunCount(task);
+        if (this.disposed) return;
         this.store.update((state) => ({
           tasks: state.tasks.map((candidate) =>
             candidate.taskId === task.taskId ? { ...candidate, runCount, updatedAt: attachedAt } : candidate
           )
         }));
       } catch (error) {
+        if (this.disposed) return;
         new Notice(`Session attached, but run count was not updated: ${readableError(error)}`);
       }
     }
