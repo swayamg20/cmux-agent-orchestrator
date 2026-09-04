@@ -19,6 +19,7 @@ export class ProviderMetadataService {
   private readonly requestRevisions = new Map<string, number>();
   private readonly controllers = new Set<AbortController>();
   private requestSequence = 0;
+  private retiredThrough = 0;
   private disposed = false;
 
   constructor(
@@ -142,6 +143,7 @@ export class ProviderMetadataService {
   }
 
   forget(provider: ProviderSessionKind, sessionId: string): void {
+    if (this.disposed) return;
     const key = providerMetadataKey(provider, sessionId);
     this.markRequest(key, ++this.requestSequence);
     this.metadata.delete(key);
@@ -185,9 +187,10 @@ export class ProviderMetadataService {
 
   private cache(session: ProviderSessionMetadata, revision: number): void {
     const key = providerMetadataKey(session.provider, session.sessionId);
+    if (revision <= this.retiredThrough) return;
     const latest = this.requestRevisions.get(key);
     if (latest !== undefined && revision < latest) return;
-    this.markRequest(key, revision);
+    if (!this.markRequest(key, revision)) return;
     this.metadata.delete(key);
     this.metadata.set(key, { ...session });
     while (this.metadata.size > MAX_METADATA_ENTRIES) {
@@ -198,17 +201,26 @@ export class ProviderMetadataService {
   }
 
   private isLatestRequest(key: string, revision: number): boolean {
-    return (this.requestRevisions.get(key) ?? revision) === revision;
+    return (
+      revision > this.retiredThrough &&
+      (this.requestRevisions.get(key) ?? revision) === revision
+    );
   }
 
-  private markRequest(key: string, revision: number): void {
+  private markRequest(key: string, revision: number): boolean {
+    if (revision <= this.retiredThrough) return false;
     this.requestRevisions.delete(key);
     this.requestRevisions.set(key, revision);
     while (this.requestRevisions.size > MAX_REQUEST_REVISIONS) {
-      const oldest = this.requestRevisions.keys().next();
+      const oldest = this.requestRevisions.entries().next();
       if (oldest.done) break;
-      this.requestRevisions.delete(oldest.value);
+      const [oldestKey, oldestRevision] = oldest.value;
+      this.requestRevisions.delete(oldestKey);
+      this.retiredThrough = Math.max(this.retiredThrough, oldestRevision);
     }
+    if (revision > this.retiredThrough) return true;
+    if (this.requestRevisions.get(key) === revision) this.requestRevisions.delete(key);
+    return false;
   }
 }
 

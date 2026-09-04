@@ -57,6 +57,10 @@ function liveSession(): LiveSession {
   };
 }
 
+function distinctSessionId(index: number): string {
+  return `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
+}
+
 describe("ProviderMetadataService", () => {
   it("refreshes metadata only for a mapping that resolves to the exact live target", async () => {
     const get = vi.fn(async () => metadata);
@@ -286,5 +290,92 @@ describe("ProviderMetadataService", () => {
 
     expect(service.evidence.has(`codex:${metadata.sessionId}`)).toBe(false);
     service.dispose();
+  });
+
+  it("does not evict the forget guard for an in-flight metadata read", async () => {
+    let resolveOriginal!: (value: ProviderSessionMetadata | null) => void;
+    let originalReads = 0;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async (sessionId) => {
+        if (sessionId !== metadata.sessionId) return null;
+        originalReads += 1;
+        return originalReads === 1
+          ? new Promise<ProviderSessionMetadata | null>((resolve) => {
+              resolveOriginal = resolve;
+            })
+          : { ...metadata, title: "Fresh title" };
+      },
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const pending = service.get("codex", metadata.sessionId, metadata.cwd);
+    await vi.waitFor(() => expect(resolveOriginal).toBeTypeOf("function"));
+
+    service.forget("codex", metadata.sessionId);
+    for (let index = 0; index < 2_000; index += 1) {
+      await service.get("codex", distinctSessionId(index), metadata.cwd);
+    }
+    resolveOriginal(metadata);
+    await pending;
+
+    expect(service.evidence.has(`codex:${metadata.sessionId}`)).toBe(false);
+    await expect(service.get("codex", metadata.sessionId, metadata.cwd)).resolves.toMatchObject({
+      title: "Fresh title"
+    });
+    expect(service.evidence.get(`codex:${metadata.sessionId}`)).toMatchObject({
+      title: "Fresh title"
+    });
+    expect(
+      (service as unknown as { requestRevisions: Map<string, number> }).requestRevisions.size
+    ).toBeLessThanOrEqual(2_000);
+    service.dispose();
+  });
+
+  it("does not evict the forget guard for an in-flight metadata list", async () => {
+    let resolveList!: (value: ProviderSessionMetadata[]) => void;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => new Promise<ProviderSessionMetadata[]>((resolve) => {
+        resolveList = resolve;
+      }),
+      get: async () => null,
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const pending = service.list("codex", metadata.cwd);
+    await vi.waitFor(() => expect(resolveList).toBeTypeOf("function"));
+
+    service.forget("codex", metadata.sessionId);
+    for (let index = 0; index < 2_000; index += 1) {
+      await service.get("codex", distinctSessionId(index), metadata.cwd);
+    }
+    resolveList([metadata]);
+    await pending;
+
+    expect(service.evidence.has(`codex:${metadata.sessionId}`)).toBe(false);
+    expect(
+      (service as unknown as { requestRevisions: Map<string, number> }).requestRevisions.size
+    ).toBeLessThanOrEqual(2_000);
+    service.dispose();
+  });
+
+  it("keeps disposal terminal when a late caller forgets metadata", () => {
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async () => null,
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+
+    service.dispose();
+    service.forget("codex", metadata.sessionId);
+
+    expect(service.evidence.size).toBe(0);
+    expect(
+      (service as unknown as { requestRevisions: Map<string, number> }).requestRevisions.size
+    ).toBe(0);
   });
 });
