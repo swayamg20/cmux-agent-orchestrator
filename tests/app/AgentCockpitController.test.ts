@@ -15,6 +15,7 @@ import type { ProviderSessionSource } from "../../src/providers/types";
 function memoryTaskApp(options: {
   failFrontmatterWrites?: number;
   beforeCreate?: () => Promise<void>;
+  removeAfterCreate?: boolean;
 } = {}): {
   app: App;
   markdownWrites: string[];
@@ -69,6 +70,13 @@ function memoryTaskApp(options: {
           "created-at": jsonLine(markdown, "created-at"),
           "updated-at": jsonLine(markdown, "updated-at")
         });
+        if (options.removeAfterCreate) {
+          queueMicrotask(() => {
+            entries.delete(path);
+            const index = parent instanceof TFolder ? parent.children.indexOf(created) : -1;
+            if (parent instanceof TFolder && index >= 0) parent.children.splice(index, 1);
+          });
+        }
         return created;
       }
     },
@@ -1170,6 +1178,34 @@ describe("AgentCockpitController connection failures", () => {
     expect(markdownWrites).toHaveLength(1);
     expect(controller.store.getState().bindings).toHaveLength(1);
     expect(controller.store.getState().runs).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("does not persist a binding when the automatic task disappears before attachment", async () => {
+    let saveAttempts = 0;
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => {
+        saveAttempts += 1;
+      }
+    } as unknown as Plugin;
+    const { app, markdownWrites } = memoryTaskApp({ removeAfterCreate: true });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_200)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(markdownWrites.length).toBeGreaterThan(0);
+    expect(saveAttempts).toBe(0);
+    expect(controller.store.getState().tasks).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
     controller.dispose();
   });
 

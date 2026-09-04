@@ -708,11 +708,12 @@ export class AgentCockpitController {
         // persisting a machine-local cmux binding.
         current = this.resolveCurrentAutomaticCandidate(candidate);
         if (current === null || this.hasProviderRun(candidate)) continue;
-        validateBindingIdentity(ensured.task.taskId, current);
+        const task = this.taskRepository.findById(ensured.task.taskId);
+        validateBindingIdentity(task.taskId, current);
 
         const attachedAt = new Date().toISOString();
         const result = await this.bindings.attach({
-          taskId: ensured.task.taskId,
+          taskId: task.taskId,
           workspaceId: current.workspaceId,
           paneId: current.paneId,
           surfaceId: current.surfaceId,
@@ -723,7 +724,7 @@ export class AgentCockpitController {
         changed = true;
         if (result.isNewRun) {
           try {
-            await this.taskRepository.incrementRunCount(ensured.task);
+            await this.taskRepository.incrementRunCount(task);
           } catch (error) {
             this.reportAutomaticTrackingIssue(
               `${issueKey}:run-count`,
