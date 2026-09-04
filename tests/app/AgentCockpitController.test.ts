@@ -136,6 +136,62 @@ function snapshot(observedAt: number): CmuxSnapshot {
   };
 }
 
+function exactCodexResolver(): ProviderSessionResolver {
+  return {
+    resolve: async (currentSnapshot) => ({
+      checkedAt: currentSnapshot.observedAt + 1,
+      nativeLifecycleAvailable: false,
+      issues: [],
+      mappings: [
+        {
+          workspaceId: "22222222-2222-4222-8222-222222222222",
+          paneId: "33333333-3333-4333-8333-333333333333",
+          surfaceId: "44444444-4444-4444-8444-444444444444",
+          provider: "codex",
+          providerSessionId: "55555555-5555-4555-8555-555555555555",
+          matchSource: "codex-writer-lock",
+          confidence: "high",
+          explanation: "Verified exact writer identity.",
+          observedAt: currentSnapshot.observedAt + 1
+        }
+      ],
+      lifecycle: []
+    }),
+    dispose: () => undefined
+  };
+}
+
+function connectedTransport(observedAt: number): CmuxTransport {
+  return {
+    probe: async () => ({
+      binaryPath: "/cmux",
+      versionText: "cmux 0.62.2",
+      capabilities: {
+        version: 2,
+        protocol: "cmux-socket",
+        accessMode: "password",
+        methods: new Set()
+      },
+      latencyMs: 1
+    }),
+    snapshot: async () => snapshot(observedAt),
+    notifications: async () => [],
+    readPreview: async (target) => ({ ...target, text: "", observedAt, truncated: false }),
+    focusedTarget: async () => null,
+    focus: async () => undefined,
+    dispose: () => undefined
+  };
+}
+
+function emptyCodexMetadataSource(): ProviderSessionSource {
+  return {
+    provider: "codex",
+    list: async () => [],
+    get: async () => null,
+    dispose: () => undefined
+  };
+}
+
 describe("AgentCockpitController connection failures", () => {
   it("preserves an initial access-blocked error during later manual refresh attempts", async () => {
     const app = {
@@ -909,53 +965,9 @@ describe("AgentCockpitController connection failures", () => {
         persisted = structuredClone(next);
       }
     } as unknown as Plugin;
-    const resolver: ProviderSessionResolver = {
-      resolve: async (currentSnapshot) => ({
-        checkedAt: currentSnapshot.observedAt + 1,
-        nativeLifecycleAvailable: false,
-        issues: [],
-        mappings: [
-          {
-            workspaceId: "22222222-2222-4222-8222-222222222222",
-            paneId: "33333333-3333-4333-8333-333333333333",
-            surfaceId: "44444444-4444-4444-8444-444444444444",
-            provider: "codex",
-            providerSessionId: "55555555-5555-4555-8555-555555555555",
-            matchSource: "codex-writer-lock",
-            confidence: "high",
-            explanation: "Verified exact writer identity.",
-            observedAt: currentSnapshot.observedAt + 1
-          }
-        ],
-        lifecycle: []
-      }),
-      dispose: () => undefined
-    };
-    const transport: CmuxTransport = {
-      probe: async () => ({
-        binaryPath: "/cmux",
-        versionText: "cmux 0.62.2",
-        capabilities: {
-          version: 2,
-          protocol: "cmux-socket",
-          accessMode: "password",
-          methods: new Set()
-        },
-        latencyMs: 1
-      }),
-      snapshot: async () => snapshot(4_500),
-      notifications: async () => [],
-      readPreview: async (target) => ({ ...target, text: "", observedAt: 4_500, truncated: false }),
-      focusedTarget: async () => null,
-      focus: async () => undefined,
-      dispose: () => undefined
-    };
-    const source: ProviderSessionSource = {
-      provider: "codex",
-      list: async () => [],
-      get: async () => null,
-      dispose: () => undefined
-    };
+    const resolver = exactCodexResolver();
+    const transport = connectedTransport(4_500);
+    const source = emptyCodexMetadataSource();
     const { app, markdownWrites } = memoryTaskApp({
       beforeCreate: async () => {
         markCreateStarted?.();
@@ -991,6 +1003,60 @@ describe("AgentCockpitController connection failures", () => {
     expect(markdownWrites).toHaveLength(1);
     expect(controller.store.getState().bindings).toEqual([]);
     expect(controller.store.getState().runs).toEqual([]);
+    controller.dispose();
+  });
+
+  it("restores automatic tracking without duplication when saving an opt-out fails", async () => {
+    let persisted: unknown;
+    let saveAttempts = 0;
+    let releaseCreate: (() => void) | undefined;
+    let markCreateStarted: (() => void) | undefined;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        saveAttempts += 1;
+        if (saveAttempts === 1) throw new Error("simulated settings write failure");
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const { app, markdownWrites } = memoryTaskApp({
+      beforeCreate: async () => {
+        markCreateStarted?.();
+        await createGate;
+      }
+    });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_600)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await createStarted;
+    await expect(
+      controller.updateSettings({
+        ...controller.getSettings(),
+        autoTrackAgentRuns: false
+      })
+    ).rejects.toThrow("simulated settings write failure");
+    expect(controller.getSettings().autoTrackAgentRuns).toBe(true);
+
+    releaseCreate?.();
+    await controller.waitForBackgroundWork();
+
+    expect(saveAttempts).toBe(2);
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().tasks).toMatchObject([{ runCount: 1 }]);
+    expect(controller.store.getState().bindings).toHaveLength(1);
+    expect(controller.store.getState().runs).toHaveLength(1);
     controller.dispose();
   });
 
