@@ -6,7 +6,10 @@ import { CmuxClient } from "../../src/cmux/CmuxClient";
 import type { CmuxTransport } from "../../src/cmux/CmuxTransport";
 import { CmuxError, type CmuxSnapshot } from "../../src/cmux/types";
 import { ProviderMetadataService } from "../../src/providers/ProviderMetadataService";
-import type { ProviderSessionResolver } from "../../src/providers/identity/types";
+import type {
+  ProviderIdentityResolution,
+  ProviderSessionResolver
+} from "../../src/providers/identity/types";
 import type { ProviderSessionSource } from "../../src/providers/types";
 
 function memoryTaskApp(options: {
@@ -139,27 +142,31 @@ function snapshot(observedAt: number): CmuxSnapshot {
   };
 }
 
+function exactCodexResolverResult(observedAt: number): ProviderIdentityResolution {
+  return {
+    checkedAt: observedAt + 1,
+    nativeLifecycleAvailable: false,
+    issues: [],
+    mappings: [
+      {
+        workspaceId: "22222222-2222-4222-8222-222222222222",
+        paneId: "33333333-3333-4333-8333-333333333333",
+        surfaceId: "44444444-4444-4444-8444-444444444444",
+        provider: "codex",
+        providerSessionId: "55555555-5555-4555-8555-555555555555",
+        matchSource: "codex-writer-lock",
+        confidence: "high",
+        explanation: "Verified exact writer identity.",
+        observedAt: observedAt + 1
+      }
+    ],
+    lifecycle: []
+  };
+}
+
 function exactCodexResolver(): ProviderSessionResolver {
   return {
-    resolve: async (currentSnapshot) => ({
-      checkedAt: currentSnapshot.observedAt + 1,
-      nativeLifecycleAvailable: false,
-      issues: [],
-      mappings: [
-        {
-          workspaceId: "22222222-2222-4222-8222-222222222222",
-          paneId: "33333333-3333-4333-8333-333333333333",
-          surfaceId: "44444444-4444-4444-8444-444444444444",
-          provider: "codex",
-          providerSessionId: "55555555-5555-4555-8555-555555555555",
-          matchSource: "codex-writer-lock",
-          confidence: "high",
-          explanation: "Verified exact writer identity.",
-          observedAt: currentSnapshot.observedAt + 1
-        }
-      ],
-      lifecycle: []
-    }),
+    resolve: async (currentSnapshot) => exactCodexResolverResult(currentSnapshot.observedAt),
     dispose: () => undefined
   };
 }
@@ -1108,6 +1115,59 @@ describe("AgentCockpitController connection failures", () => {
     expect(controller.store.getState().tasks).toMatchObject([
       { file: { path: createdPaths[1] }, runCount: 1 }
     ]);
+    expect(controller.store.getState().bindings).toHaveLength(1);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("refreshes reconfigured cmux topology before automatic tracking resumes", async () => {
+    let persisted: unknown;
+    const requestedBinaryPaths: string[] = [];
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        checkedAt: currentSnapshot.observedAt + 1,
+        nativeLifecycleAvailable: false,
+        issues: [],
+        mappings:
+          currentSnapshot.observedAt === 5_100
+            ? exactCodexResolverResult(currentSnapshot.observedAt).mappings
+            : [],
+        lifecycle: []
+      }),
+      dispose: () => undefined
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async (explicitBinaryPath) => {
+        requestedBinaryPaths.push(explicitBinaryPath);
+        const observedAt = requestedBinaryPaths.length === 1 ? 5_000 : 5_100;
+        return new CmuxClient(connectedTransport(observedAt));
+      },
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().tasks).toEqual([]);
+
+    await controller.updateSettings({
+      ...controller.getSettings(),
+      cmuxBinaryPath: "/alternate/cmux"
+    });
+    await controller.waitForBackgroundWork();
+
+    expect(requestedBinaryPaths).toEqual(["", "/alternate/cmux"]);
+    expect(controller.store.getState().snapshot?.observedAt).toBe(5_100);
+    expect(markdownWrites).toHaveLength(1);
     expect(controller.store.getState().bindings).toHaveLength(1);
     expect(controller.store.getState().runs).toHaveLength(1);
     controller.dispose();
