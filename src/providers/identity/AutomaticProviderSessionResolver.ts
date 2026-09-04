@@ -36,6 +36,7 @@ interface ProcessResolution {
 }
 
 const RESOLUTION_CONCURRENCY = 2;
+const MAX_CODEX_WRITER_LOCKS = 8;
 
 export class AutomaticProviderSessionResolver implements ProviderSessionResolver {
   private disposed = false;
@@ -212,6 +213,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     }
 
     const writerIds = await this.processes.readCodexWriterSessionIds(candidate.process.pid, signal);
+    if (writerIds.length > MAX_CODEX_WRITER_LOCKS) return null;
     const rootThreads: ProviderSessionMetadata[] = [];
     for (const sessionId of writerIds) {
       if (signal?.aborted || this.disposed) return null;

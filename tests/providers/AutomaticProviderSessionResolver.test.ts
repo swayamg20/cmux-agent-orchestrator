@@ -198,6 +198,30 @@ describe("AutomaticProviderSessionResolver", () => {
     metadata.dispose();
   });
 
+  it("fails closed before metadata reads when a Codex process holds excessive writer locks", async () => {
+    const get = vi.fn(async () => null);
+    const metadata = new ProviderMetadataService([{
+      provider: "codex",
+      list: async () => [],
+      get,
+      dispose: () => undefined
+    }]);
+    const processes = new FakeProcessSource([processRecord()]);
+    processes.readLocks.mockResolvedValue(
+      Array.from({ length: 9 }, (_, index) =>
+        `${index.toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`
+      )
+    );
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(result.mappings).toEqual([]);
+    expect(get).not.toHaveBeenCalled();
+    resolver.dispose();
+    metadata.dispose();
+  });
+
   it("joins the uppercase macOS CMUX_SURFACE_ID to a lowercase cmux snapshot", async () => {
     const metadata = new ProviderMetadataService([codexSource()]);
     const processes = new FakeProcessSource([processRecord()]);
