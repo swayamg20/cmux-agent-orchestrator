@@ -920,6 +920,69 @@ describe("AgentCockpitController connection failures", () => {
     }
   });
 
+  it("reports a recurring automatic tracking failure again after a successful reconciliation", async () => {
+    let persisted: unknown;
+    let failTaskLookup = false;
+    let releaseIdentity: (() => void) | undefined;
+    const identityGate = new Promise<void>((resolve) => {
+      releaseIdentity = resolve;
+    });
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => {
+        await identityGate;
+        return exactCodexResolverResult(currentSnapshot.observedAt);
+      },
+      dispose: () => undefined
+    };
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    notices.length = 0;
+    const { app } = memoryTaskApp({
+      beforeLookup: (path) => {
+        if (failTaskLookup && path === "Agent Cockpit/Tasks") {
+          throw new Error("simulated task enumeration failure");
+        }
+      }
+    });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_200)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    try {
+      await controller.initialize();
+      failTaskLookup = true;
+      releaseIdentity?.();
+      await controller.waitForBackgroundWork();
+
+      failTaskLookup = false;
+      await controller.refreshNow();
+      await controller.waitForBackgroundWork();
+      expect(controller.store.getState().tasks).toHaveLength(1);
+
+      failTaskLookup = true;
+      await controller.refreshNow();
+      await controller.waitForBackgroundWork();
+
+      expect(
+        notices.filter((message) =>
+          message.endsWith("simulated task enumeration failure")
+        )
+      ).toHaveLength(2);
+    } finally {
+      controller.dispose();
+      notices.length = 0;
+    }
+  });
+
   it("cancels stale automatic tracking work as soon as the user opts out", async () => {
     let persisted: unknown;
     let releaseCreate: (() => void) | undefined;

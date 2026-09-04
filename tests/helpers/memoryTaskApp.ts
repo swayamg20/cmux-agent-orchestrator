@@ -3,6 +3,7 @@ import { TFile, TFolder, type App } from "obsidian";
 export interface MemoryTaskAppOptions {
   failFrontmatterWrites?: number;
   beforeCreate?: () => Promise<void>;
+  beforeLookup?: (path: string) => void;
   removeAfterCreate?: boolean;
 }
 
@@ -37,7 +38,10 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
   };
   const app = {
     vault: {
-      getAbstractFileByPath: (path: string) => entries.get(path) ?? null,
+      getAbstractFileByPath: (path: string) => {
+        options.beforeLookup?.(path);
+        return entries.get(path) ?? null;
+      },
       createFolder,
       create: async (path: string, markdown: string) => {
         await options.beforeCreate?.();

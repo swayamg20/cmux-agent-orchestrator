@@ -12,7 +12,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Keep retrying recoverable automatic run-count writes without repeating the same failure notice on every reconciliation.
+- Keep retrying recoverable automatic-tracking writes without repeating the same failure notice on every reconciliation, while reporting the error again if it recurs after recovery.
 
 ### Security
 

@@ -667,6 +667,11 @@ export class AgentCockpitController {
     this.automaticTrackingWork = this.automaticTrackingWork
       .catch(() => undefined)
       .then(() => this.reconcileAutomaticTasks(generation))
+      .then(() => {
+        if (this.automaticTrackingAllowed(generation)) {
+          this.clearAutomaticTrackingIssues("automatic-tracking");
+        }
+      })
       .catch((error: unknown) => {
         if (this.disposed) return;
         this.reportAutomaticTrackingIssue("automatic-tracking", error);
