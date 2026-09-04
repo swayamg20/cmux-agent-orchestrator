@@ -98,6 +98,66 @@ class UnsupportedAgentCommandRunner extends SafeProcessRunner {
   }
 }
 
+const WORKSPACE_ID = "22222222-2222-4222-8222-222222222222";
+
+function treeResult(): ProcessResult {
+  return {
+    stdout: JSON.stringify({
+      windows: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          index: 0,
+          current: true,
+          visible: true,
+          active: true,
+          selected_workspace_id: WORKSPACE_ID,
+          workspaces: [
+            {
+              id: WORKSPACE_ID,
+              index: 0,
+              title: "repository",
+              selected: true,
+              active: true,
+              pinned: false,
+              panes: []
+            }
+          ]
+        }
+      ]
+    }),
+    stderr: "",
+    exitCode: 0,
+    durationMs: 1
+  };
+}
+
+function workspaceListResult(currentDirectory: string): ProcessResult {
+  return {
+    stdout: JSON.stringify({
+      workspaces: [{ id: WORKSPACE_ID, current_directory: currentDirectory }]
+    }),
+    stderr: "",
+    exitCode: 0,
+    durationMs: 1
+  };
+}
+
+class OutOfOrderDirectoryRunner extends SafeProcessRunner {
+  readonly resolveDirectoryRequests: Array<(currentDirectory: string) => void> = [];
+
+  override async run(_executable: string, args: readonly string[]): Promise<ProcessResult> {
+    if (args.includes("tree")) return treeResult();
+    if (args.includes("list-workspaces")) {
+      return await new Promise<ProcessResult>((resolve) => {
+        this.resolveDirectoryRequests.push((currentDirectory) => {
+          resolve(workspaceListResult(currentDirectory));
+        });
+      });
+    }
+    throw new Error(`Unexpected cmux command: ${args.join(" ")}`);
+  }
+}
+
 describe("CliCmuxTransport error classification", () => {
   it("treats an absent list-agents command as a feature gap, not a connection failure", async () => {
     const transport = new CliCmuxTransport(
@@ -144,6 +204,35 @@ describe("CliCmuxTransport error classification", () => {
       capabilities: { accessMode: "password" }
     });
     expect(runner.argumentsSeen.flat()).not.toContain("--password");
+    transport.dispose();
+  });
+});
+
+describe("CliCmuxTransport workspace directory cache", () => {
+  it("does not let an older directory refresh replace a newer result", async () => {
+    let now = 100;
+    const runner = new OutOfOrderDirectoryRunner();
+    const transport = new CliCmuxTransport("/path/to/cmux", runner, () => now);
+
+    const olderSnapshot = transport.snapshot();
+    now = 101;
+    const newerSnapshot = transport.snapshot();
+    expect(runner.resolveDirectoryRequests).toHaveLength(2);
+
+    runner.resolveDirectoryRequests[1]?.("/repositories/new");
+    await expect(newerSnapshot).resolves.toMatchObject({
+      windows: [{ workspaces: [{ currentDirectory: "/repositories/new" }] }]
+    });
+
+    runner.resolveDirectoryRequests[0]?.("/repositories/old");
+    await expect(olderSnapshot).resolves.toMatchObject({
+      windows: [{ workspaces: [{ currentDirectory: "/repositories/old" }] }]
+    });
+
+    now = 102;
+    await expect(transport.snapshot()).resolves.toMatchObject({
+      windows: [{ workspaces: [{ currentDirectory: "/repositories/new" }] }]
+    });
     transport.dispose();
   });
 });
