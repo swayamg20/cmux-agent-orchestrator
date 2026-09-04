@@ -3,6 +3,7 @@ import { normalizePath } from "obsidian";
 export interface AgentCockpitSettings {
   cmuxBinaryPath: string;
   taskFolder: string;
+  autoTrackAgentRuns: boolean;
   previewLines: number;
   previewMaxBytes: number;
   staleAfterMs: number;
@@ -11,6 +12,7 @@ export interface AgentCockpitSettings {
 export const DEFAULT_SETTINGS: AgentCockpitSettings = {
   cmuxBinaryPath: "",
   taskFolder: "Agent Cockpit/Tasks",
+  autoTrackAgentRuns: true,
   previewLines: 60,
   previewMaxBytes: 16 * 1024,
   staleAfterMs: 30 * 60 * 1000
@@ -43,6 +45,10 @@ export function parseSettings(value: unknown): AgentCockpitSettings {
   return {
     cmuxBinaryPath: typeof raw.cmuxBinaryPath === "string" ? raw.cmuxBinaryPath.trim() : "",
     taskFolder: normalizeTaskFolder(raw.taskFolder),
+    autoTrackAgentRuns:
+      typeof raw.autoTrackAgentRuns === "boolean"
+        ? raw.autoTrackAgentRuns
+        : DEFAULT_SETTINGS.autoTrackAgentRuns,
     previewLines: finiteInRange(raw.previewLines, DEFAULT_SETTINGS.previewLines, 1, 80),
     previewMaxBytes: finiteInRange(raw.previewMaxBytes, DEFAULT_SETTINGS.previewMaxBytes, 4_096, 65_536),
     staleAfterMs: finiteInRange(raw.staleAfterMs, DEFAULT_SETTINGS.staleAfterMs, 5 * 60_000, 24 * 60 * 60_000)

@@ -23,6 +23,10 @@ export interface AutomaticLifecycleObservation extends CmuxTarget {
 export interface ProviderIdentityResolution {
   mappings: AutomaticProviderSessionMapping[];
   lifecycle: AutomaticLifecycleObservation[];
+  /** Current-refresh negative evidence; durable mappings on these surfaces must not prove identity. */
+  suppressedSurfaceIds?: readonly string[];
+  /** Canonical current-refresh identities that durable mappings must not restore elsewhere. */
+  suppressedProviderSessionKeys?: readonly string[];
   checkedAt: number;
   nativeLifecycleAvailable: boolean;
   issues: string[];
@@ -42,6 +46,8 @@ export const NOOP_PROVIDER_SESSION_RESOLVER: ProviderSessionResolver = {
     return {
       mappings: [],
       lifecycle: [],
+      suppressedSurfaceIds: [],
+      suppressedProviderSessionKeys: [],
       checkedAt: snapshot.observedAt,
       nativeLifecycleAvailable: false,
       issues: []

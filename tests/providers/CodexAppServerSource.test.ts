@@ -1,12 +1,47 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
+import { PassThrough } from "node:stream";
+import { setTimeout as startTimer } from "node:timers";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
+  CodexAppServerClient,
   CodexAppServerSource,
   codexAppServerCommand,
   decodeCodexThreadList,
   type CodexAppServerRequester
 } from "../../src/providers/CodexAppServerSource";
+
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+
+vi.mock("node:child_process", () => ({
+  spawn: spawnMock
+}));
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function appServerChild(): ChildProcessWithoutNullStreams {
+  return Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    exitCode: null,
+    signalCode: null,
+    kill: vi.fn(() => true)
+  }) as unknown as ChildProcessWithoutNullStreams;
+}
 
 const fixture = (): Promise<string> =>
   readFile(fileURLToPath(new URL("../fixtures/providers/codex-thread-list.json", import.meta.url)), "utf8");
@@ -64,5 +99,84 @@ describe("CodexAppServerSource", () => {
       },
       undefined
     );
+  });
+
+  it("does not start an app-server after disposal while binary discovery is pending", async () => {
+    const discovery = deferred<string>();
+    const client = new CodexAppServerClient();
+    (client as unknown as { binaryPath: Promise<string> | null }).binaryPath = discovery.promise;
+
+    const request = client.request("thread/list", {});
+    client.dispose();
+    discovery.resolve("/usr/bin/true");
+
+    await expect(request).rejects.toThrow("disposed");
+  });
+
+  it("does not pass cmux connection context to the Codex metadata child", async () => {
+    const child = appServerChild();
+    const spawnCalls = spawnMock.mock.calls.length;
+    spawnMock.mockReturnValueOnce(child);
+    vi.stubEnv("CMUX_SOCKET_PASSWORD", "test-only-password");
+    vi.stubEnv("CMUX_SURFACE_ID", "44444444-4444-4444-8444-444444444444");
+    vi.stubEnv("CODEX_HOME", "/tmp/test-codex-home");
+    const client = new CodexAppServerClient();
+    (client as unknown as { binaryPath: Promise<string> | null }).binaryPath =
+      Promise.resolve("/opt/homebrew/bin/codex");
+
+    try {
+      const request = client.request("thread/list", { cwd: "/repository" });
+      const requestOutcome = request.then(
+        () => null,
+        (error: unknown) => error
+      );
+      await vi.waitFor(() => expect(spawnMock.mock.calls.length).toBe(spawnCalls + 1));
+      const options = spawnMock.mock.calls[spawnCalls]![2] as {
+        env?: NodeJS.ProcessEnv;
+      };
+
+      expect(options.env?.CODEX_HOME).toBe("/tmp/test-codex-home");
+      expect(options.env?.CMUX_SOCKET_PASSWORD).toBeUndefined();
+      expect(options.env?.CMUX_SURFACE_ID).toBeUndefined();
+
+      client.dispose();
+      const outcome = await requestOutcome;
+      expect(outcome).toBeInstanceOf(Error);
+      expect(outcome instanceof Error ? outcome.message : "").toContain("disposed");
+    } finally {
+      client.dispose();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("settles an active exchange immediately on disposal and ignores late initialization", async () => {
+    const child = appServerChild();
+    const writes: string[] = [];
+    child.stdin.on("data", (chunk: Buffer) => writes.push(chunk.toString("utf8")));
+    spawnMock.mockReturnValueOnce(child);
+    const client = new CodexAppServerClient();
+    (client as unknown as { binaryPath: Promise<string> | null }).binaryPath =
+      Promise.resolve("/opt/homebrew/bin/codex");
+
+    const request = client.request("thread/list", { cwd: "/repository" });
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    client.dispose();
+
+    const outcome = await Promise.race([
+      request.then(
+        () => "resolved",
+        (error: unknown) => error instanceof Error ? error.message : String(error)
+      ),
+      new Promise<string>((resolve) => startTimer(() => resolve("still pending"), 25))
+    ]);
+    const writesAtDisposal = writes.length;
+    child.stdout.emit("data", Buffer.from('{"id":1,"result":{}}\n'));
+    await Promise.resolve();
+    Object.assign(child, { exitCode: 0 });
+    child.emit("close", 0);
+    await request.catch(() => undefined);
+
+    expect(outcome).toContain("disposed");
+    expect(writes).toHaveLength(writesAtDisposal);
   });
 });

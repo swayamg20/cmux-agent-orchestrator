@@ -13,8 +13,8 @@ export interface SessionInboxSelection {
 }
 
 /**
- * Returns detected, unlinked agent runs without creating durable work on the
- * user's behalf. Attention-bearing runs are kept at the front of the inbox.
+ * Returns detected, unlinked agent runs for manual review. Attention-bearing
+ * runs are kept at the front of the inbox.
  */
 export function selectSessionInbox(
   source: SessionInboxSource,

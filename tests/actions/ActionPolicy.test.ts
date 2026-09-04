@@ -18,10 +18,12 @@ const connection = (status: ConnectionState["status"]): ConnectionState => ({
 });
 
 describe("ActionPolicy", () => {
-  it("allows only the explicit v0.1 action set", () => {
+  it("allows only the explicit action set without claiming a stale product version", () => {
     const policy = new ActionPolicy();
     expect(() => policy.assertAllowed("focus-session")).not.toThrow();
-    expect(() => policy.assertAllowed("send-prompt")).toThrow(/not allowed/);
+    expect(() => policy.assertAllowed("send-prompt")).toThrow(
+      "Action is not allowed by cmux Agent Orchestrator: send-prompt"
+    );
     expect(() => policy.assertAllowed("close-workspace")).toThrow(/not allowed/);
   });
 

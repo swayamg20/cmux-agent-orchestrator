@@ -11,7 +11,11 @@ import type {
   ProviderSessionMetadata,
   SessionConversation
 } from "../providers/types";
-import { isCanonicalUuid } from "../security/identifiers";
+import {
+  canonicalUuidEquals,
+  isCanonicalUuid,
+  normalizeCanonicalUuid
+} from "../security/identifiers";
 import type { LiveSession, ProviderDetection } from "../state/types";
 
 export interface SessionProjectionInput {
@@ -20,6 +24,8 @@ export interface SessionProjectionInput {
   bindings: readonly BindingRecord[];
   providerMappings: readonly ProviderSessionMapping[];
   automaticProviderMappings?: readonly AutomaticProviderSessionMapping[];
+  suppressedProviderSurfaceIds?: ReadonlySet<string>;
+  suppressedProviderSessionKeys?: ReadonlySet<string>;
   providerMetadata: ReadonlyMap<string, ProviderSessionMetadata>;
   detector: AgentDetector;
   providerEvidence: ReadonlyMap<string, ProviderDetection>;
@@ -28,6 +34,19 @@ export interface SessionProjectionInput {
 }
 
 export function projectLiveSessions(input: SessionProjectionInput): LiveSession[] {
+  const liveSurfaces = indexLiveSurfaces(input.snapshot);
+  const suppressedProviderSurfaceIds = new Set(
+    [...(input.suppressedProviderSurfaceIds ?? [])].flatMap((surfaceId) => {
+      const normalized = normalizeCanonicalUuid(surfaceId);
+      return normalized === null ? [] : [normalized];
+    })
+  );
+  const suppressedProviderSessionKeys = new Set(
+    [...(input.suppressedProviderSessionKeys ?? [])].flatMap((identityKey) => {
+      const normalized = normalizeProviderSessionKey(identityKey);
+      return normalized === null ? [] : [normalized];
+    })
+  );
   const notificationIndex = new Map<string, CmuxNotification[]>();
   for (const notification of input.notifications) {
     const key = surfaceKey(notification);
@@ -40,60 +59,93 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
   );
   const providerMappingIndex = new Map<string, ExactProviderMapping>();
   const bindingProviderSurfaceIds = new Set<string>();
-  const claimedProviderSessions = new Set<string>();
-  for (const mapping of input.providerMappings) {
-    const providerSessionKey = `${mapping.provider}:${mapping.providerSessionId}`;
-    if (
-      providerMappingIndex.has(mapping.surfaceId) ||
-      claimedProviderSessions.has(providerSessionKey)
-    ) {
-      continue;
-    }
-    providerMappingIndex.set(mapping.surfaceId, {
-      workspaceId: mapping.workspaceId,
-      paneId: mapping.paneId,
-      surfaceId: mapping.surfaceId,
-      provider: mapping.provider,
-      providerSessionId: mapping.providerSessionId,
-      matchSource: "manual",
-      matchConfidence: "high",
-      explanation: "The user explicitly matched this exact cmux surface to a provider conversation."
-    });
-    claimedProviderSessions.add(providerSessionKey);
-  }
+  const claimedProviderSessions = new Set(suppressedProviderSessionKeys);
   for (const mapping of input.automaticProviderMappings ?? []) {
-    const providerSessionKey = `${mapping.provider}:${mapping.providerSessionId}`;
+    if (!isCurrentSurface(mapping, liveSurfaces)) continue;
+    const surfaceId = normalizeCanonicalUuid(mapping.surfaceId);
+    const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
     if (
-      providerMappingIndex.has(mapping.surfaceId) ||
+      surfaceId === null ||
+      providerSessionId === null ||
+      suppressedProviderSurfaceIds.has(surfaceId)
+    ) {
+      continue;
+    }
+    const providerSessionKey = `${mapping.provider}:${providerSessionId}`;
+    if (suppressedProviderSessionKeys.has(providerSessionKey)) {
+      suppressedProviderSurfaceIds.add(surfaceId);
+      continue;
+    }
+    if (
+      providerMappingIndex.has(surfaceId) ||
       claimedProviderSessions.has(providerSessionKey)
     ) {
       continue;
     }
-    providerMappingIndex.set(mapping.surfaceId, {
+    providerMappingIndex.set(surfaceId, {
       workspaceId: mapping.workspaceId,
       paneId: mapping.paneId,
       surfaceId: mapping.surfaceId,
       provider: mapping.provider,
-      providerSessionId: mapping.providerSessionId,
+      providerSessionId,
       matchSource: mapping.matchSource,
       matchConfidence: mapping.confidence,
       explanation: mapping.explanation
     });
     claimedProviderSessions.add(providerSessionKey);
   }
-  for (const binding of input.bindings) {
+  for (const mapping of input.providerMappings) {
+    if (!isCurrentSurface(mapping, liveSurfaces)) continue;
+    const surfaceId = normalizeCanonicalUuid(mapping.surfaceId);
+    const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
     if (
-      providerMappingIndex.has(binding.surfaceId) ||
+      surfaceId === null ||
+      providerSessionId === null ||
+      suppressedProviderSurfaceIds.has(surfaceId)
+    ) {
+      continue;
+    }
+    const providerSessionKey = `${mapping.provider}:${providerSessionId}`;
+    const automatic = providerMappingIndex.get(surfaceId);
+    if (automatic !== undefined) {
+      if (
+        automatic.provider === mapping.provider &&
+        automatic.providerSessionId === providerSessionId
+      ) {
+        providerMappingIndex.set(surfaceId, manualProviderMapping(mapping, providerSessionId));
+      } else if (
+        automatic.matchConfidence !== "high" &&
+        !claimedProviderSessions.has(providerSessionKey)
+      ) {
+        claimedProviderSessions.delete(
+          `${automatic.provider}:${automatic.providerSessionId}`
+        );
+        providerMappingIndex.set(surfaceId, manualProviderMapping(mapping, providerSessionId));
+        claimedProviderSessions.add(providerSessionKey);
+      }
+      continue;
+    }
+    if (claimedProviderSessions.has(providerSessionKey)) continue;
+    providerMappingIndex.set(surfaceId, manualProviderMapping(mapping, providerSessionId));
+    claimedProviderSessions.add(providerSessionKey);
+  }
+  for (const binding of input.bindings) {
+    const surfaceId = normalizeCanonicalUuid(binding.surfaceId);
+    if (
+      surfaceId === null ||
+      suppressedProviderSurfaceIds.has(surfaceId) ||
+      !isCurrentSurface(binding, liveSurfaces) ||
+      providerMappingIndex.has(surfaceId) ||
       (binding.provider !== "claude" && binding.provider !== "codex") ||
       binding.providerSessionId === null ||
       !isCanonicalUuid(binding.providerSessionId)
     ) {
       continue;
     }
-    const providerSessionKey = `${binding.provider}:${binding.providerSessionId}`;
+    const providerSessionKey = `${binding.provider}:${binding.providerSessionId.toLowerCase()}`;
     if (claimedProviderSessions.has(providerSessionKey)) continue;
     claimedProviderSessions.add(providerSessionKey);
-    bindingProviderSurfaceIds.add(binding.surfaceId);
+    bindingProviderSurfaceIds.add(surfaceId);
   }
 
   const sessions: LiveSession[] = [];
@@ -108,17 +160,24 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
             titleDetection.provider === "unknown"
               ? input.providerEvidence.get(key) ?? titleDetection
               : titleDetection;
-          const binding = bindingIndex.get(key) ?? null;
-          const exactMapping = exactProviderMapping(
-            providerMappingIndex.get(surface.id) ?? null,
+          const binding = bindingAtTarget(
+            bindingIndex.get(key) ?? null,
             workspace.id,
             pane.id,
             surface.id
           );
-          const bindingMapping = bindingProviderSurfaceIds.has(surface.id)
+          const canonicalSurfaceId = normalizeCanonicalUuid(surface.id) ?? surface.id;
+          const exactMapping = exactProviderMapping(
+            providerMappingIndex.get(canonicalSurfaceId) ?? null,
+            workspace.id,
+            pane.id,
+            surface.id
+          );
+          const bindingMapping = bindingProviderSurfaceIds.has(canonicalSurfaceId)
             ? exactBindingMapping(binding, workspace.id, pane.id, surface.id)
             : null;
           const mapping = exactMapping ?? bindingMapping;
+          const currentBinding = bindingForProviderIdentity(binding, mapping);
           const provider = mapping
             ? mappedProvider(mapping)
             : detectedProvider;
@@ -142,7 +201,7 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
             assessment: reduceSessionEvidence(input.evidenceFor(key), input.snapshot.observedAt),
             observedAt: input.snapshot.observedAt,
             notifications: notificationIndex.get(key) ?? [],
-            linkedTaskId: binding?.taskId ?? null,
+            linkedTaskId: currentBinding?.taskId ?? null,
             conversation,
             preview
           });
@@ -158,6 +217,39 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
   );
 }
 
+function indexLiveSurfaces(
+  snapshot: CmuxSnapshot
+): ReadonlyMap<string, { workspaceId: string; paneId: string }> {
+  const liveSurfaces = new Map<string, { workspaceId: string; paneId: string }>();
+  for (const window of snapshot.windows) {
+    for (const workspace of window.workspaces) {
+      for (const pane of workspace.panes) {
+        for (const surface of pane.surfaces) {
+          const surfaceId = normalizeCanonicalUuid(surface.id);
+          if (surfaceId !== null) {
+            liveSurfaces.set(surfaceId, { workspaceId: workspace.id, paneId: pane.id });
+          }
+        }
+      }
+    }
+  }
+  return liveSurfaces;
+}
+
+function isCurrentSurface(
+  target: { workspaceId: string; paneId: string; surfaceId: string },
+  liveSurfaces: ReadonlyMap<string, { workspaceId: string; paneId: string }>
+): boolean {
+  const surfaceId = normalizeCanonicalUuid(target.surfaceId);
+  if (surfaceId === null) return false;
+  const current = liveSurfaces.get(surfaceId);
+  return (
+    current !== undefined &&
+    canonicalUuidEquals(current.workspaceId, target.workspaceId) &&
+    canonicalUuidEquals(current.paneId, target.paneId)
+  );
+}
+
 interface ExactProviderMapping {
   workspaceId: string;
   paneId: string;
@@ -169,16 +261,66 @@ interface ExactProviderMapping {
   explanation: string;
 }
 
+function manualProviderMapping(
+  mapping: ProviderSessionMapping,
+  providerSessionId: string
+): ExactProviderMapping {
+  return {
+    workspaceId: mapping.workspaceId,
+    paneId: mapping.paneId,
+    surfaceId: mapping.surfaceId,
+    provider: mapping.provider,
+    providerSessionId,
+    matchSource: "manual",
+    matchConfidence: "high",
+    explanation: "The user explicitly matched this exact cmux surface to a provider conversation."
+  };
+}
+
+function bindingAtTarget(
+  binding: BindingRecord | null,
+  workspaceId: string,
+  paneId: string,
+  surfaceId: string
+): BindingRecord | null {
+  return binding !== null &&
+    canonicalUuidEquals(binding.workspaceId, workspaceId) &&
+    canonicalUuidEquals(binding.paneId, paneId) &&
+    canonicalUuidEquals(binding.surfaceId, surfaceId)
+    ? binding
+    : null;
+}
+
+function bindingForProviderIdentity(
+  binding: BindingRecord | null,
+  mapping: ExactProviderMapping | null
+): BindingRecord | null {
+  if (binding === null || mapping === null || mapping.matchConfidence !== "high") {
+    return binding;
+  }
+  const bindingSessionId = normalizeCanonicalUuid(binding.providerSessionId ?? "");
+  if (
+    (binding.provider !== "claude" && binding.provider !== "codex") ||
+    bindingSessionId === null
+  ) {
+    return binding;
+  }
+  return binding.provider === mapping.provider && bindingSessionId === mapping.providerSessionId
+    ? binding
+    : null;
+}
+
 function exactProviderMapping(
   mapping: ExactProviderMapping | null,
   workspaceId: string,
   paneId: string,
   surfaceId: string
 ): ExactProviderMapping | null {
+  if (mapping === null) return null;
   if (
-    mapping?.workspaceId !== workspaceId ||
-    mapping.paneId !== paneId ||
-    mapping.surfaceId !== surfaceId
+    !canonicalUuidEquals(mapping.workspaceId, workspaceId) ||
+    !canonicalUuidEquals(mapping.paneId, paneId) ||
+    !canonicalUuidEquals(mapping.surfaceId, surfaceId)
   ) {
     return null;
   }
@@ -191,22 +333,25 @@ function exactBindingMapping(
   paneId: string,
   surfaceId: string
 ): ExactProviderMapping | null {
+  if (binding === null) return null;
   if (
-    binding?.workspaceId !== workspaceId ||
-    binding.paneId !== paneId ||
-    binding.surfaceId !== surfaceId ||
+    !canonicalUuidEquals(binding.workspaceId, workspaceId) ||
+    !canonicalUuidEquals(binding.paneId, paneId) ||
+    !canonicalUuidEquals(binding.surfaceId, surfaceId) ||
     (binding.provider !== "claude" && binding.provider !== "codex") ||
     binding.providerSessionId === null ||
     !isCanonicalUuid(binding.providerSessionId)
   ) {
     return null;
   }
+  const providerSessionId = normalizeCanonicalUuid(binding.providerSessionId);
+  if (providerSessionId === null) return null;
   return {
     workspaceId,
     paneId,
     surfaceId,
     provider: binding.provider,
-    providerSessionId: binding.providerSessionId,
+    providerSessionId,
     matchSource: "task-binding",
     matchConfidence: "medium",
     explanation: "The attached task records this provider conversation ID for the exact cmux surface."
@@ -229,6 +374,15 @@ function providerDetectionSource(
   return source === "manual" ? "provider-session-mapping" : source;
 }
 
+function normalizeProviderSessionKey(identityKey: string): string | null {
+  const separator = identityKey.indexOf(":");
+  if (separator < 1) return null;
+  const provider = identityKey.slice(0, separator);
+  if (provider !== "claude" && provider !== "codex") return null;
+  const providerSessionId = normalizeCanonicalUuid(identityKey.slice(separator + 1));
+  return providerSessionId === null ? null : `${provider}:${providerSessionId}`;
+}
+
 function conversationFor(
   metadata: ProviderSessionMetadata | null,
   mapping: ExactProviderMapping | null,
@@ -239,13 +393,14 @@ function conversationFor(
     !mapping ||
     currentDirectory === null ||
     metadata.provider !== mapping.provider ||
-    metadata.sessionId !== mapping.providerSessionId ||
+    normalizeCanonicalUuid(metadata.sessionId) !== mapping.providerSessionId ||
     metadata.cwd !== currentDirectory
   ) {
     return null;
   }
   return {
     ...metadata,
+    sessionId: mapping.providerSessionId,
     matchSource: mapping.matchSource,
     matchConfidence: mapping.matchConfidence
   };

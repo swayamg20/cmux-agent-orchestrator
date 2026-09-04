@@ -2,7 +2,7 @@
 
 cmux Agent Orchestrator is a desktop-only Obsidian community plugin for coordinating Claude Code and Codex CLI sessions that already run inside cmux. It is a human-in-the-loop orchestration layer: Obsidian owns durable work context, cmux remains the terminal and process owner, and each provider retains its own session state.
 
-The repository currently targets Obsidian 1.10.x and the installed cmux 0.62.2 command surface. It has no runtime npm dependencies, telemetry, hosted service, or external network requirement.
+The repository currently targets Obsidian 1.10 and newer and the installed cmux 0.62.2 command surface. It has no runtime npm dependencies, telemetry, hosted service, or external network requirement.
 
 ## Install
 
@@ -30,11 +30,14 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 - Canonical workspace, pane, and surface UUIDs from cmux JSON output.
 - Conservative Claude, Codex, shell, and unknown detection with evidence and confidence.
 - Automatic provider conversation titles when an exact surface/process/session correlation is provable, with a manual picker fallback.
+- Default-on automatic Work tracking for exact, uniquely resolved Claude and Codex sessions, with an opt-out in settings and manual review for ambiguous runs.
 - Bounded, memory-only terminal previews loaded only when a session is expanded or explicitly requested.
 - Exact Focus in cmux with fresh target resolution and bounded postcondition retries.
 - Markdown task creation and workflow states: Backlog, Active, Review, Parked, and Done.
-- Machine-scoped task, run-history, surface, and provider-conversation bindings in schema-v3 plugin data.
+- Machine-scoped task, run-history, surface, and provider-conversation bindings in schema-v4 plugin data.
 - Orphan sessions and stale bindings.
+- Configurable stale-working attention for structured lifecycle evidence, without changing task workflow.
+- Review attention when structured lifecycle or cmux notification evidence says an agent turn finished, without automatically moving its task.
 - Clear cmux disconnected, blocked, malformed-output, timeout, and output-limit states.
 - One-time GUI onboarding for normal Finder, Dock, and Spotlight launches when cmux rejects external clients.
 
@@ -51,7 +54,13 @@ cmux Agent Orchestrator does not host a PTY, autonomously resume providers, send
 
 Agent evidence and workflow state are deliberately independent. A quiet, missing, errored, or ended session never moves a task to Done.
 
-Detected, unlinked Claude and Codex runs appear automatically in the Agent runs tab. They do not silently become Markdown notes or Kanban cards. `Track in board` opens a prefilled form, writes one Active durable task note, and attaches that exact run. The row's overflow menu provides Focus in cmux, Attach to existing task, and Choose provider conversation. Exact automatic conversation matches are memory-only. Choosing a conversation manually overrides the automatic identity and stores only that explicit mapping; neither path messages or controls the provider.
+Exact, uniquely resolved Claude and Codex sessions become one neutral Active Markdown task and Work card by default. Identity is deduplicated by provider plus canonical session ID, so a refresh or reload cannot create a second task for the same run. If that exact provider conversation later appears on one new surface after its complete previous cmux target has disappeared, the existing binding moves to the new target without creating another task or run. If a different exact provider session reuses the same cmux surface, it does not inherit the previous task; automatic tracking creates a separate task and run while retaining the earlier task and history. The plugin refuses a move while the old target still exists or when either the saved binding or new identity is ambiguous. Conversation titles remain memory-only and appear on the live card; they are never copied into an automatically created note. Ambiguous, heuristic-only, duplicate, shell, and unknown sessions remain in Agent runs for manual review. Turning automatic tracking off stops new automatic tasks, and manually detaching a run prevents later refreshes from silently recreating it. If an explicit attachment races with background tracking, the user's attachment wins. Neither automatic nor manual tracking messages, resumes, interrupts, or otherwise controls the provider.
+
+If a linked task note is moved outside the configured task folder or deleted, the machine-local binding and run history are preserved and Work shows `Linked task note missing`. The plugin never recreates or deletes that note automatically; the user can explicitly attach the live session to an existing task or create a replacement.
+
+Task-note content changes, moves, and deletions are observed only for the configured task tree and its containing folders. Unrelated vault paths are ignored, and these events do not trigger cmux or provider reads.
+
+`Track in board` remains available for manual cases: it opens a prefilled form, writes an Active durable task note, and attaches the exact cmux surface. The row's overflow menu provides Focus in cmux, Attach to existing task, and Choose provider conversation. A saved exact manual association takes precedence when it remains consistent with current evidence; the picker refuses a choice that contradicts a fresh exact cmux or provider-process identity. Moving any Work card changes workflow only; runtime state never changes Backlog, Active, Review, Parked, or Done on the user's behalf.
 
 ## Build
 
@@ -68,7 +77,7 @@ npm install
 npm run check
 ```
 
-`npm run build` creates `main.js` in this repository. For a manual Obsidian installation, copy `main.js`, `manifest.json`, and `styles.css` into a vault-local `.obsidian/plugins/cmux-agent-orchestrator/` directory. This repository does not automatically write into a vault.
+`npm run build` creates `main.js` in this repository. For a manual Obsidian installation, copy `main.js`, `manifest.json`, and `styles.css` into a vault-local `.obsidian/plugins/cmux-agent-orchestrator/` directory. The build command does not install the plugin into a vault.
 
 Maintainers should follow the complete [release procedure](docs/RELEASING.md), including the normal macOS launch and vault-local safety checks, before creating a tag.
 
@@ -93,9 +102,9 @@ updated-at:
 ---
 ```
 
-cmux UUIDs and provider observations do not go into task frontmatter. Plugin `data.json` schema version 3 stores settings, explicit surface bindings, durable run relationships, and exact cmux-surface-to-provider-session-ID mappings under a one-way hashed machine namespace. Existing schema-v1 and schema-v2 data migrate in memory and are written as v3 on the next plugin-data mutation. Conversation titles, provider previews, terminal previews, notification bodies, evidence ledgers, output fingerprints, and source-health snapshots remain memory-only.
+cmux UUIDs and provider observations do not go into task frontmatter. Automatically created notes use a deterministic task UUID derived from the provider kind and canonical provider session ID without embedding or displaying that original ID. Plugin `data.json` schema version 4 stores settings, surface bindings, durable run relationships, idempotent task run-count targets, and exact cmux-surface-to-provider-session-ID mappings under a one-way hashed machine namespace. Existing schema-v1 through schema-v3 data migrate in memory and are written as v4 on the next plugin-data mutation. Conversation titles, provider previews, terminal previews, notification bodies, evidence ledgers, output fingerprints, and source-health snapshots remain memory-only.
 
-A task may own several runs and several currently attached surfaces. Each binding has its own canonical binding ID and run ID. Reattaching the same surface/provider run reuses that run; a different provider is recorded as a handoff; uncertain same-provider relationships remain explicitly `unknown` rather than being invented as a resume or fork.
+A task may own several runs and several currently attached surfaces. Each binding has its own canonical binding ID and run ID. Reattaching the same surface/provider run reuses that run; a different provider is recorded as a handoff; uncertain same-provider relationships remain explicitly `unknown` rather than being invented as a resume or fork. If high-confidence exact evidence proves that cmux reused a surface for another provider conversation, the previous task is never inherited by the new run. Attention identifies the change, and a manual attachment may replace only the live surface binding while preserving the previous task and run history.
 
 ## cmux transport
 
@@ -129,17 +138,17 @@ Repository equality is not an identity signal, so the plugin never assigns a con
 1. Read fixed `ps` fields and consider only foreground processes whose executable basename is exactly `claude` or `codex`.
 2. Pipe that PID's environment from `/bin/ps` directly into fixed `/usr/bin/grep`; JavaScript receives only a canonical `CMUX_SURFACE_ID`, never the full environment.
 3. For Claude, require the local registry entry to match PID, UTC process start time, exact CWD, and canonical session ID.
-4. For Codex, require one open lock inside `~/.codex/thread-writer-locks/`, then verify through metadata-only Codex app-server access that it is exactly one root CLI thread for the same CWD.
+4. For Codex, require a non-empty bounded set of open locks (at most eight) inside the active Codex data directory (`$CODEX_HOME/thread-writer-locks/`, defaulting to `~/.codex/thread-writer-locks/`), then verify through metadata-only Codex app-server access that every locked thread belongs to one rooted CLI thread tree for the same CWD.
 5. Re-read the process inventory and discard matches if PID/start/executable identity changed during resolution.
 
-Any missing, duplicate, stale, or conflicting evidence fails closed and leaves the cmux title visible. The row's **Choose provider conversation** action remains a manual fallback and override.
+Any missing, duplicate, stale, or conflicting evidence fails closed and leaves the cmux title visible. The row's **Choose provider conversation** action remains a manual fallback when exact live evidence is absent or consistent with the selected conversation; it cannot contradict fresh exact identity evidence.
 
-After an exact match, the provider title becomes the primary row label. Automatic matches are recomputed and kept only in memory; explicit manual matches survive reloads by reloading title metadata from the provider-owned source. If the exact title cannot be loaded, the UI explicitly labels the cmux surface title as a fallback. One provider conversation cannot be assigned to two cmux surfaces, and a manual match always wins.
+After an exact match, the provider title becomes the primary row label. The inferred surface-to-provider match is recomputed and kept only in memory. When automatic Work tracking is enabled, the resulting task binding and provider session ID are persisted so that the durable run survives a reload; the title itself is still memory-only. Explicit manual matches survive reloads by reloading title metadata from the provider-owned source. If the exact title cannot be loaded, the UI explicitly labels the cmux surface title as a fallback. One provider conversation cannot be assigned to two cmux surfaces. A current exact manual match wins over automatic evidence, while a mapping whose complete canonical cmux tuple is absent cannot shadow fresh exact evidence for a live surface.
 
 The provider metadata boundary is deliberately narrow:
 
 - Codex: starts the locally installed `codex app-server --listen stdio://` with `spawn`, `shell: false`, a five-second deadline, and byte ceilings. It sends only the local `initialize`, repository-filtered `thread/list` (maximum 50), and exact-ID metadata-only `thread/read` (`includeTurns: false`) protocol messages. The owned child is terminated after each bounded exchange.
-- Claude Code: reads at most 200 small files from `~/.claude/sessions/`, each capped at 64 KiB, to find exact session IDs for the requested CWD. For a selected ID it reads only bounded 128 KiB edge windows from the exact provider-owned JSONL and parses only `custom-title` and `ai-title` records.
+- Claude Code: reads at most 200 small files from the active Claude configuration directory (`$CLAUDE_CONFIG_DIR/sessions/`, defaulting to `~/.claude/sessions/`), each capped at 64 KiB, to find exact session IDs for the requested CWD. For a selected ID it reads only bounded 128 KiB edge windows from the exact provider-owned JSONL and parses only `custom-title` and `ai-title` records.
 - The in-memory provider metadata cache is capped at 1,000 entries. Raw responses, title records, previews, and transcript bytes are never written to Markdown or `data.json`.
 
 These adapters sit behind a `ProviderSessionSource` interface because both local formats are version-sensitive. No global provider hook is installed or modified.
@@ -147,13 +156,16 @@ These adapters sit behind a `ProviderSessionSource` interface because both local
 ## Refresh and performance
 
 - Startup probes cmux once, loads topology and notifications in parallel, then resolves provider identity in bounded background work. Explicit Refresh repeats those read-only observations.
+- After identity resolution, default-on automatic tracking serially creates at most one neutral task and binding for each newly observed exact provider session. It can also reconnect an existing binding after the old full cmux target disappears and the same provider session is proven uniquely on a new target. It performs no repeating scan between startup and explicit Refresh.
 - Global Refresh never reads terminal previews. Concurrent refresh requests coalesce, stale generations are ignored, and a notification failure does not discard a healthy topology snapshot.
 - There is no repeating topology, notification, or preview timer.
+- Stale-working attention is evaluated only at startup, after explicit Refresh, or when settings are saved; it does not add a timer.
 - Automatic identity work and provider metadata reads run only at startup or after explicit Refresh; there is no repeating process scan. Resolution and mapped metadata groups use concurrency two.
 - Provider title metadata is also loaded when the user opens the conversation picker. Mapped reads are grouped by provider and CWD with at most two groups active.
 - Workspace CWD metadata is cached for 30 seconds across closely spaced manual refreshes.
 - Display previews load only when a row is expanded or the user presses Load/Refresh preview; they allow at most two concurrent reads.
 - Displayed previews remain configurable up to 80 lines with a 16 KiB default ceiling and live in a 20-entry, 1 MiB in-memory LRU.
+- Cached and in-flight display previews are discarded if the cmux connection, surface identity, or associated provider conversation changes.
 - A newly discovered terminal that still lacks provider evidence may receive one provider-only background read, bounded to 500 lines and 64 KiB with two-process concurrency. That deeper text is discarded immediately after classification, is never displayed, and is not repeated by later global refreshes.
 - Every read-screen process retains a 96 KiB raw output ceiling.
 - Unloading the plugin terminates only its own short-lived cmux CLI children.
@@ -165,9 +177,11 @@ Each session projects separate dimensions: surface presence, agent presence, exe
 - In cmux 0.62.2, topology proves only that a canonical surface exists. Exact local process evidence can prove a provider/session attachment, and a PID-bound Claude registry status can add lifecycle evidence; a Codex writer lock alone does not prove a live turn.
 - When a newer cmux build exposes `list-agents`, its `working`, `blocked`, `idle`, `done`, and `unknown` states become structured execution evidence. `done` means provider output is ready for review, never that durable work is Done.
 - Unread cmux notifications can support medium-confidence `Needs input`, `Error reported`, or `Review output`.
+- Structured or notification-backed `Turn finished` evidence creates a review-attention signal while leaving the task's workflow state untouched.
 - A changed on-demand preview records low-confidence recent activity such as reading, editing, or command output, but leaves execution phase `State unknown`.
 - Generic words such as `approval` or `confirm` in terminal prose never assert `Needs input`.
 - A missing linked surface creates an attention item but does not prove provider completion.
+- A session is marked potentially stale only when structured lifecycle evidence still reports Working and its newest proven activity exceeds the configured threshold. Idle, unknown, waiting, and failed sessions are never relabeled as stale, and no workflow state changes.
 - Provider session IDs remain absent unless modern cmux metadata, exact local process correlation, a manual match, or an existing exact task binding proves the association.
 - Source health is independent: topology, notifications, and provider lifecycle each report fresh, stale, or unavailable. On cmux 0.62.2, native lifecycle is honestly unavailable even when conversation identity is resolved through local evidence.
 
@@ -186,12 +200,19 @@ Sanitized fixtures under `tests/fixtures/cmux-0.62.2/`, `tests/fixtures/cmux-mod
 A read-only local smoke test is opt-in:
 
 ```bash
+npm run test:live:read-only
+```
+
+The aggregate command above runs all four guarded checks. Individual checks can also be run while diagnosing one boundary:
+
+```bash
 CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX=1 npm test -- tests/smoke/cmux.live.test.ts
 CMUX_AGENT_ORCHESTRATOR_LIVE_PROVIDERS=1 npm test -- tests/smoke/provider-metadata.live.test.ts
 CMUX_AGENT_ORCHESTRATOR_LIVE_IDENTITY=1 npm test -- tests/smoke/automatic-identity.live.test.ts
+CMUX_AGENT_ORCHESTRATOR_LIVE_TRACKING=1 npm test -- tests/smoke/automatic-tracking.live.test.ts
 ```
 
-The cmux smoke probes capabilities, reads topology and notifications, validates canonical UUIDs, and reads three lines from one selected terminal. The provider smoke performs local read-only title discovery for the repository running the test. The identity smoke verifies canonical, one-to-one process/session/surface mappings against the current machine. None of these tests focuses a surface, sends input, resumes a conversation, or changes provider data.
+The cmux smoke probes capabilities, reads topology and notifications, validates canonical UUIDs, and reads three lines from one selected terminal. The provider smoke performs local read-only title discovery for the repository running the test. The identity smoke verifies canonical, one-to-one process/session/surface mappings against the current machine. The tracking smoke runs that identity pipeline through the controller while keeping all generated task Markdown and plugin data in memory; it supplies blank previews and fails if the controller attempts to focus cmux. None of these tests sends input, resumes a conversation, changes provider data, or writes to a real vault.
 
 ## Normal-launch connection setup
 
@@ -203,7 +224,7 @@ The setup panel can retest the connection and then load the complete orchestrato
 
 ## System access and privacy
 
-The plugin accesses the local `cmux` executable and running cmux instance to discover topology, notifications, optional structured agent metadata, bounded terminal previews, and to focus an exact surface after an explicit click. For automatic conversation labels on macOS, it reads bounded process fields, extracts only `CMUX_SURFACE_ID` through a fixed pipe, inspects open files only inside the Codex writer-lock directory, starts a bounded local Codex app-server child, and reads bounded Claude metadata under `~/.claude`. It makes no plugin-originated network requests, collects no telemetry, and transmits no vault, terminal, process, or provider metadata. Automatic mappings, provider titles, and bounded source responses remain in memory; only a user-selected provider session ID mapping is persisted.
+The plugin accesses the local `cmux` executable and running cmux instance to discover topology, notifications, optional structured agent metadata, bounded terminal previews, and to focus an exact surface after an explicit click. For automatic conversation labels on macOS, it reads bounded process fields, extracts only `CMUX_SURFACE_ID` through a fixed pipe, inspects open files only inside the configured Codex writer-lock directory, starts a bounded local Codex app-server child, and reads bounded Claude metadata under the configured Claude data directory. Absolute, bounded `$CODEX_HOME` and `$CLAUDE_CONFIG_DIR` values inherited by Obsidian are honored; invalid values fall back to the provider defaults. It makes no plugin-originated network requests, collects no telemetry, and transmits no vault, terminal, process, or provider metadata. Inferred mappings, provider titles, and bounded source responses remain in memory. Exact provider session IDs are persisted only in a user-selected mapping or in the machine-scoped binding/run record created by automatic Work tracking.
 
 ## Security limits
 
@@ -229,6 +250,7 @@ src/
   runtime/      preview cache/scheduler, session projection, and attention
   state/        typed observable store
   tasks/        Markdown schema, template, and repository
+  tracking/     exact automatic-task candidate selection
   bindings/     machine-scoped task/session mappings
   actions/      allowlist, validators, and exact focus action
   security/     shared canonical-identity validation

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { assertTarget } from "../cmux/commandBuilders";
 import type { CmuxTarget } from "../cmux/types";
-import { isCanonicalUuid } from "../security/identifiers";
+import { isCanonicalUuid, normalizeCanonicalUuid } from "../security/identifiers";
 
 export function validateBinarySetting(value: string): string {
   const trimmed = value.trim();
@@ -14,7 +14,11 @@ export function validateBinarySetting(value: string): string {
 
 export function validateFocusTarget(target: CmuxTarget): void {
   assertTarget(target);
-  const unique = new Set([target.workspaceId, target.paneId, target.surfaceId]);
+  const unique = new Set(
+    [target.workspaceId, target.paneId, target.surfaceId].map(
+      (value) => normalizeCanonicalUuid(value)!
+    )
+  );
   if (unique.size !== 3) throw new Error("Workspace, pane, and surface identities must be distinct.");
 }
 

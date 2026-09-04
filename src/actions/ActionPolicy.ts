@@ -18,7 +18,7 @@ export type MvpAction = (typeof MVP_ACTIONS)[number];
 export class ActionPolicy {
   assertAllowed(action: string): asserts action is MvpAction {
     if (!(MVP_ACTIONS as readonly string[]).includes(action)) {
-      throw new Error(`Action is not allowed in ${PRODUCT_NAME} v0.1: ${action}`);
+      throw new Error(`Action is not allowed by ${PRODUCT_NAME}: ${action}`);
     }
   }
 

@@ -4,3 +4,16 @@ const CANONICAL_UUID_PATTERN =
 export function isCanonicalUuid(value: string): boolean {
   return CANONICAL_UUID_PATTERN.test(value);
 }
+
+export function normalizeCanonicalUuid(value: string): string | null {
+  return isCanonicalUuid(value) ? value.toLowerCase() : null;
+}
+
+export function canonicalUuidEquals(
+  left: string | null | undefined,
+  right: string | null | undefined
+): boolean {
+  if (left == null || right == null) return false;
+  const normalizedLeft = normalizeCanonicalUuid(left);
+  return normalizedLeft !== null && normalizedLeft === normalizeCanonicalUuid(right);
+}

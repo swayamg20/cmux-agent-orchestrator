@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { SafeProcessRunner } from "../../src/cmux/SafeProcessRunner";
 import {
+  MacOsProcessIdentitySource,
   decodeClaudeProcessSession,
   decodeProviderProcesses,
   decodeWriterLockSessionIds
@@ -67,5 +72,136 @@ describe("macOS provider identity decoding", () => {
         directory
       )
     ).toEqual(["55555555-5555-4555-8555-555555555555"]);
+  });
+
+  it("rejects a stale Claude registry after its exact PID is no longer live", async () => {
+    const userHome = await mkdtemp(path.join(tmpdir(), "cmux-agent-identity-"));
+    const registryDirectory = path.join(userHome, ".claude", "sessions");
+    await mkdir(registryDirectory, { recursive: true });
+    await writeFile(
+      path.join(registryDirectory, `${claudeProcess.pid}.json`),
+      JSON.stringify({
+        pid: claudeProcess.pid,
+        procStart: claudeProcess.startedAt,
+        sessionId: "44444444-4444-4444-8444-444444444444",
+        cwd: "/workspace/project",
+        status: "running"
+      })
+    );
+    const source = new MacOsProcessIdentitySource(
+      new SafeProcessRunner(),
+      userHome,
+      () => false
+    );
+
+    try {
+      await expect(source.readClaudeSession(claudeProcess, "/workspace/project")).resolves.toBeNull();
+    } finally {
+      source.dispose();
+      await rm(userHome, { recursive: true, force: true });
+    }
+  });
+
+  it("does not read a Claude registry after the identity source is disposed", async () => {
+    const userHome = await mkdtemp(path.join(tmpdir(), "cmux-agent-identity-"));
+    const registryDirectory = path.join(userHome, ".claude", "sessions");
+    await mkdir(registryDirectory, { recursive: true });
+    await writeFile(
+      path.join(registryDirectory, `${claudeProcess.pid}.json`),
+      JSON.stringify({
+        pid: claudeProcess.pid,
+        procStart: claudeProcess.startedAt,
+        sessionId: "44444444-4444-4444-8444-444444444444",
+        cwd: "/workspace/project",
+        status: "running"
+      })
+    );
+    const source = new MacOsProcessIdentitySource(new SafeProcessRunner(), userHome);
+    source.dispose();
+
+    try {
+      await expect(source.readClaudeSession(claudeProcess, "/workspace/project")).resolves.toBeNull();
+    } finally {
+      await rm(userHome, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the Claude process registry from CLAUDE_CONFIG_DIR", async () => {
+    const userHome = await mkdtemp(path.join(tmpdir(), "cmux-agent-identity-"));
+    const claudeRoot = path.join(userHome, "custom-claude");
+    const registryDirectory = path.join(claudeRoot, "sessions");
+    await mkdir(registryDirectory, { recursive: true });
+    await writeFile(
+      path.join(registryDirectory, `${claudeProcess.pid}.json`),
+      JSON.stringify({
+        pid: claudeProcess.pid,
+        procStart: claudeProcess.startedAt,
+        sessionId: "44444444-4444-4444-8444-444444444444",
+        cwd: "/workspace/project",
+        status: "running"
+      })
+    );
+    vi.stubEnv("CLAUDE_CONFIG_DIR", claudeRoot);
+    const source = new MacOsProcessIdentitySource(
+      new SafeProcessRunner(),
+      userHome,
+      () => true
+    );
+
+    try {
+      await expect(source.readClaudeSession(claudeProcess, "/workspace/project")).resolves.toEqual({
+        sessionId: "44444444-4444-4444-8444-444444444444",
+        cwd: "/workspace/project",
+        status: "running"
+      });
+    } finally {
+      source.dispose();
+      vi.unstubAllEnvs();
+      await rm(userHome, { recursive: true, force: true });
+    }
+  });
+
+  it("does not pass cmux connection context to local identity commands", async () => {
+    const runner = new SafeProcessRunner();
+    const run = vi.spyOn(runner, "run").mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+      durationMs: 1
+    });
+    vi.stubEnv("CMUX_SOCKET_PASSWORD", "test-only-password");
+    vi.stubEnv("CMUX_SURFACE_ID", "44444444-4444-4444-8444-444444444444");
+    vi.stubEnv("CODEX_HOME", "/tmp/test-codex-home");
+    const source = new MacOsProcessIdentitySource(runner);
+
+    try {
+      await source.listForegroundProviderProcesses();
+      await source.readCodexWriterSessionIds(123);
+
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenNthCalledWith(
+        2,
+        "/usr/sbin/lsof",
+        [
+          "-nP",
+          "-a",
+          "-p",
+          "123",
+          "+d",
+          "/tmp/test-codex-home/thread-writer-locks",
+          "-Fn"
+        ],
+        expect.any(Object)
+      );
+      for (const call of run.mock.calls) {
+        const environment = call[2].environment;
+        expect(environment?.CODEX_HOME).toBe("/tmp/test-codex-home");
+        expect(environment?.CMUX_SOCKET_PASSWORD).toBeUndefined();
+        expect(environment?.CMUX_SURFACE_ID).toBeUndefined();
+      }
+    } finally {
+      source.dispose();
+      vi.unstubAllEnvs();
+    }
   });
 });

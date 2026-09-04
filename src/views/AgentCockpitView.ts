@@ -1,5 +1,6 @@
 import { ItemView, setIcon, type WorkspaceLeaf } from "obsidian";
 import type { AgentCockpitController } from "../app/AgentCockpitController";
+import { runUiAction } from "../app/runUiAction";
 import { renderCmuxConnectionPanel } from "../components/CmuxConnectionPanel";
 import type { SessionCardActions } from "../components/SessionCard";
 import { renderConnectionBadge } from "../components/StatusBadge";
@@ -114,7 +115,10 @@ export class AgentCockpitView extends ItemView {
     panelSlot.empty();
     renderHeader(headerSlot, state, this.controller);
     renderCmuxConnectionPanel(connectionSlot, state.connection, state.refreshing, {
-      retry: () => void this.controller.testConnection(),
+      retry: () => void runUiAction(
+        () => this.controller.testConnection(),
+        "Could not test the cmux connection."
+      ),
       copySetupSteps: () => void this.controller.copyCmuxSetupSteps()
     });
     this.renderSectionTabs(tabsSlot, state);
@@ -128,7 +132,7 @@ export class AgentCockpitView extends ItemView {
       renderKanbanPanel(panel, state, {
         createTask: () => this.controller.showCreateTask(null),
         openTask: (task) => void this.controller.openTask(task),
-        moveTask: (task, status) => void this.controller.updateWorkflow(task, status)
+        moveTask: (task, status) => this.controller.updateWorkflow(task, status)
       });
     } else if (this.activeSection === "agents") {
       renderSessionInbox(panel, state, this.showAllInbox, {
@@ -157,7 +161,7 @@ export class AgentCockpitView extends ItemView {
       openTask: (task) => void this.controller.openTask(task),
       attachTask: (session) => this.controller.showTaskPicker(session),
       createTask: (session) => this.controller.showCreateTask(session),
-      detachTask: (session) => void this.controller.detachTask(session),
+      detachTask: (session) => void this.controller.detachTask(session).catch(() => undefined),
       chooseConversation: (session) => void this.controller.showConversationPicker(session),
       forgetConversation: (session) => void this.controller.forgetConversation(session),
       copyMetadata: (session) => void this.controller.copyMetadata(session)

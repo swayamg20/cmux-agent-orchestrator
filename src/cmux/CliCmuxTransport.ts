@@ -36,6 +36,7 @@ const REQUIRED_METHODS = [
 
 export class CliCmuxTransport implements CmuxTransport {
   private workspaceDirectories = new Map<string, string | null>();
+  private directoryRefreshGeneration = 0;
   private nextDirectoryRefreshAt = 0;
 
   constructor(
@@ -73,17 +74,24 @@ export class CliCmuxTransport implements CmuxTransport {
   async snapshot(signal?: AbortSignal): Promise<CmuxSnapshot> {
     const observedAt = this.now();
     const shouldRefreshDirectories = observedAt >= this.nextDirectoryRefreshAt;
+    const directoryRefreshGeneration = shouldRefreshDirectories
+      ? ++this.directoryRefreshGeneration
+      : null;
     const [tree, workspaceList] = await Promise.all([
       this.run(cmuxCommands.tree(), JSON_OUTPUT_LIMIT, signal),
       shouldRefreshDirectories
         ? this.run(cmuxCommands.listWorkspaces(), JSON_OUTPUT_LIMIT, signal)
         : Promise.resolve(null)
     ]);
+    let directories = this.workspaceDirectories;
     if (workspaceList !== null) {
-      this.workspaceDirectories = decodeWorkspaceDirectories(workspaceList.stdout);
-      this.nextDirectoryRefreshAt = observedAt + DIRECTORY_REFRESH_MS;
+      directories = decodeWorkspaceDirectories(workspaceList.stdout);
+      if (directoryRefreshGeneration === this.directoryRefreshGeneration) {
+        this.workspaceDirectories = directories;
+        this.nextDirectoryRefreshAt = observedAt + DIRECTORY_REFRESH_MS;
+      }
     }
-    return decodeTree(tree.stdout, observedAt, this.workspaceDirectories);
+    return decodeTree(tree.stdout, observedAt, directories);
   }
 
   async notifications(signal?: AbortSignal): Promise<CmuxNotification[]> {
@@ -110,6 +118,7 @@ export class CliCmuxTransport implements CmuxTransport {
     const bounded = truncateUtf8(result.stdout, Math.max(1, request.maxBytes));
     return {
       workspaceId: target.workspaceId,
+      paneId: target.paneId,
       surfaceId: target.surfaceId,
       text: bounded.text,
       observedAt: this.now(),

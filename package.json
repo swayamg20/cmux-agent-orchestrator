@@ -1,6 +1,6 @@
 {
   "name": "obsidian-cmux-agent-orchestrator",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A human-in-the-loop coding agent orchestrator for cmux.",
   "author": "Swayam Gupta",
   "license": "MIT",
@@ -22,6 +22,7 @@
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit && node esbuild.config.mjs production",
     "test": "vitest run",
+    "test:live:read-only": "CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX=1 CMUX_AGENT_ORCHESTRATOR_LIVE_PROVIDERS=1 CMUX_AGENT_ORCHESTRATOR_LIVE_IDENTITY=1 CMUX_AGENT_ORCHESTRATOR_LIVE_TRACKING=1 vitest run --no-file-parallelism --maxWorkers=1 tests/smoke/cmux.live.test.ts tests/smoke/provider-metadata.live.test.ts tests/smoke/automatic-identity.live.test.ts tests/smoke/automatic-tracking.live.test.ts",
     "test:watch": "vitest",
     "lint": "eslint .",
     "validate:release": "node scripts/validate-release.mjs",
@@ -38,6 +39,7 @@
     "obsidian": "1.13.1",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.41.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "yaml": "^2.9.0"
   }
 }

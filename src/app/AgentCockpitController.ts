@@ -1,13 +1,18 @@
-import { Notice, type App, type Plugin } from "obsidian";
+import { Notice, type App, type Modal, type Plugin } from "obsidian";
 import { FocusSessionAction } from "../actions/FocusSessionAction";
 import { validateBinarySetting, validateBindingIdentity } from "../actions/validators";
 import { AgentDetector } from "../agents/AgentDetector";
-import { ProviderClassifier } from "../agents/ProviderClassifier";
+import {
+  ProviderClassifier,
+  type ProviderSurfaceIdentity
+} from "../agents/ProviderClassifier";
 import { BindingRepository } from "../bindings/BindingRepository";
+import type { BindingRecord, ProviderSessionMapping } from "../bindings/types";
 import { CMUX_SETUP_CLIPBOARD_TEXT } from "../cmux/accessSetup";
 import { CmuxClient } from "../cmux/CmuxClient";
 import {
   CmuxError,
+  surfaceKey,
   type CmuxNotification,
   type CmuxSnapshot
 } from "../cmux/types";
@@ -27,8 +32,16 @@ import { AttentionEngine } from "../runtime/AttentionEngine";
 import { PreviewCache } from "../runtime/PreviewCache";
 import { PreviewScheduler } from "../runtime/PreviewScheduler";
 import { projectLiveSessions } from "../runtime/SessionProjection";
-import { isCanonicalUuid } from "../security/identifiers";
-import { parseSettings, type AgentCockpitSettings } from "../settings/AgentCockpitSettings";
+import {
+  canonicalUuidEquals,
+  isCanonicalUuid,
+  normalizeCanonicalUuid
+} from "../security/identifiers";
+import {
+  DEFAULT_SETTINGS,
+  parseSettings,
+  type AgentCockpitSettings
+} from "../settings/AgentCockpitSettings";
 import { CockpitStore } from "../state/CockpitStore";
 import type {
   ConnectionState,
@@ -36,12 +49,38 @@ import type {
   SessionFilters,
   SourceHealth
 } from "../state/types";
-import type { CreateTaskOptions } from "../tasks/TaskRepository";
+import type {
+  CreateTaskOptions,
+  TaskInvalidationEvidence,
+  TaskRenameEvidence
+} from "../tasks/TaskRepository";
 import { TaskRepository } from "../tasks/TaskRepository";
 import type { TaskRecord, WorkflowStatus } from "../tasks/TaskSchema";
+import {
+  automaticTaskId,
+  automaticTaskTitle,
+  bindingConflictsWithExactProviderIdentity,
+  exactTrackableIdentity,
+  providerSessionKey,
+  selectAutomaticTrackCandidates,
+  type AutomaticTrackCandidate
+} from "../tracking/AutomaticTaskTracking";
 import { RefreshCoordinator, type RefreshResult } from "./RefreshCoordinator";
 
 export type CmuxClientFactory = (explicitBinaryPath: string) => Promise<CmuxClient>;
+
+interface AutomaticTrackingPass {
+  messages: Set<string>;
+  failedIssueKeys: Set<string>;
+}
+
+const PROVIDER_METADATA_IDENTITY_SOURCES: ReadonlySet<LiveSession["provider"]["source"]> = new Set([
+  "provider-session-mapping",
+  "task-binding",
+  "cmux-agent-registry",
+  "claude-process-registry",
+  "codex-writer-lock"
+]);
 
 export class AgentCockpitController {
   readonly store = new CockpitStore();
@@ -51,16 +90,32 @@ export class AgentCockpitController {
   private readonly attentionEngine = new AttentionEngine();
   private readonly previewScheduler = new PreviewScheduler(2);
   private readonly previewCache = new PreviewCache();
+  private readonly previewSurfaceSignatures = new Map<string, string>();
   private readonly providerClassifier = new ProviderClassifier(this.detector, this.previewScheduler);
   private readonly evidence = new CmuxEvidenceService(this.detector);
   private readonly refreshCoordinator = new RefreshCoordinator();
   private classificationWork: Promise<void> = Promise.resolve();
   private metadataWork: Promise<void> = Promise.resolve();
   private identityWork: Promise<void> = Promise.resolve();
+  private automaticTrackingWork: Promise<void> = Promise.resolve();
+  private settingsUpdateWork: Promise<void> = Promise.resolve();
+  private pendingSettingsUpdates = 0;
+  private automaticTrackingGeneration = 0;
+  private readonly reportedAutomaticTrackingIssues = new Map<string, string>();
+  private readonly openModals = new Set<Modal>();
+  private readonly conversationPickerLoads = new Set<string>();
+  private automaticTrackingPass: AutomaticTrackingPass | null = null;
   private identityAbortController: AbortController | null = null;
   private identityGeneration = 0;
+  private identityResolvedGeneration: number | null = null;
   private automaticProviderMappings: AutomaticProviderSessionMapping[] = [];
+  private suppressedProviderSurfaceIds = new Set<string>();
+  private suppressedProviderSessionKeys = new Set<string>();
   private client: CmuxClient | null = null;
+  private clientGeneration = 0;
+  private refreshStateGeneration = 0;
+  private topologyRefreshGeneration = 0;
+  private notificationRefreshGeneration = 0;
   private focusAction: FocusSessionAction | null = null;
   private taskRepository: TaskRepository | null = null;
   private settings: AgentCockpitSettings | null = null;
@@ -78,31 +133,61 @@ export class AgentCockpitController {
   }
 
   async initialize(): Promise<void> {
-    await this.bindings.load();
-    this.settings = this.bindings.getSettings();
-    this.taskRepository = new TaskRepository(this.app, this.settings.taskFolder);
-    this.store.update({
-      tasks: this.taskRepository.list(),
-      bindings: this.bindings.list(),
-      runs: this.bindings.listRuns()
-    });
-    await this.connect();
-    if (this.client !== null) await this.refreshNow();
+    if (this.disposed) return;
+    try {
+      await this.bindings.load();
+      if (this.disposed) return;
+      this.settings = this.bindings.getSettings();
+      this.taskRepository = new TaskRepository(this.app, this.settings.taskFolder);
+      await this.repairPersistedRunCounts(
+        this.taskRepository,
+        this.settings.taskFolder
+      );
+      if (this.disposed) return;
+      this.store.update({
+        tasks: this.taskRepository.list(),
+        bindings: this.bindings.list(),
+        runs: this.bindings.listRuns()
+      });
+      await this.connect();
+      if (this.disposed) return;
+      if (this.client !== null) await this.refreshNow();
+    } catch (error) {
+      if (this.disposed) return;
+      const message = `Could not initialize ${PRODUCT_NAME}: ${readableError(error)}`;
+      this.store.update((state) => ({
+        connection: {
+          ...state.connection,
+          status: "error",
+          message,
+          checkedAt: Date.now()
+        },
+        error: message
+      }));
+      throw error;
+    }
   }
 
   async refreshNow(): Promise<void> {
     if (this.disposed) return;
+    const refreshStateGeneration = ++this.refreshStateGeneration;
     this.store.update({ refreshing: true });
     try {
       if (this.client === null) await this.connect();
       const client = this.client;
       if (client === null) return;
+      const topologyRefreshGeneration = ++this.topologyRefreshGeneration;
+      const notificationRefreshGeneration = ++this.notificationRefreshGeneration;
       const result = await this.refreshCoordinator.refresh({
         topology: (signal) => client.snapshot(signal),
         notifications: (signal) => client.notifications(signal)
       });
-      this.applyRefreshResult(result);
-      if (result.current && result.snapshot !== null) {
+      const topologyApplied = this.applyRefreshResult(
+        result,
+        topologyRefreshGeneration,
+        notificationRefreshGeneration
+      );
+      if (topologyApplied && result.snapshot !== null) {
         this.scheduleProviderClassification();
         this.scheduleProviderMetadataRefresh();
         this.scheduleProviderIdentityResolution(result.snapshot);
@@ -110,21 +195,44 @@ export class AgentCockpitController {
     } catch (error) {
       this.handleError(error);
     } finally {
-      if (!this.disposed) this.store.update({ refreshing: false });
+      if (
+        !this.disposed &&
+        refreshStateGeneration === this.refreshStateGeneration
+      ) {
+        this.store.update({ refreshing: false });
+      }
     }
   }
 
   async refreshTopology(signal?: AbortSignal): Promise<void> {
     const client = this.client;
     if (client === null || this.disposed) return;
+    const clientGeneration = this.clientGeneration;
+    const topologyRefreshGeneration = ++this.topologyRefreshGeneration;
     try {
       const snapshot = await client.snapshot(signal);
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        topologyRefreshGeneration !== this.topologyRefreshGeneration ||
+        client !== this.client
+      ) {
+        return;
+      }
       this.applyTopology(snapshot);
       this.scheduleProviderClassification();
       this.scheduleProviderMetadataRefresh();
       this.scheduleProviderIdentityResolution(snapshot);
     } catch (error) {
-      if (isAbort(error)) return;
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        topologyRefreshGeneration !== this.topologyRefreshGeneration ||
+        client !== this.client ||
+        isAbort(error)
+      ) {
+        return;
+      }
       this.applyTopologyFailure(error);
     }
   }
@@ -132,11 +240,29 @@ export class AgentCockpitController {
   async refreshNotifications(signal?: AbortSignal): Promise<void> {
     const client = this.client;
     if (client === null || this.disposed) return;
+    const clientGeneration = this.clientGeneration;
+    const notificationRefreshGeneration = ++this.notificationRefreshGeneration;
     try {
       const notifications = await client.notifications(signal);
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        notificationRefreshGeneration !== this.notificationRefreshGeneration ||
+        client !== this.client
+      ) {
+        return;
+      }
       this.applyNotifications(notifications);
     } catch (error) {
-      if (isAbort(error)) return;
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        notificationRefreshGeneration !== this.notificationRefreshGeneration ||
+        client !== this.client ||
+        isAbort(error)
+      ) {
+        return;
+      }
       this.applyNotificationFailure(error);
     }
   }
@@ -144,62 +270,131 @@ export class AgentCockpitController {
   async waitForBackgroundWork(): Promise<void> {
     await this.identityWork;
     await Promise.all([this.classificationWork, this.metadataWork]);
+    await this.automaticTrackingWork;
   }
 
   async loadPreview(session: LiveSession): Promise<void> {
-    const client = this.requireClient();
-    const settings = this.requireSettings();
+    if (this.disposed) return;
+    const clientGeneration = this.clientGeneration;
+    let requestClient: CmuxClient | null = null;
     try {
-      const preview = await this.previewScheduler.schedule(session.key, () =>
-        client.readPreview(session, {
+      const client = this.requireClient();
+      requestClient = client;
+      const settings = this.requireSettings();
+      const requested = this.resolveCurrentSession(session);
+      const signature = previewSurfaceSignature(requested);
+      if (previewSurfaceSignature(session) !== signature) {
+        throw new Error("The cmux surface changed before its preview could be loaded. Refresh and try again.");
+      }
+      const preview = await this.previewScheduler.schedule(`preview:${clientGeneration}:${requested.key}:${signature}`, () =>
+        client.readPreview(requested, {
           lines: settings.previewLines,
           maxBytes: settings.previewMaxBytes
         })
       );
       if (this.disposed) return;
-      this.previewCache.set(session.key, preview);
-      this.evidence.recordPreview(session.key, preview);
-      const detection = this.providerClassifier.detect(session, preview.text);
-      if (detection.provider === "claude" || detection.provider === "codex") {
-        this.evidence.recordProvider(session.key, detection, preview.observedAt);
+      if (clientGeneration !== this.clientGeneration || client !== this.client) {
+        new Notice("The cmux connection changed while its preview was loading. The stale preview was discarded.");
+        return;
+      }
+      if (
+        !canonicalUuidEquals(preview.workspaceId, requested.workspaceId) ||
+        !canonicalUuidEquals(preview.paneId, requested.paneId) ||
+        !canonicalUuidEquals(preview.surfaceId, requested.surfaceId)
+      ) {
+        throw new CmuxError("malformed-output", "cmux returned terminal output for a different surface.");
+      }
+      const current = this.findCurrentSession(requested);
+      if (current === null || previewSurfaceSignature(current) !== signature) {
+        new Notice("The cmux surface changed while its preview was loading. The stale preview was discarded.");
+        return;
+      }
+      this.previewSurfaceSignatures.set(current.key, signature);
+      this.previewCache.set(current.key, preview);
+      this.evidence.recordPreview(current.key, preview);
+      const detection = this.providerClassifier.detect(current, preview.text);
+      if (
+        detection !== null &&
+        (detection.provider === "claude" || detection.provider === "codex")
+      ) {
+        this.evidence.recordProvider(current.key, detection, preview.observedAt);
       }
       this.recomputeSessions();
     } catch (error) {
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        (requestClient !== null && requestClient !== this.client)
+      ) {
+        return;
+      }
       this.handleError(error, false);
       new Notice(readableError(error));
     }
   }
 
   async focusSession(session: LiveSession): Promise<void> {
-    if (this.focusAction === null) throw new Error("cmux connection is not initialized.");
+    if (this.disposed) return;
+    const clientGeneration = this.clientGeneration;
+    const focusAction = this.focusAction;
     try {
-      const result = await this.focusAction.execute(this.store.getState().connection, session);
+      if (focusAction === null) throw new Error("cmux connection is not initialized.");
+      const result = await focusAction.execute(this.store.getState().connection, session);
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        focusAction !== this.focusAction
+      ) {
+        return;
+      }
       new Notice(
         result.verified
           ? `Focused ${result.target.workspaceTitle} / ${result.target.surfaceTitle} in cmux.`
           : "cmux accepted the focus command, but the selected surface could not be verified within the bounded retry window."
       );
     } catch (error) {
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        focusAction !== this.focusAction
+      ) {
+        return;
+      }
       this.handleError(error, false);
       new Notice(readableError(error));
     }
   }
 
   showTaskPicker(session: LiveSession): void {
-    const modal = new TaskPickerModal(this.app, this.store.getState().tasks, (task) => {
-      void this.attachTask(session, task).catch(() => undefined);
-    });
-    modal.open();
+    if (this.disposed) return;
+    this.openModal((closed) =>
+      new TaskPickerModal(
+        this.app,
+        this.store.getState().tasks,
+        (task) => {
+          void this.attachTask(session, task).catch(() => undefined);
+        },
+        closed
+      )
+    );
   }
 
   showCreateTask(session: LiveSession | null): void {
-    const modal = new CreateTaskModal(this.app, session, async (options) => {
-      await this.createTask(options, session);
-    });
-    modal.open();
+    if (this.disposed) return;
+    this.openModal((closed) =>
+      new CreateTaskModal(
+        this.app,
+        session,
+        async (options) => {
+          await this.createTask(options, session);
+        },
+        closed
+      )
+    );
   }
 
   async showConversationPicker(session: LiveSession): Promise<void> {
+    if (this.disposed) return;
     if (session.provider.provider !== "claude" && session.provider.provider !== "codex") {
       new Notice("Detect Claude or Codex before choosing a provider conversation.");
       return;
@@ -208,6 +403,15 @@ export class AgentCockpitController {
       new Notice("This cmux workspace does not expose an absolute working directory.");
       return;
     }
+    const loadKey = JSON.stringify([
+      session.workspaceId,
+      session.paneId,
+      session.surfaceId,
+      session.provider.provider,
+      session.currentDirectory
+    ]);
+    if (this.conversationPickerLoads.has(loadKey)) return;
+    this.conversationPickerLoads.add(loadKey);
     try {
       new Notice(
         `Loading local ${session.provider.provider === "claude" ? "Claude" : "Codex"} conversation titles...`,
@@ -217,128 +421,264 @@ export class AgentCockpitController {
         session.provider.provider,
         session.currentDirectory
       );
+      if (this.disposed) return;
+      const current = this.resolveCurrentBindingSession(session);
+      if (
+        current.provider.provider !== session.provider.provider ||
+        current.currentDirectory !== session.currentDirectory
+      ) {
+        throw new Error(
+          "The cmux surface changed while provider conversations were loading. Refresh and try again."
+        );
+      }
       if (conversations.length === 0) {
         new Notice(`No ${session.provider.provider === "claude" ? "Claude" : "Codex"} conversations were found for this repository.`);
         return;
       }
-      new ConversationPickerModal(this.app, conversations, (conversation) => {
-        void this.matchConversation(session, conversation).catch(() => undefined);
-      }).open();
+      this.openModal((closed) =>
+        new ConversationPickerModal(
+          this.app,
+          conversations,
+          (conversation) => {
+            void this.matchConversation(session, conversation).catch(() => undefined);
+          },
+          closed
+        )
+      );
     } catch (error) {
+      if (this.disposed) return;
       new Notice(readableError(error));
+    } finally {
+      this.conversationPickerLoads.delete(loadKey);
     }
   }
 
   async forgetConversation(session: LiveSession): Promise<void> {
+    if (this.disposed) return;
     try {
-      const current = this.resolveCurrentSession(session);
+      const current = this.resolveCurrentBindingSession(session);
       const mapping = this.bindings
         .listProviderSessions()
         .find(
           (candidate) =>
-            candidate.workspaceId === current.workspaceId &&
-            candidate.paneId === current.paneId &&
-            candidate.surfaceId === current.surfaceId
+            canonicalUuidEquals(candidate.workspaceId, current.workspaceId) &&
+            canonicalUuidEquals(candidate.paneId, current.paneId) &&
+            canonicalUuidEquals(candidate.surfaceId, current.surfaceId)
         );
       if (!mapping) {
         new Notice("This surface has no saved provider conversation match.");
         return;
       }
-      await this.bindings.forgetProviderSession(current.surfaceId);
+      if (
+        session.provider.source !== "provider-session-mapping" ||
+        session.provider.sessionId === null ||
+        mapping.provider !== session.provider.provider ||
+        !canonicalUuidEquals(mapping.providerSessionId, session.provider.sessionId)
+      ) {
+        throw new Error("The provider conversation changed before its saved match could be forgotten.");
+      }
+      const expectedBinding = this.expectedTaskBinding(session, current);
+      const forgotten = await this.bindings.forgetProviderSessionIfUnchanged(
+        mapping,
+        expectedBinding,
+        () => {
+          if (this.disposed) return false;
+          const guardedCurrent = this.resolveCurrentBindingSession(current);
+          this.expectedTaskBinding(session, guardedCurrent);
+          return true;
+        }
+      );
+      if (this.disposed) return;
+      if (!forgotten) {
+        throw new Error(
+          "The provider conversation or task binding changed on disk before its saved match could be forgotten. Reload the plugin and try again."
+        );
+      }
       this.providerMetadata.forget(mapping.provider, mapping.providerSessionId);
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
       this.recomputeSessions();
       new Notice("Forgot the conversation match. The provider conversation and task were not deleted.");
     } catch (error) {
+      if (this.disposed) return;
       new Notice(readableError(error));
     }
   }
 
   async attachTask(session: LiveSession, task: TaskRecord): Promise<void> {
+    if (this.disposed) return;
     try {
-      validateBindingIdentity(task.taskId, session);
-      this.requireTaskRepository().findById(task.taskId);
-      const attachedAt = new Date().toISOString();
-      const result = await this.bindings.attach({
-        taskId: task.taskId,
-        workspaceId: session.workspaceId,
-        paneId: session.paneId,
-        surfaceId: session.surfaceId,
-        provider: session.provider.provider,
-        providerSessionId: session.provider.sessionId,
-        attachedAt
-      });
-      this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
-      if (result.isNewRun) {
-        try {
-          const runCount = await this.requireTaskRepository().incrementRunCount(task);
-          this.store.update((state) => ({
-            tasks: state.tasks.map((candidate) =>
-              candidate.taskId === task.taskId ? { ...candidate, runCount, updatedAt: attachedAt } : candidate
-            )
-          }));
-        } catch (error) {
-          new Notice(`Session attached, but run count was not updated: ${readableError(error)}`);
-        }
-      }
-      this.recomputeSessions();
+      await this.attachTaskInternal(session, task);
+      if (this.disposed) return;
       new Notice(`Attached session to ${task.title}.`);
     } catch (error) {
+      if (this.disposed) return;
       new Notice(readableError(error));
       throw error;
     }
   }
 
   async detachTask(session: LiveSession): Promise<void> {
-    await this.bindings.detach(session.surfaceId);
-    this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
-    this.recomputeSessions();
-    new Notice("Detached the session. The task note and run history were not deleted.");
-  }
-
-  async createTask(options: CreateTaskOptions, session: LiveSession | null = null): Promise<TaskRecord> {
+    if (this.disposed) return;
     try {
-      const task = await this.requireTaskRepository().create(options);
-      this.store.update((state) => ({ tasks: [task, ...state.tasks] }));
-      if (session !== null) await this.attachTask(session, task);
-      else new Notice(`Created ${task.title}.`);
-      return task;
+      const current = this.resolveCurrentBindingSession(session);
+      const expected = this.bindings.findBySurface(current.surfaceId);
+      if (
+        expected === null ||
+        session.linkedTaskId === null ||
+        !canonicalUuidEquals(expected.taskId, session.linkedTaskId) ||
+        !canonicalUuidEquals(expected.workspaceId, current.workspaceId) ||
+        !canonicalUuidEquals(expected.paneId, current.paneId) ||
+        !canonicalUuidEquals(expected.surfaceId, current.surfaceId)
+      ) {
+        throw new Error("The task binding changed before it could be detached. Refresh and try again.");
+      }
+      const detached = await this.bindings.detachIfUnchanged(
+        expected,
+        () => {
+          if (this.disposed) return false;
+          this.resolveCurrentBindingSession(current);
+          return true;
+        }
+      );
+      if (this.disposed) return;
+      if (!detached) {
+        throw new Error(
+          "The task binding changed on disk before it could be detached. Reload the plugin and try again."
+        );
+      }
+      this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
+      this.recomputeSessions();
+      new Notice("Detached the session. The task note and run history were not deleted.");
     } catch (error) {
+      if (this.disposed) return;
       new Notice(readableError(error));
       throw error;
     }
   }
 
+  async createTask(options: CreateTaskOptions, session: LiveSession | null = null): Promise<TaskRecord> {
+    if (this.disposed) throw new Error(`${PRODUCT_NAME} is unloaded.`);
+    try {
+      const taskFolder = this.requireSettings().taskFolder;
+      const current = session === null ? null : this.resolveCurrentBindingSession(session);
+      const task = await this.requireTaskRepository().create(options);
+      if (this.disposed) return task;
+      await this.waitForSettingsUpdates();
+      if (this.disposed) return task;
+      const activeTaskFolder = this.requireSettings().taskFolder;
+      const activeTasks = this.requireTaskRepository().list();
+      const activeTask = activeTasks.find(
+        (candidate) => candidate.taskId === task.taskId && candidate.file.path === task.file.path
+      ) ?? null;
+      this.store.update({ tasks: activeTasks });
+      if (activeTask === null) {
+        this.recomputeSessions();
+        const attachment = current === null ? "" : " The session was not attached.";
+        const message = activeTaskFolder === taskFolder
+          ? `Created ${task.title}, but it is no longer available in ${activeTaskFolder} and was not added to the current board.${attachment}`
+          : `Created ${task.title} in ${taskFolder}, but the task folder changed to ${activeTaskFolder} before it could be added to the current board.${attachment}`;
+        new Notice(message);
+        return task;
+      }
+      if (current === null) {
+        new Notice(`Created ${task.title}.`);
+      } else {
+        try {
+          await this.attachTaskInternal(current, activeTask);
+          if (this.disposed) return task;
+          new Notice(`Created ${task.title} and attached the session.`);
+        } catch (error) {
+          if (this.disposed) return task;
+          new Notice(`Created ${task.title}, but could not attach the session: ${readableError(error)}`);
+        }
+      }
+      return task;
+    } catch (error) {
+      if (!this.disposed) new Notice(readableError(error));
+      throw error;
+    }
+  }
+
+  private async waitForSettingsUpdates(): Promise<void> {
+    let pending: Promise<void>;
+    do {
+      pending = this.settingsUpdateWork;
+      await pending;
+    } while (pending !== this.settingsUpdateWork);
+  }
+
   async openTask(task: TaskRecord): Promise<void> {
+    if (this.disposed) return;
     try {
       await this.requireTaskRepository().open(task);
     } catch (error) {
+      if (this.disposed) return;
       new Notice(readableError(error));
     }
   }
 
-  async updateWorkflow(task: TaskRecord, workflowStatus: WorkflowStatus): Promise<void> {
+  async updateWorkflow(task: TaskRecord, workflowStatus: WorkflowStatus): Promise<boolean> {
+    if (this.disposed) return false;
     try {
       await this.requireTaskRepository().updateWorkflow(task, workflowStatus);
-      const updatedAt = new Date().toISOString();
-      this.store.update((state) => ({
-        tasks: state.tasks.map((candidate) =>
-          candidate.taskId === task.taskId ? { ...candidate, workflowStatus, updatedAt } : candidate
-        )
-      }));
+      await this.waitForSettingsUpdates();
+      if (this.disposed) return false;
+      this.store.update({ tasks: this.requireTaskRepository().list() });
       this.recomputeSessions();
+      return true;
     } catch (error) {
-      new Notice(readableError(error));
+      if (!this.disposed) new Notice(readableError(error));
+      return false;
     }
   }
 
-  async reloadTasks(): Promise<void> {
-    if (this.taskRepository === null) return;
-    this.store.update({ tasks: this.taskRepository.list() });
+  async reloadTasks(
+    invalidations: readonly TaskInvalidationEvidence[] = [],
+    renames: readonly TaskRenameEvidence[] = []
+  ): Promise<void> {
+    const repository = this.taskRepository;
+    const taskFolder = this.settings?.taskFolder;
+    if (this.disposed || repository === null || taskFolder === undefined) return;
+    repository.invalidateVaultEvents(invalidations, renames);
+    await this.repairPersistedRunCounts(repository, taskFolder);
+    if (this.disposed) return;
+    this.store.update({ tasks: this.requireTaskRepository().list() });
     this.recomputeSessions();
   }
 
+  private async repairPersistedRunCounts(
+    repository: TaskRepository,
+    taskFolder: string
+  ): Promise<void> {
+    const canRepair = (): boolean =>
+      !this.disposed &&
+      this.taskRepository === repository &&
+      this.settings?.taskFolder === taskFolder;
+    const runCounts = await this.bindings.loadDurableRunCountFloorsForRepair(taskFolder);
+    if (runCounts === null || !canRepair()) return;
+
+    for (const task of repository.list()) {
+      if (!canRepair()) return;
+      const recordedRuns = runCounts.get(task.taskId) ?? 0;
+      if (task.runCount >= recordedRuns) continue;
+      try {
+        const repaired = await repository.ensureRunCountAtLeast(
+          task,
+          recordedRuns,
+          canRepair
+        );
+        if (repaired === null) return;
+      } catch (error) {
+        if (!canRepair()) return;
+        new Notice(
+          `Run history was restored, but ${task.title}'s run count could not be reconciled: ${readableError(error)}`
+        );
+      }
+    }
+  }
+
   async copyMetadata(session: LiveSession): Promise<void> {
+    if (this.disposed) return;
     const metadata = {
       workspaceId: session.workspaceId,
       paneId: session.paneId,
@@ -353,34 +693,81 @@ export class AgentCockpitController {
     };
     try {
       await navigator.clipboard.writeText(JSON.stringify(metadata, null, 2));
+      if (this.disposed) return;
       new Notice("Copied bounded session metadata.");
     } catch (error) {
+      if (this.disposed) return;
       new Notice(`Could not copy session metadata: ${readableError(error)}`);
     }
   }
 
   setFilters(patch: Partial<SessionFilters>): void {
+    if (this.disposed) return;
     this.store.update((state) => ({ filters: { ...state.filters, ...patch } }));
+  }
+
+  isDisposed(): boolean {
+    return this.disposed;
   }
 
   getSettings(): AgentCockpitSettings {
     return { ...this.requireSettings() };
   }
 
+  getLoadedSettings(): AgentCockpitSettings | null {
+    return this.settings === null ? null : { ...this.settings };
+  }
+
+  getLoadedTaskFolder(): string | null {
+    return this.settings?.taskFolder ?? null;
+  }
+
+  observesTaskVaultPath(path: string): boolean {
+    return !this.disposed && this.taskRepository?.observesVaultPath(path) === true;
+  }
+
   async updateSettings(next: AgentCockpitSettings): Promise<void> {
-    const current = this.requireSettings();
+    if (this.disposed) return;
     const parsed = parseSettings({ ...next, cmuxBinaryPath: validateBinarySetting(next.cmuxBinaryPath) });
+    this.pendingSettingsUpdates += 1;
+    this.cancelAutomaticTaskTracking();
+    const operation = this.settingsUpdateWork
+      .catch(() => undefined)
+      .then(() => this.applySettingsUpdate(parsed));
+    this.settingsUpdateWork = operation.then(
+      () => undefined,
+      () => undefined
+    );
+    try {
+      await operation;
+    } finally {
+      this.pendingSettingsUpdates -= 1;
+      if (this.pendingSettingsUpdates === 0 && this.settings?.autoTrackAgentRuns === true) {
+        this.scheduleAutomaticTaskTracking();
+      }
+    }
+  }
+
+  private async applySettingsUpdate(parsed: AgentCockpitSettings): Promise<void> {
+    if (this.disposed) return;
+    const current = this.requireSettings();
+    const cmuxBinaryChanged = current.cmuxBinaryPath !== parsed.cmuxBinaryPath;
     await this.bindings.updateSettings(parsed);
+    if (this.disposed) return;
     this.settings = parsed;
+    this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
     this.requireTaskRepository().setTaskFolder(parsed.taskFolder);
-    if (current.cmuxBinaryPath !== parsed.cmuxBinaryPath) {
+    if (cmuxBinaryChanged) {
       this.cancelIdentityResolution();
       this.automaticProviderMappings = [];
+      this.suppressedProviderSurfaceIds.clear();
+      this.suppressedProviderSessionKeys.clear();
       this.refreshCoordinator.dispose();
       this.client?.dispose();
       this.client = null;
       this.focusAction = null;
       await this.connect();
+      if (this.client !== null) await this.refreshNow();
     }
     await this.reloadTasks();
   }
@@ -390,40 +777,85 @@ export class AgentCockpitController {
     this.refreshCoordinator.dispose();
     this.cancelIdentityResolution();
     this.automaticProviderMappings = [];
+    this.suppressedProviderSurfaceIds.clear();
+    this.suppressedProviderSessionKeys.clear();
     this.client?.dispose();
     this.client = null;
     this.focusAction = null;
     await this.refreshNow();
+    if (this.disposed) return;
     new Notice(this.store.getState().connection.message);
   }
 
   async copyCmuxSetupSteps(): Promise<void> {
+    if (this.disposed) return;
     try {
       await navigator.clipboard.writeText(CMUX_SETUP_CLIPBOARD_TEXT);
+      if (this.disposed) return;
       new Notice("Copied the cmux connection setup steps.");
     } catch (error) {
+      if (this.disposed) return;
       new Notice(`Could not copy setup steps: ${readableError(error)}`);
     }
   }
 
   dispose(): void {
     this.disposed = true;
+    this.closeOpenModals();
+    this.clientGeneration += 1;
+    this.refreshStateGeneration += 1;
+    this.cancelAutomaticTaskTracking();
     this.refreshCoordinator.dispose();
     this.previewScheduler.dispose();
     this.cancelIdentityResolution();
     this.client?.dispose();
     this.client = null;
+    this.focusAction = null;
     this.providerSessionResolver.dispose();
     this.providerMetadata.dispose();
     this.attentionEngine.clear();
     this.previewCache.clear();
+    this.previewSurfaceSignatures.clear();
+    this.conversationPickerLoads.clear();
     this.evidence.clear();
     this.providerClassifier.clear();
+    this.reportedAutomaticTrackingIssues.clear();
+    this.automaticTrackingPass = null;
     this.store.clear();
+  }
+
+  private openModal(create: (closed: () => void) => Modal): void {
+    let modal: Modal | null = null;
+    const closed = (): void => {
+      if (modal !== null) this.openModals.delete(modal);
+    };
+    modal = create(closed);
+    if (this.disposed) {
+      modal.close();
+      return;
+    }
+    this.openModals.add(modal);
+    try {
+      modal.open();
+    } catch (error) {
+      this.openModals.delete(modal);
+      throw error;
+    }
+  }
+
+  private closeOpenModals(): void {
+    const modals = [...this.openModals];
+    this.openModals.clear();
+    for (const modal of modals) modal.close();
   }
 
   private async connect(): Promise<void> {
     if (this.disposed) return;
+    const clientGeneration = ++this.clientGeneration;
+    this.client?.dispose();
+    this.client = null;
+    this.focusAction = null;
+    this.resetHeuristicProviderEvidence();
     this.store.update({
       connection: {
         ...this.store.getState().connection,
@@ -432,11 +864,20 @@ export class AgentCockpitController {
         checkedAt: Date.now()
       }
     });
+    let candidate: CmuxClient | null = null;
     try {
-      this.client?.dispose();
-      this.client = await this.createClient(this.requireSettings().cmuxBinaryPath);
-      const probe = await this.client.probe();
-      this.focusAction = new FocusSessionAction(this.client);
+      candidate = await this.createClient(this.requireSettings().cmuxBinaryPath);
+      if (this.disposed || clientGeneration !== this.clientGeneration) {
+        candidate.dispose();
+        return;
+      }
+      const probe = await candidate.probe();
+      if (this.disposed || clientGeneration !== this.clientGeneration) {
+        candidate.dispose();
+        return;
+      }
+      this.client = candidate;
+      this.focusAction = new FocusSessionAction(candidate);
       const checkedAt = Date.now();
       this.store.update((state) => ({
         connection: {
@@ -459,26 +900,56 @@ export class AgentCockpitController {
         error: null
       }));
     } catch (error) {
-      this.client?.dispose();
+      candidate?.dispose();
+      if (this.disposed || clientGeneration !== this.clientGeneration) return;
       this.client = null;
       this.focusAction = null;
       this.handleError(error);
     }
   }
 
-  private applyRefreshResult(result: RefreshResult): void {
-    if (!result.current || this.disposed) return;
+  private resetHeuristicProviderEvidence(): void {
+    const sessionKeys = new Set(this.store.getState().sessions.map((session) => session.key));
+    this.providerClassifier.clear();
+    this.evidence.clearProviders(sessionKeys);
+    if (sessionKeys.size > 0) this.recomputeSessions();
+  }
+
+  private applyRefreshResult(
+    result: RefreshResult,
+    topologyRefreshGeneration: number,
+    notificationRefreshGeneration: number
+  ): boolean {
+    if (!result.current || this.disposed) return false;
+    const applyTopology = topologyRefreshGeneration === this.topologyRefreshGeneration;
+    const applyNotifications =
+      notificationRefreshGeneration === this.notificationRefreshGeneration;
     this.store.batch(() => {
-      if (result.snapshot !== null) this.applyTopology(result.snapshot);
-      else if (result.topologyError !== null) this.applyTopologyFailure(result.topologyError);
-      if (result.notifications !== null) this.applyNotifications(result.notifications);
-      else if (result.notificationError !== null) this.applyNotificationFailure(result.notificationError);
+      if (applyTopology) {
+        if (result.snapshot !== null) this.applyTopology(result.snapshot);
+        else if (result.topologyError !== null) this.applyTopologyFailure(result.topologyError);
+      }
+      if (applyNotifications) {
+        if (result.notifications !== null) this.applyNotifications(result.notifications);
+        else if (result.notificationError !== null) {
+          this.applyNotificationFailure(result.notificationError);
+        }
+      }
     });
+    return applyTopology && result.snapshot !== null;
   }
 
   private applyTopology(snapshot: CmuxSnapshot): void {
+    if (this.disposed) return;
+    // Every topology snapshot is a new authority boundary. Work selected from
+    // the prior snapshot may finish creating a note, but it must not bind a
+    // provider session after this point without being selected again.
+    this.cancelAutomaticTaskTracking();
+    this.identityResolvedGeneration = null;
     const checkedAt = snapshot.observedAt;
     this.automaticProviderMappings = [];
+    this.suppressedProviderSurfaceIds.clear();
+    this.suppressedProviderSessionKeys.clear();
     this.store.update((state) => ({
       snapshot,
       lastRefreshAt: checkedAt,
@@ -506,6 +977,7 @@ export class AgentCockpitController {
   }
 
   private applyNotifications(notifications: CmuxNotification[]): void {
+    if (this.disposed) return;
     const checkedAt = Date.now();
     this.store.update((state) => ({
       notifications,
@@ -519,19 +991,34 @@ export class AgentCockpitController {
   }
 
   private applyTopologyFailure(error: unknown): void {
+    if (this.disposed) return;
+    // A cached tree remains useful for display, but it is no longer current
+    // enough to authorize automatic durable bindings.
+    this.cancelIdentityResolution();
+    this.cancelAutomaticTaskTracking();
+    this.automaticProviderMappings = [];
+    this.suppressedProviderSurfaceIds.clear();
+    this.suppressedProviderSessionKeys.clear();
     const checkedAt = Date.now();
     const message = readableError(error);
     this.store.update((state) => ({
       connection: connectionAfterError(state.connection, error, checkedAt),
       health: {
         ...state.health,
-        topology: failedHealth(state.health.topology, checkedAt, message, state.snapshot !== null)
+        topology: failedHealth(state.health.topology, checkedAt, message, state.snapshot !== null),
+        lifecycle: failedHealth(
+          state.health.lifecycle,
+          checkedAt,
+          `Exact provider identity is stale because cmux topology could not be refreshed: ${message}`,
+          state.health.lifecycle.lastSuccessAt !== null
+        )
       },
       error: message
     }));
   }
 
   private applyNotificationFailure(error: unknown): void {
+    if (this.disposed) return;
     const checkedAt = Date.now();
     const message = readableError(error);
     this.store.update((state) => ({
@@ -549,25 +1036,53 @@ export class AgentCockpitController {
   }
 
   private recomputeSessions(): void {
+    if (this.disposed) return;
     const state = this.store.getState();
-    if (state.snapshot === null) {
+    const snapshot = state.snapshot;
+    if (snapshot === null) {
       this.store.update({ sessions: [], attention: [] });
       return;
     }
-    this.syncCurrentEvidence(state.snapshot, state.notifications);
-    const sessions = projectLiveSessions({
-      snapshot: state.snapshot,
-      notifications: state.notifications,
-      bindings: state.bindings,
-      providerMappings: this.bindings.listProviderSessions(),
-      automaticProviderMappings: this.automaticProviderMappings,
-      providerMetadata: this.providerMetadata.evidence,
-      detector: this.detector,
-      providerEvidence: this.providerClassifier.evidence,
-      previewFor: (key) => this.previewCache.peek(key),
-      evidenceFor: (key) => this.evidence.list(key)
-    });
-    const attention = this.attentionEngine.build(sessions, state.tasks, state.bindings, Date.now());
+    this.syncCurrentEvidence(snapshot, state.notifications);
+    const project = (): LiveSession[] =>
+      projectLiveSessions({
+        snapshot,
+        notifications: state.notifications,
+        bindings: state.bindings,
+        providerMappings: this.bindings.listProviderSessions(),
+        automaticProviderMappings: this.automaticProviderMappings,
+        suppressedProviderSurfaceIds: this.suppressedProviderSurfaceIds,
+        suppressedProviderSessionKeys: this.suppressedProviderSessionKeys,
+        providerMetadata: this.providerMetadata.evidence,
+        detector: this.detector,
+        providerEvidence: this.providerClassifier.evidence,
+        previewFor: (key) => this.previewCache.peek(key),
+        evidenceFor: (key) => this.evidence.list(key)
+      });
+    let sessions = project();
+    const invalidatedPreviews = new Set<string>();
+    for (const session of sessions) {
+      const storedSignature = this.previewSurfaceSignatures.get(session.key);
+      if (
+        storedSignature !== undefined &&
+        storedSignature !== previewSurfaceSignature(session)
+      ) {
+        this.previewSurfaceSignatures.delete(session.key);
+        this.previewCache.delete(session.key);
+        invalidatedPreviews.add(session.key);
+      }
+    }
+    if (invalidatedPreviews.size > 0) {
+      this.evidence.clearPreviews(invalidatedPreviews);
+      sessions = project();
+    }
+    const attention = this.attentionEngine.build(
+      sessions,
+      state.tasks,
+      state.bindings,
+      Date.now(),
+      this.settings?.staleAfterMs ?? DEFAULT_SETTINGS.staleAfterMs
+    );
     this.store.update({ sessions, attention });
   }
 
@@ -577,9 +1092,20 @@ export class AgentCockpitController {
   ): ReadonlySet<string> {
     const notificationObservedAt =
       this.store.getState().health.notifications.lastSuccessAt ?? snapshot.observedAt;
+    const invalidatedProviders = this.providerClassifier.syncSurfaces(
+      providerSurfaceIdentities(snapshot)
+    );
+    this.evidence.clearProviders(invalidatedProviders);
+    this.evidence.clearPreviews(invalidatedProviders);
+    for (const key of invalidatedProviders) {
+      this.previewCache.delete(key);
+      this.previewSurfaceSignatures.delete(key);
+    }
     const liveKeys = this.evidence.sync(snapshot, notifications, notificationObservedAt);
     this.previewCache.retain(liveKeys);
-    this.providerClassifier.retain(liveKeys);
+    for (const key of this.previewSurfaceSignatures.keys()) {
+      if (!liveKeys.has(key)) this.previewSurfaceSignatures.delete(key);
+    }
     return liveKeys;
   }
 
@@ -606,9 +1132,449 @@ export class AgentCockpitController {
     const work = this.providerMetadata
       .refreshMapped(mappings, this.store.getState().sessions)
       .then(() => {
-        if (!this.disposed) this.recomputeSessions();
+        if (!this.disposed) {
+          this.recomputeSessions();
+          this.scheduleAutomaticTaskTracking();
+        }
       });
     this.metadataWork = Promise.all([this.metadataWork.catch(() => undefined), work]).then(() => undefined);
+  }
+
+  private scheduleAutomaticTaskTracking(): void {
+    if (
+      this.disposed ||
+      this.pendingSettingsUpdates > 0 ||
+      this.settings?.autoTrackAgentRuns !== true
+    ) {
+      return;
+    }
+    const generation = this.automaticTrackingGeneration;
+    this.automaticTrackingWork = this.automaticTrackingWork
+      .catch(() => undefined)
+      .then(async () => {
+        const pass: AutomaticTrackingPass = {
+          messages: new Set<string>(),
+          failedIssueKeys: new Set<string>()
+        };
+        this.automaticTrackingPass = pass;
+        try {
+          await this.reconcileAutomaticTasks(generation);
+          this.clearInactiveAutomaticTrackingIssues(pass.failedIssueKeys);
+        } finally {
+          if (this.automaticTrackingPass === pass) {
+            this.automaticTrackingPass = null;
+          }
+        }
+      })
+      .then(() => {
+        if (this.automaticTrackingAllowed(generation)) {
+          this.clearAutomaticTrackingIssues("automatic-tracking");
+        }
+      })
+      .catch((error: unknown) => {
+        if (this.disposed) return;
+        this.reportAutomaticTrackingIssue("automatic-tracking", error);
+      });
+  }
+
+  private async reconcileAutomaticTasks(generation: number): Promise<void> {
+    if (!this.automaticTrackingAllowed(generation) || this.taskRepository === null) return;
+
+    const relocated = await this.relocateResumedProviderSessions(generation);
+    let changed = relocated > 0;
+    changed = (await this.repairAutomaticRunCounts(generation)) || changed;
+    if (!this.automaticTrackingAllowed(generation)) {
+      if (changed) this.publishAutomaticTrackingState();
+      return;
+    }
+    const candidates = selectAutomaticTrackCandidates(
+      this.store.getState().sessions,
+      this.bindings.listRuns()
+    );
+
+    let tracked = 0;
+    for (const candidate of candidates) {
+      if (!this.automaticTrackingAllowed(generation)) break;
+      const issueKey = providerSessionKey(candidate.provider, candidate.providerSessionId);
+      try {
+        let current = this.resolveCurrentAutomaticCandidate(candidate);
+        if (current === null || this.hasProviderRun(candidate)) continue;
+        let expectedBinding = this.bindings.findBySurface(current.surfaceId);
+        if (
+          expectedBinding !== null &&
+          expectedBinding.provider === candidate.provider &&
+          normalizeCanonicalUuid(expectedBinding.providerSessionId ?? "") ===
+            candidate.providerSessionId
+        ) {
+          continue;
+        }
+
+        const currentSurfaceId = current.surfaceId;
+        const staleManualMapping = this.bindings.listProviderSessions().find(
+          (mapping) =>
+            canonicalUuidEquals(mapping.surfaceId, currentSurfaceId) &&
+            (mapping.provider !== candidate.provider ||
+              !canonicalUuidEquals(mapping.providerSessionId, candidate.providerSessionId))
+        );
+        if (staleManualMapping !== undefined) {
+          const discarded = await this.bindings.discardProviderSessionMappingIfUnchanged(
+            staleManualMapping,
+            () =>
+              this.automaticTrackingAllowed(generation) &&
+              this.resolveCurrentAutomaticCandidate(candidate) !== null &&
+              !this.hasProviderRun(candidate)
+          );
+          if (!discarded) continue;
+          changed = true;
+
+          current = this.resolveCurrentAutomaticCandidate(candidate);
+          if (current === null || this.hasProviderRun(candidate)) continue;
+          expectedBinding = this.bindings.findBySurface(current.surfaceId);
+        }
+
+        const ensured = await this.taskRepository.ensure(
+          {
+            taskId: candidate.taskId,
+            title: automaticTaskTitle(current, candidate.provider),
+            workflowStatus: "active",
+            priority: "normal",
+            repository: current.currentDirectory,
+            branch: null,
+            worktree: null
+          },
+          () =>
+            this.automaticTrackingAllowed(generation) &&
+            this.resolveCurrentAutomaticCandidate(candidate) !== null &&
+            !this.hasProviderRun(candidate)
+        );
+        if (ensured === null) {
+          if (!this.automaticTrackingAllowed(generation)) break;
+          continue;
+        }
+        changed ||= ensured.created;
+
+        if (!this.automaticTrackingAllowed(generation)) break;
+
+        // Vault writes are asynchronous. Resolve the exact target again before
+        // persisting a machine-local cmux binding.
+        current = this.resolveCurrentAutomaticCandidate(candidate);
+        if (current === null || this.hasProviderRun(candidate)) continue;
+        const task = this.taskRepository.findById(ensured.task.taskId);
+        validateBindingIdentity(task.taskId, current);
+
+        const attachedAt = new Date().toISOString();
+        const result = await this.bindings.attachIfSurfaceUnchanged(
+          {
+            taskId: task.taskId,
+            workspaceId: current.workspaceId,
+            paneId: current.paneId,
+            surfaceId: current.surfaceId,
+            provider: candidate.provider,
+            providerSessionId: candidate.providerSessionId,
+            taskRunCountBaseline: task.runCount,
+            attachedAt
+          },
+          expectedBinding,
+          () => {
+            if (
+              !this.automaticTrackingAllowed(generation) ||
+              this.resolveCurrentAutomaticCandidate(candidate) === null ||
+              this.hasProviderRun(candidate)
+            ) {
+              return false;
+            }
+            this.resolveCurrentTask(task);
+            return true;
+          }
+        );
+        if (result === null) continue;
+        changed = true;
+        if (this.automaticTrackingAllowed(generation)) {
+          try {
+            await this.persistAttachedRunCount(task, result.isNewRun);
+          } catch (error) {
+            this.reportAutomaticTrackingIssue(
+              `${issueKey}:run-count`,
+              automaticRunCountError(error)
+            );
+          }
+        }
+        tracked += 1;
+        this.clearAutomaticTrackingIssues(issueKey);
+      } catch (error) {
+        this.reportAutomaticTrackingIssue(issueKey, error);
+      }
+    }
+
+    if (changed) {
+      this.publishAutomaticTrackingState();
+    }
+    if (this.disposed) return;
+    if (tracked > 0) {
+      new Notice(
+        `Automatically tracked ${String(tracked)} exact agent ${tracked === 1 ? "run" : "runs"} on the Work board.`
+      );
+    }
+    if (relocated > 0) {
+      new Notice(
+        `Reconnected ${String(relocated)} exact agent ${relocated === 1 ? "run" : "runs"} to existing Work ${relocated === 1 ? "task" : "tasks"}.`
+      );
+    }
+  }
+
+  private async relocateResumedProviderSessions(generation: number): Promise<number> {
+    const repository = this.taskRepository;
+    if (repository === null) return 0;
+    const sessions = this.store.getState().sessions;
+    const bindingsByProviderSession = new Map<string, BindingRecord[]>();
+    for (const binding of this.bindings.list()) {
+      if (
+        (binding.provider !== "claude" && binding.provider !== "codex") ||
+        binding.providerSessionId === null ||
+        !isCanonicalUuid(binding.providerSessionId)
+      ) {
+        continue;
+      }
+      const key = providerSessionKey(binding.provider, binding.providerSessionId);
+      const group = bindingsByProviderSession.get(key) ?? [];
+      group.push(binding);
+      bindingsByProviderSession.set(key, group);
+    }
+
+    let relocated = 0;
+    for (const [identityKey, bindings] of bindingsByProviderSession) {
+      if (!this.automaticTrackingAllowed(generation)) break;
+      if (bindings.length !== 1) continue;
+      const binding = bindings[0]!;
+      const provider = binding.provider;
+      const providerSessionId = normalizeCanonicalUuid(binding.providerSessionId ?? "");
+      if ((provider !== "claude" && provider !== "codex") || providerSessionId === null) {
+        continue;
+      }
+      const oldSurface = sessions.find(
+        (session) =>
+          canonicalUuidEquals(session.workspaceId, binding.workspaceId) &&
+          canonicalUuidEquals(session.paneId, binding.paneId) &&
+          canonicalUuidEquals(session.surfaceId, binding.surfaceId)
+      );
+      if (
+        oldSurface !== undefined &&
+        !bindingConflictsWithExactProviderIdentity(binding, oldSurface)
+      ) {
+        // A present surface with unknown or matching provider identity is not
+        // enough evidence that the run moved. Exact contradictory identity is.
+        continue;
+      }
+
+      const matches = sessions.filter((session) => {
+        const identity = exactTrackableIdentity(session);
+        return (
+          identity !== null &&
+          providerSessionKey(identity.provider, identity.sessionId) === identityKey &&
+          session.linkedTaskId === null
+        );
+      });
+      if (matches.length !== 1) continue;
+
+      const issueKey = `${identityKey}:relocation`;
+      try {
+        let current = this.resolveUniqueUnlinkedProviderSession(
+          matches[0]!,
+          provider,
+          providerSessionId
+        );
+        if (current === null) continue;
+        const task = repository.findById(binding.taskId);
+        validateBindingIdentity(task.taskId, current);
+
+        // Re-resolve immediately before the machine-local binding mutation.
+        current = this.resolveUniqueUnlinkedProviderSession(
+          current,
+          provider,
+          providerSessionId
+        );
+        if (current === null) continue;
+        const relocatedAt = new Date().toISOString();
+        const result = await this.bindings.relocateProviderSession(
+          {
+            bindingId: binding.bindingId,
+            runId: binding.runId,
+            taskId: binding.taskId,
+            provider,
+            providerSessionId,
+            fromWorkspaceId: binding.workspaceId,
+            fromPaneId: binding.paneId,
+            fromSurfaceId: binding.surfaceId,
+            toWorkspaceId: current.workspaceId,
+            toPaneId: current.paneId,
+            toSurfaceId: current.surfaceId,
+            relocatedAt
+          },
+          () => {
+            if (
+              !this.automaticTrackingAllowed(generation) ||
+              this.resolveUniqueUnlinkedProviderSession(
+                current,
+                provider,
+                providerSessionId
+              ) === null
+            ) {
+              return false;
+            }
+            this.resolveCurrentTask(task);
+            return true;
+          }
+        );
+        if (result === null) continue;
+        relocated += 1;
+        this.clearAutomaticTrackingIssues(issueKey);
+      } catch (error) {
+        this.reportAutomaticTrackingIssue(issueKey, error);
+      }
+    }
+    return relocated;
+  }
+
+  private async repairAutomaticRunCounts(generation: number): Promise<boolean> {
+    const repository = this.taskRepository;
+    if (repository === null) return false;
+    const tasks = new Map(repository.list().map((task) => [task.taskId, task] as const));
+    let changed = false;
+
+    for (const run of this.bindings.listRuns()) {
+      if (!this.automaticTrackingAllowed(generation)) break;
+      if (
+        (run.provider !== "claude" && run.provider !== "codex") ||
+        run.providerSessionId === null ||
+        !isCanonicalUuid(run.providerSessionId) ||
+        run.taskId !== automaticTaskId(run.provider, run.providerSessionId)
+      ) {
+        continue;
+      }
+      const task = tasks.get(run.taskId);
+      if (task === undefined || task.runCount >= 1) continue;
+      const issueKey = `${providerSessionKey(run.provider, run.providerSessionId)}:run-count`;
+      try {
+        const repaired = await repository.ensureRunCountAtLeast(
+          task,
+          1,
+          () => this.automaticTrackingAllowed(generation)
+        );
+        if (repaired === null) break;
+        changed = true;
+        this.clearAutomaticTrackingIssues(issueKey);
+      } catch (error) {
+        this.reportAutomaticTrackingIssue(
+          issueKey,
+          automaticRunCountError(error)
+        );
+      }
+    }
+    return changed;
+  }
+
+  private automaticTrackingAllowed(generation: number): boolean {
+    const state = this.store.getState();
+    return (
+      !this.disposed &&
+      this.pendingSettingsUpdates === 0 &&
+      this.settings?.autoTrackAgentRuns === true &&
+      generation === this.automaticTrackingGeneration &&
+      this.identityResolvedGeneration === this.identityGeneration &&
+      state.connection.status === "connected" &&
+      state.health.topology.status === "fresh"
+    );
+  }
+
+  private cancelAutomaticTaskTracking(): void {
+    this.automaticTrackingGeneration += 1;
+  }
+
+  private publishAutomaticTrackingState(): void {
+    if (this.disposed || this.taskRepository === null) return;
+    this.store.update({
+      tasks: this.taskRepository.list(),
+      bindings: this.bindings.list(),
+      runs: this.bindings.listRuns()
+    });
+    this.recomputeSessions();
+  }
+
+  private resolveCurrentAutomaticCandidate(candidate: AutomaticTrackCandidate): LiveSession | null {
+    return this.resolveUniqueUnlinkedProviderSession(
+      candidate.session,
+      candidate.provider,
+      candidate.providerSessionId
+    );
+  }
+
+  private resolveUniqueUnlinkedProviderSession(
+    original: LiveSession,
+    provider: "claude" | "codex",
+    providerSessionId: string
+  ): LiveSession | null {
+    const state = this.store.getState();
+    const current = state.sessions.find(
+      (session) =>
+        canonicalUuidEquals(session.workspaceId, original.workspaceId) &&
+        canonicalUuidEquals(session.paneId, original.paneId) &&
+        canonicalUuidEquals(session.surfaceId, original.surfaceId)
+    );
+    if (current === undefined || current.linkedTaskId !== null) return null;
+
+    const identity = exactTrackableIdentity(current);
+    if (
+      identity === null ||
+      identity.provider !== provider ||
+      identity.sessionId !== normalizeCanonicalUuid(providerSessionId)
+    ) {
+      return null;
+    }
+
+    const matchingSurfaces = state.sessions.filter((session) => {
+      const other = exactTrackableIdentity(session);
+      return (
+        other?.provider === provider &&
+        other.sessionId === identity.sessionId
+      );
+    });
+    return matchingSurfaces.length === 1 ? current : null;
+  }
+
+  private hasProviderRun(candidate: AutomaticTrackCandidate): boolean {
+    const key = providerSessionKey(candidate.provider, candidate.providerSessionId);
+    return this.bindings.listRuns().some(
+      (run) =>
+        (run.provider === "claude" || run.provider === "codex") &&
+        run.providerSessionId !== null &&
+        providerSessionKey(run.provider, run.providerSessionId) === key
+    );
+  }
+
+  private reportAutomaticTrackingIssue(key: string, error: unknown): void {
+    if (this.disposed) return;
+    const message = readableError(error);
+    const pass = this.automaticTrackingPass;
+    pass?.failedIssueKeys.add(key);
+    const alreadyReportedForKey = this.reportedAutomaticTrackingIssues.get(key) === message;
+    this.reportedAutomaticTrackingIssues.set(key, message);
+    const alreadyReportedThisPass = pass?.messages.has(message) === true;
+    pass?.messages.add(message);
+    if (alreadyReportedForKey || alreadyReportedThisPass) return;
+    new Notice(`Automatic task tracking could not finish: ${message}`);
+  }
+
+  private clearAutomaticTrackingIssues(key: string): void {
+    this.automaticTrackingPass?.failedIssueKeys.delete(key);
+    this.reportedAutomaticTrackingIssues.delete(key);
+  }
+
+  private clearInactiveAutomaticTrackingIssues(failedIssueKeys: ReadonlySet<string>): void {
+    for (const key of this.reportedAutomaticTrackingIssues.keys()) {
+      if (key !== "automatic-tracking" && !failedIssueKeys.has(key)) {
+        this.reportedAutomaticTrackingIssues.delete(key);
+      }
+    }
   }
 
   private scheduleProviderIdentityResolution(snapshot: CmuxSnapshot): void {
@@ -630,7 +1596,9 @@ export class AgentCockpitController {
           return;
         }
         this.applyIdentityResolution(snapshot, resolution);
+        this.identityResolvedGeneration = generation;
         this.scheduleProviderMetadataRefresh();
+        this.scheduleAutomaticTaskTracking();
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || this.disposed) return;
@@ -658,6 +1626,18 @@ export class AgentCockpitController {
     resolution: ProviderIdentityResolution
   ): void {
     this.automaticProviderMappings = resolution.mappings;
+    this.suppressedProviderSurfaceIds = new Set(
+      (resolution.suppressedSurfaceIds ?? []).flatMap((surfaceId) => {
+        const normalized = normalizeCanonicalUuid(surfaceId);
+        return normalized === null ? [] : [normalized];
+      })
+    );
+    this.suppressedProviderSessionKeys = new Set(
+      (resolution.suppressedProviderSessionKeys ?? []).flatMap((identityKey) => {
+        const normalized = normalizeProviderSessionKey(identityKey);
+        return normalized === null ? [] : [normalized];
+      })
+    );
     const liveKeys = this.evidence.sync(
       snapshot,
       this.store.getState().notifications,
@@ -689,92 +1669,300 @@ export class AgentCockpitController {
 
   private cancelIdentityResolution(): void {
     this.identityGeneration += 1;
+    this.identityResolvedGeneration = null;
     this.identityAbortController?.abort();
     this.identityAbortController = null;
   }
 
   private effectiveProviderMappings(): ProviderSessionReference[] {
-    const mappings = new Map<string, ProviderSessionReference>();
+    const mappings: ProviderSessionReference[] = [];
     const claimedProviderSessions = new Set<string>();
-    for (const mapping of this.bindings.listProviderSessions()) {
-      mappings.set(mapping.surfaceId, mapping);
-      claimedProviderSessions.add(`${mapping.provider}:${mapping.providerSessionId}`);
-    }
-    for (const mapping of this.automaticProviderMappings) {
-      const providerSessionKey = `${mapping.provider}:${mapping.providerSessionId}`;
-      if (mappings.has(mapping.surfaceId) || claimedProviderSessions.has(providerSessionKey)) continue;
-      mappings.set(mapping.surfaceId, mapping);
-      claimedProviderSessions.add(providerSessionKey);
-    }
-    for (const binding of this.bindings.list()) {
-      const providerSessionKey = `${binding.provider}:${binding.providerSessionId ?? ""}`;
+    for (const session of this.store.getState().sessions) {
+      const detection = session.provider;
       if (
-        mappings.has(binding.surfaceId) ||
-        (binding.provider !== "claude" && binding.provider !== "codex") ||
-        binding.providerSessionId === null ||
-        !isCanonicalUuid(binding.providerSessionId) ||
-        claimedProviderSessions.has(providerSessionKey)
+        (detection.provider !== "claude" && detection.provider !== "codex") ||
+        detection.sessionId === null ||
+        !PROVIDER_METADATA_IDENTITY_SOURCES.has(detection.source)
       ) {
         continue;
       }
-      mappings.set(binding.surfaceId, {
-        workspaceId: binding.workspaceId,
-        paneId: binding.paneId,
-        surfaceId: binding.surfaceId,
-        provider: binding.provider,
-        providerSessionId: binding.providerSessionId,
-        matchedAt: binding.attachedAt
+      const providerSessionId = normalizeCanonicalUuid(detection.sessionId);
+      if (providerSessionId === null) continue;
+      const identityKey = providerSessionKey(detection.provider, providerSessionId);
+      if (claimedProviderSessions.has(identityKey)) continue;
+      mappings.push({
+        workspaceId: session.workspaceId,
+        paneId: session.paneId,
+        surfaceId: session.surfaceId,
+        provider: detection.provider,
+        providerSessionId
       });
-      claimedProviderSessions.add(providerSessionKey);
+      claimedProviderSessions.add(identityKey);
     }
-    return [...mappings.values()];
+    return mappings;
   }
 
   private async matchConversation(
     original: LiveSession,
     conversation: ProviderSessionMetadata
   ): Promise<void> {
+    if (this.disposed) return;
     try {
-      const current = this.resolveCurrentSession(original);
-      if (
-        current.currentDirectory === null ||
-        current.currentDirectory !== conversation.cwd ||
-        current.provider.provider !== conversation.provider
-      ) {
-        throw new Error("The cmux surface no longer matches the selected provider conversation.");
+      const expectedMapping = this.expectedProviderSessionMapping(original);
+      let current = this.resolveCurrentBindingSession(original);
+      const expectedBinding = this.expectedTaskBinding(original, current);
+      this.assertConversationMatchesSession(current, conversation);
+      const verified = await this.providerMetadata.verifyExact(
+        conversation.provider,
+        conversation.sessionId,
+        conversation.cwd
+      );
+      if (this.disposed) return;
+      if (verified === null) {
+        throw new Error(
+          "The selected provider conversation is no longer available for this repository. Refresh and try again."
+        );
       }
-      await this.bindings.mapProviderSession({
+      current = this.resolveCurrentBindingSession(original);
+      this.assertConversationMatchesSession(current, verified);
+      const mapping = {
         workspaceId: current.workspaceId,
         paneId: current.paneId,
         surfaceId: current.surfaceId,
-        provider: conversation.provider,
-        providerSessionId: conversation.sessionId,
+        provider: verified.provider,
+        providerSessionId: verified.sessionId,
         matchedAt: new Date().toISOString()
-      });
+      };
+      const matched = await this.bindings.mapProviderSessionIfUnchanged(
+        mapping,
+        expectedMapping,
+        expectedBinding,
+        () => {
+          if (this.disposed) return false;
+          const guardedCurrent = this.resolveCurrentBindingSession(original);
+          this.expectedTaskBinding(original, guardedCurrent);
+          this.assertConversationMatchesSession(guardedCurrent, verified);
+          return true;
+        }
+      );
+      if (this.disposed) return;
+      if (!matched) {
+        throw new Error(
+          "The saved provider conversation or task binding changed on disk while the picker was open. Reload the plugin and try again."
+        );
+      }
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
       this.recomputeSessions();
-      new Notice(`Matched this cmux surface to “${conversation.title}”.`);
+      this.scheduleAutomaticTaskTracking();
+      new Notice(`Matched this cmux surface to “${verified.title}”.`);
     } catch (error) {
+      if (this.disposed) return;
       new Notice(readableError(error));
       throw error;
     }
   }
 
+  private assertConversationMatchesSession(
+    current: LiveSession,
+    conversation: ProviderSessionMetadata
+  ): void {
+    if (
+      current.currentDirectory === null ||
+      current.currentDirectory !== conversation.cwd ||
+      current.provider.provider !== conversation.provider
+    ) {
+      throw new Error("The cmux surface no longer matches the selected provider conversation.");
+    }
+    const exactLiveIdentity = current.provider.source === "provider-session-mapping"
+      ? null
+      : exactTrackableIdentity(current);
+    if (
+      exactLiveIdentity !== null &&
+      normalizeCanonicalUuid(conversation.sessionId) !== exactLiveIdentity.sessionId
+    ) {
+      throw new Error("The selected conversation conflicts with the exact live provider session.");
+    }
+  }
+
   private resolveCurrentSession(original: LiveSession): LiveSession {
-    const current = this.store
-      .getState()
-      .sessions.find(
-        (candidate) =>
-          candidate.workspaceId === original.workspaceId &&
-          candidate.paneId === original.paneId &&
-          candidate.surfaceId === original.surfaceId
-      );
+    const current = this.findCurrentSession(original);
     if (!current) throw new Error("The exact cmux surface no longer exists. Refresh and try again.");
     return current;
   }
 
+  private findCurrentSession(original: LiveSession): LiveSession | null {
+    return this.store
+      .getState()
+      .sessions.find(
+        (candidate) =>
+          canonicalUuidEquals(candidate.workspaceId, original.workspaceId) &&
+          canonicalUuidEquals(candidate.paneId, original.paneId) &&
+          canonicalUuidEquals(candidate.surfaceId, original.surfaceId)
+      ) ?? null;
+  }
+
+  private expectedProviderSessionMapping(original: LiveSession): ProviderSessionMapping | null {
+    const mapping = this.bindings
+      .listProviderSessions()
+      .find(
+        (candidate) =>
+          canonicalUuidEquals(candidate.workspaceId, original.workspaceId) &&
+          canonicalUuidEquals(candidate.paneId, original.paneId) &&
+          canonicalUuidEquals(candidate.surfaceId, original.surfaceId)
+      ) ?? null;
+    if (original.provider.source !== "provider-session-mapping") {
+      if (mapping !== null) {
+        throw new Error("The saved provider conversation changed while the picker was open. Refresh and try again.");
+      }
+      return null;
+    }
+    if (
+      mapping === null ||
+      original.provider.sessionId === null ||
+      mapping.provider !== original.provider.provider ||
+      !canonicalUuidEquals(mapping.providerSessionId, original.provider.sessionId)
+    ) {
+      throw new Error("The saved provider conversation changed while the picker was open. Refresh and try again.");
+    }
+    return mapping;
+  }
+
+  private resolveCurrentBindingSession(original: LiveSession): LiveSession {
+    const current = this.resolveCurrentSession(original);
+    const provider = original.provider.provider;
+    const originalSessionId =
+      provider === "claude" || provider === "codex"
+        ? normalizeCanonicalUuid(original.provider.sessionId ?? "")
+        : null;
+    const currentProvider = current.provider.provider;
+    const currentSessionId =
+      currentProvider === "claude" || currentProvider === "codex"
+        ? normalizeCanonicalUuid(current.provider.sessionId ?? "")
+        : null;
+    if (originalSessionId === null) {
+      if (currentSessionId !== null) {
+        throw new Error("The exact provider conversation changed before the task binding was updated.");
+      }
+      return current;
+    }
+
+    if (current.provider.provider !== provider || currentSessionId !== originalSessionId) {
+      throw new Error("The exact provider conversation changed before the task binding was updated.");
+    }
+    return current;
+  }
+
+  private expectedTaskBinding(
+    original: LiveSession,
+    current: LiveSession
+  ): BindingRecord | null {
+    const binding = this.bindings.findBySurface(current.surfaceId);
+    if (original.linkedTaskId === null) {
+      if (
+        binding !== null &&
+        !bindingConflictsWithExactProviderIdentity(binding, current)
+      ) {
+        throw new Error("The task binding changed while the picker was open. Refresh and try again.");
+      }
+      return binding;
+    }
+    if (
+      binding === null ||
+      !canonicalUuidEquals(binding.taskId, original.linkedTaskId) ||
+      !canonicalUuidEquals(binding.workspaceId, current.workspaceId) ||
+      !canonicalUuidEquals(binding.paneId, current.paneId) ||
+      !canonicalUuidEquals(binding.surfaceId, current.surfaceId)
+    ) {
+      throw new Error("The task binding changed while the picker was open. Refresh and try again.");
+    }
+    return binding;
+  }
+
+  private resolveCurrentTask(original: TaskRecord): TaskRecord {
+    const current = this.requireTaskRepository().findById(original.taskId);
+    if (current.file !== original.file) {
+      throw new Error("The selected task changed before the session could be attached. Refresh and try again.");
+    }
+    return current;
+  }
+
+  private async attachTaskInternal(session: LiveSession, task: TaskRecord): Promise<void> {
+    if (this.disposed) return;
+    const current = this.resolveCurrentBindingSession(session);
+    const expectedBinding = this.expectedTaskBinding(session, current);
+    const currentTask = this.resolveCurrentTask(task);
+    validateBindingIdentity(currentTask.taskId, current);
+    const attachedAt = new Date().toISOString();
+    const result = await this.bindings.attachIfSurfaceUnchanged(
+      {
+        taskId: currentTask.taskId,
+        workspaceId: current.workspaceId,
+        paneId: current.paneId,
+        surfaceId: current.surfaceId,
+        provider: current.provider.provider,
+        providerSessionId: current.provider.sessionId,
+        taskRunCountBaseline: currentTask.runCount,
+        attachedAt
+      },
+      expectedBinding,
+      () => {
+        if (this.disposed) return false;
+        this.resolveCurrentBindingSession(current);
+        this.resolveCurrentTask(currentTask);
+        return true;
+      }
+    );
+    if (this.disposed) return;
+    if (result === null) {
+      throw new Error(
+        "The task binding changed on disk while the picker was open. Reload the plugin and try again."
+      );
+    }
+    this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
+    try {
+      await this.persistAttachedRunCount(currentTask, result.isNewRun);
+      await this.waitForSettingsUpdates();
+      if (this.disposed) return;
+      this.store.update({ tasks: this.requireTaskRepository().list() });
+    } catch (error) {
+      if (this.disposed) return;
+      new Notice(`Session attached, but run count was not updated: ${readableError(error)}`);
+    }
+    this.recomputeSessions();
+  }
+
+  private async persistAttachedRunCount(
+    task: TaskRecord,
+    isNewRun: boolean
+  ): Promise<number> {
+    const repository = this.requireTaskRepository();
+    const taskFolder = this.settings?.taskFolder;
+    if (taskFolder === undefined) throw new Error("Task settings are unavailable.");
+    // The vault API may reject before or after applying a frontmatter edit.
+    // Reconcile every successful attachment to its durable floor so a reused
+    // run can heal an earlier failed note update. Only a genuinely new run may
+    // contribute the task snapshot's next count. The repository keeps both
+    // write attempts pinned to the same exact task file and task folder.
+    const runCounts = await this.bindings.loadDurableRunCountFloorsForRepair(taskFolder);
+    if (this.disposed) return task.runCount;
+    if (runCounts === null) {
+      throw new Error("Run history changed on disk and could not be safely reconciled.");
+    }
+    const recordedRuns = runCounts.get(task.taskId) ?? 0;
+    const expected = isNewRun
+      ? Math.min(1_000_000, Math.max(task.runCount + 1, recordedRuns))
+      : recordedRuns;
+    if (expected <= task.runCount) return task.runCount;
+    const repaired = await repository.ensureRunCountAtLeastWithRecovery(
+      task,
+      expected,
+      () => !this.disposed
+    );
+    return repaired ?? task.runCount;
+  }
+
   private handleError(error: unknown, connectionFailure = true): void {
-    if (isAbort(error)) return;
+    if (this.disposed || isAbort(error)) return;
     const message = readableError(error);
     if (!connectionFailure) {
       this.store.update({ error: message });
@@ -801,6 +1989,49 @@ export class AgentCockpitController {
     if (this.taskRepository === null) throw new Error("Task repository is not initialized.");
     return this.taskRepository;
   }
+}
+
+function providerSurfaceIdentities(snapshot: CmuxSnapshot): ProviderSurfaceIdentity[] {
+  return snapshot.windows.flatMap((window) =>
+    window.workspaces.flatMap((workspace) =>
+      workspace.panes.flatMap((pane) =>
+        pane.surfaces.map((surface) => ({
+          key: surfaceKey({ workspaceId: workspace.id, surfaceId: surface.id }),
+          surfaceTitle: surface.title,
+          surfaceType: surface.type,
+          currentDirectory: workspace.currentDirectory
+        }))
+      )
+    )
+  );
+}
+
+function previewSurfaceSignature(session: LiveSession): string {
+  const providerSessionId =
+    (session.provider.provider === "claude" || session.provider.provider === "codex") &&
+    session.provider.sessionId !== null
+      ? normalizeCanonicalUuid(session.provider.sessionId)
+      : null;
+  return JSON.stringify([
+    session.surfaceTitle,
+    session.surfaceType,
+    session.currentDirectory,
+    providerSessionId === null ? null : session.provider.provider,
+    providerSessionId
+  ]);
+}
+
+function normalizeProviderSessionKey(identityKey: string): string | null {
+  const separator = identityKey.indexOf(":");
+  if (separator < 1) return null;
+  const provider = identityKey.slice(0, separator);
+  if (provider !== "claude" && provider !== "codex") return null;
+  const providerSessionId = normalizeCanonicalUuid(identityKey.slice(separator + 1));
+  return providerSessionId === null ? null : `${provider}:${providerSessionId}`;
+}
+
+function automaticRunCountError(error: unknown): Error {
+  return new Error(`The automatic task run count could not be updated: ${readableError(error)}`);
 }
 
 function freshHealth(checkedAt: number, message: string): SourceHealth {

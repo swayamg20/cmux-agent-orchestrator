@@ -16,13 +16,12 @@ Run from the repository root:
 ```bash
 npm ci
 npm run check
-CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX=1 npm test -- tests/smoke/cmux.live.test.ts
-CMUX_AGENT_ORCHESTRATOR_LIVE_PROVIDERS=1 npm test -- tests/smoke/provider-metadata.live.test.ts
-CMUX_AGENT_ORCHESTRATOR_LIVE_IDENTITY=1 npm test -- tests/smoke/automatic-identity.live.test.ts
-npm run validate:release -- --tag 0.2.0
+npm run test:live:read-only
+RELEASE_VERSION="$(node -p "require('./manifest.json').version")"
+npm run validate:release -- --tag "$RELEASE_VERSION"
 ```
 
-The live smoke tests are read-only. They resolve current cmux topology, notifications, canonical UUIDs, three bounded lines from one selected surface, bounded local provider-title metadata, and exact automatic provider-to-surface identity where local evidence permits. They do not focus a surface, send terminal input, resume a conversation, or modify provider files.
+The live smoke tests are read-only. They resolve current cmux topology, notifications, canonical UUIDs, three bounded lines from one selected surface, bounded local provider-title metadata, and exact automatic provider-to-surface identity where local evidence permits. The automatic-tracking smoke persists its generated task Markdown and binding data only to in-memory doubles, supplies blank terminal previews, and fails if focus is attempted. The smoke tests do not send terminal input, resume a conversation, modify provider files, or write to a real vault.
 
 ## 3. Vault-local verification
 
@@ -42,8 +41,16 @@ Verify manually:
 - A bounded preview loads on demand and disappears after plugin reload.
 - A detected agent can be matched to an exact local provider conversation; its title survives reload while raw title metadata remains absent from `data.json`.
 - Two same-repository surfaces can be assigned different provider conversations, and assigning one conversation to two surfaces fails closed.
+- With automatic tracking enabled, each uniquely resolved Claude or Codex conversation creates exactly one neutral Active Work task; conversation and terminal titles are absent from the generated Markdown.
+- Refreshing and reloading Obsidian do not duplicate an automatically tracked task or run, and disabling automatic tracking prevents new tasks without changing existing tasks or agents.
+- Manually detaching an automatically tracked run preserves the task and run history and does not silently recreate the binding after Refresh.
+- If the same exact provider conversation is deliberately resumed on one new cmux surface after its previous full target disappears, Refresh reconnects the existing task without creating another task or run. Skip this controlled test when preserving current session placement takes priority.
 - Creating a task and attaching a session persists through reload without changing the agent.
+- Moving or deleting a linked task note updates the Work board and missing-task attention state without requiring an Obsidian restart.
 - Moving a task changes workflow only.
+- A rejected workflow move returns its selector to the persisted workflow state instead of displaying an unsaved value.
+- With structured lifecycle evidence available, lowering the stale-working threshold and saving settings can surface an aged Working session in Attention without moving its task; Idle and State unknown sessions remain unflagged.
+- A structured or notification-backed finished turn appears in Attention for review without moving its task to Review or Done.
 - Focus in cmux targets a user-approved development surface and sends no text.
 - Disabling and re-enabling the plugin leaves all cmux sessions running.
 

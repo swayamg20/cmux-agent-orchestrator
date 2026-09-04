@@ -1,10 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { homedir } from "node:os";
 import path from "node:path";
-import { readFile, stat } from "node:fs/promises";
 import { clearTimeout as cancelTimer, setTimeout as startTimer } from "node:timers";
 import { ProcessExecutionError, SafeProcessRunner } from "../../cmux/SafeProcessRunner";
 import { isCanonicalUuid } from "../../security/identifiers";
+import { resolveProviderDataRoot } from "../providerDataRoot";
+import { readBoundedUtf8File } from "../readBoundedFile";
 import { sanitizeProviderTitle } from "../titleSanitizer";
 import type {
   ClaudeProcessSession,
@@ -23,13 +24,25 @@ const REGISTRY_FILE_LIMIT = 64 * 1024;
 const FORCE_KILL_AFTER_MS = 250;
 
 export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
-  private readonly pipelineChildren = new Set<ChildProcess>();
+  private readonly cancelPipelineByChild = new Map<ChildProcess, () => void>();
+  private readonly claudeRoot: string;
+  private readonly codexHome: string;
   private disposed = false;
 
   constructor(
     private readonly runner = new SafeProcessRunner(),
-    private readonly userHome = homedir()
-  ) {}
+    private readonly userHome = homedir(),
+    private readonly isProcessLive: (pid: number) => boolean = processIsLive
+  ) {
+    this.claudeRoot = resolveProviderDataRoot(
+      process.env.CLAUDE_CONFIG_DIR,
+      path.join(this.userHome, ".claude")
+    );
+    this.codexHome = resolveProviderDataRoot(
+      process.env.CODEX_HOME,
+      path.join(this.userHome, ".codex")
+    );
+  }
 
   async listForegroundProviderProcesses(signal?: AbortSignal): Promise<ProviderProcess[]> {
     const result = await this.runner.run("/bin/ps", PROCESS_LIST_COMMAND, {
@@ -37,7 +50,7 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
       maxStdoutBytes: PROCESS_LIST_LIMIT,
       maxStderrBytes: DIAGNOSTIC_LIMIT,
       signal,
-      environment: { ...process.env, LC_ALL: "C", TZ: "UTC" }
+      environment: localIdentityEnvironment({ LC_ALL: "C", TZ: "UTC" })
     });
     return decodeProviderProcesses(result.stdout).filter(
       (candidate) =>
@@ -60,12 +73,18 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
     assertPid(processRecord.pid);
     if (processRecord.provider !== "claude") return null;
     if (!path.isAbsolute(cwd) || cwd.includes("\0")) return null;
-    const filename = path.join(this.userHome, ".claude", "sessions", `${processRecord.pid}.json`);
+    if (this.disposed) return null;
+    const filename = path.join(this.claudeRoot, "sessions", `${processRecord.pid}.json`);
     try {
-      const details = await stat(filename);
-      if (!details.isFile() || details.size > REGISTRY_FILE_LIMIT) return null;
-      const content = await readFile(filename, { encoding: "utf8", signal });
-      return decodeClaudeProcessSession(JSON.parse(content) as unknown, processRecord, cwd);
+      const snapshot = await readBoundedUtf8File(filename, REGISTRY_FILE_LIMIT, signal);
+      if (!snapshot || this.disposed) return null;
+      const session = decodeClaudeProcessSession(
+        JSON.parse(snapshot.content) as unknown,
+        processRecord,
+        cwd
+      );
+      if (session === null || !this.isProcessLive(processRecord.pid) || this.disposed) return null;
+      return session;
     } catch (error) {
       if (isAbort(error)) throw error;
       return null;
@@ -74,7 +93,7 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
 
   async readCodexWriterSessionIds(pid: number, signal?: AbortSignal): Promise<string[]> {
     assertPid(pid);
-    const lockDirectory = path.join(this.userHome, ".codex", "thread-writer-locks");
+    const lockDirectory = path.join(this.codexHome, "thread-writer-locks");
     try {
       const result = await this.runner.run(
         "/usr/sbin/lsof",
@@ -84,7 +103,7 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
           maxStdoutBytes: DIAGNOSTIC_LIMIT,
           maxStderrBytes: DIAGNOSTIC_LIMIT,
           signal,
-          environment: { ...process.env, LC_ALL: "C" }
+          environment: localIdentityEnvironment({ LC_ALL: "C" })
         }
       );
       return decodeWriterLockSessionIds(result.stdout, lockDirectory);
@@ -103,14 +122,14 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
   dispose(): void {
     this.disposed = true;
     this.runner.dispose();
-    for (const child of this.pipelineChildren) terminateOwnedChild(child);
-    this.pipelineChildren.clear();
+    for (const cancel of new Set(this.cancelPipelineByChild.values())) cancel();
+    this.cancelPipelineByChild.clear();
   }
 
   private readSurfaceIdPipeline(pid: number, signal?: AbortSignal): Promise<string | null> {
     return new Promise((resolve) => {
       const ps = spawn("/bin/ps", ["eww", "-p", String(pid), "-o", "command="], {
-        env: { ...process.env, LC_ALL: "C" },
+        env: localIdentityEnvironment({ LC_ALL: "C" }),
         shell: false,
         stdio: ["ignore", "pipe", "ignore"],
         windowsHide: true
@@ -119,33 +138,41 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
         "/usr/bin/grep",
         ["-Eo", "CMUX_SURFACE_ID=[0-9A-Fa-f-]{36}"],
         {
-          env: { ...process.env, LC_ALL: "C" },
+          env: localIdentityEnvironment({ LC_ALL: "C" }),
           shell: false,
           stdio: ["pipe", "pipe", "ignore"],
           windowsHide: true
         }
       );
-      this.pipelineChildren.add(ps);
-      this.pipelineChildren.add(grep);
-
       const chunks: Buffer[] = [];
       let bytes = 0;
       let settled = false;
+      let timer: ReturnType<typeof startTimer> | null = null;
       const finish = (value: string | null): void => {
         if (settled) return;
         settled = true;
-        cancelTimer(timer);
+        if (timer !== null) cancelTimer(timer);
         signal?.removeEventListener("abort", abort);
+        if (ps.stdout && grep.stdin) ps.stdout.unpipe(grep.stdin);
+        ps.stdout?.destroy();
+        grep.stdin?.destroy();
+        grep.stdout?.destroy();
         terminateOwnedChild(ps);
         terminateOwnedChild(grep);
-        this.pipelineChildren.delete(ps);
-        this.pipelineChildren.delete(grep);
+        this.cancelPipelineByChild.delete(ps);
+        this.cancelPipelineByChild.delete(grep);
         resolve(value);
       };
       const abort = (): void => finish(null);
-      const timer = startTimer(() => finish(null), PROCESS_TIMEOUT_MS);
-      if (signal?.aborted) finish(null);
-      else signal?.addEventListener("abort", abort, { once: true });
+      const cancel = (): void => finish(null);
+      timer = startTimer(() => finish(null), PROCESS_TIMEOUT_MS);
+      this.cancelPipelineByChild.set(ps, cancel);
+      this.cancelPipelineByChild.set(grep, cancel);
+      if (signal?.aborted) {
+        finish(null);
+        return;
+      }
+      signal?.addEventListener("abort", abort, { once: true });
       grep.stdout?.on("data", (chunk: Buffer) => {
         bytes += chunk.byteLength;
         if (bytes > 4_096) {
@@ -170,6 +197,15 @@ export class MacOsProcessIdentitySource implements LocalProcessIdentitySource {
         finish(ids.size === 1 ? [...ids][0]! : null);
       });
     });
+  }
+}
+
+function processIsLive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -263,6 +299,15 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function isAbort(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function localIdentityEnvironment(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("CMUX_"))
+    ),
+    ...overrides
+  };
 }
 
 function terminateOwnedChild(child: ChildProcess): void {

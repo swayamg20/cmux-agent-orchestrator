@@ -4,6 +4,86 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-05
+
+### Added
+
+- Automatically create one neutral Active Work task for each newly discovered, uniquely resolved Claude or Codex provider session.
+- Reconnect an exact provider conversation to its existing task when its previous cmux surface has disappeared, without creating another run.
+- Show the memory-only provider conversation title on its live Work card while keeping automatically written Markdown free of conversation and terminal titles.
+- Add a default-on setting to disable creation of new automatic tasks without changing existing tasks or running agents.
+- Surface a missing linked Markdown task as an actionable attention item without deleting the binding or recreating the note.
+- Surface a conservative stale-working attention signal when structured lifecycle evidence remains Working beyond a configurable inactivity threshold.
+- Surface structured or notification-backed finished agent output in Attention for human review without moving the durable task.
+
+### Fixed
+
+- Treat an exact read-back of an ambiguously failed plugin-data save as committed, preventing retries from creating duplicate run records.
+- Always retain the current Mac's machine-scoped bindings when bounded synced data contains many other machine namespaces.
+- Refuse to reuse a persisted run that belongs to another task, repairing the binding with a new task-owned run while retaining history.
+- Ignore task-note vault events until plugin settings finish loading, preventing startup races from throwing before initialization.
+- Keep a successful task-note write authoritative while Obsidian's metadata index catches up, preventing Kanban state or run counts from snapping backward.
+- Serialize overlapping settings transitions and pause automatic tracking until the latest save settles, preventing a superseded enable request from creating an unwanted task after opt-out.
+- Cancel queued automatic run-count repairs before they modify Markdown when tracking authority has been revoked.
+- Ignore delayed settings and task-reload continuations after plugin unload so disposed controller state stays cleared.
+- Stop automatic task and binding continuations after plugin unload before they can write run counts, republish cleared state, or show late notices.
+- Stop explicit task and conversation continuations after plugin unload before they can start follow-up writes, republish cleared state, open stale UI, or show late notices.
+- Keep disposed controllers inert when initialization, direct refreshes, or queued settings changes finish after plugin unload.
+- Suppress late focus, preview, connection-test, and clipboard UI effects after plugin unload.
+- Suppress plugin-level initialization and queued task-reload errors that arrive after plugin unload.
+- Stop an in-flight view activation from revealing a prepared tab or reporting a late workspace error after plugin unload.
+- Suppress late Settings save and connection-test notices and detached-button updates after plugin unload.
+- Hide every duplicated Markdown task identity from the Work board and discard stale write-through identity when indexed frontmatter proves that the same file changed IDs.
+- Recover an ambiguously failed task-note creation only when exact Markdown read-back proves that the intended file was written.
+- Recover an ambiguously failed legacy-data migration only when exact plugin-data read-back proves that the normalized import persisted.
+- Prevent a malformed cross-task binding from rewriting or clearing another task's provider-run identity.
+- Drop conflicting persisted binding or run identity claims instead of resolving ambiguous synced records by array order.
+- Discard contradictory exact conversation claims across task bindings and saved surface mappings while retaining run history.
+- Refuse a conversation-picker selection that contradicts a fresh, exact cmux or provider-process session identity.
+- Discard cached or in-flight terminal previews when a surface identity, exact provider conversation, or cmux connection changes.
+- Invalidate heuristic provider labels when a live cmux UUID changes title, surface type, or working directory, and ignore late preview evidence captured before that change.
+- Invalidate short-lived task write-through records on vault change, rename, or delete events so manual Markdown schema or identity edits become authoritative immediately.
+- Reconcile a new run count idempotently after a transient Markdown write failure, avoiding both a missing count and a duplicate increment when the vault write outcome is ambiguous.
+- Keep newer provider conversation metadata authoritative when overlapping local reads finish out of order, and prevent an in-flight read from undoing an explicit Forget action.
+- Retry provider classification on a later refresh when a bounded cmux preview read fails transiently, without repeatedly polling successful but inconclusive shell previews.
+- Reject previews that race with plugin unload, and recover scheduler capacity when a preview loader throws synchronously.
+- Serialize durable task-note mutations so automatic tracking and manual workflow or run-count writes cannot race, while keeping later writes usable after a failure.
+- Keep retrying recoverable automatic-tracking writes without repeating the same failure notice on every reconciliation, while reporting the error again if it recurs after recovery.
+- Require a fresh cmux topology before automatic binding writes, cancel stale identity work after topology failures, and resume safely after the next successful refresh.
+- Prevent a new exact provider session that reuses an existing cmux surface from inheriting the previous session's task binding; retain the earlier task and run history while creating a separate automatic task for the new session.
+- Let an explicit task attachment win atomically if it races with automatic tracking, instead of allowing background work to replace the user's binding.
+- Refuse to detach a task from a stale session card when that cmux surface has since been attached to a different task.
+- Refuse to forget a provider conversation from a stale session card when that surface has since been matched to a different conversation.
+- Refuse to save a conversation choice from a stale picker when that surface's manual match changed while the picker was open.
+- Refuse to save a task choice from a stale picker when the surface's task binding changed while the picker was open.
+- Refuse to overwrite a newer Kanban workflow decision from a stale task card.
+- Report a failed Detach action as an Obsidian notice without leaking an unhandled promise rejection into the console.
+- Preserve the newest proven activity timestamp when an older structured lifecycle event arrives after a terminal preview observation.
+- Refresh durable task state when a task note or containing folder is moved or deleted, so stale bindings become visible immediately.
+- Restore the workflow selector to its persisted value when a stale or failed card move is rejected.
+- Report a stale Focus click safely when the cmux connection is unavailable instead of leaking an unhandled UI rejection.
+- Preserve a newly created task and report one explicit partial-success notice if its session attachment cannot be persisted.
+- Report a stale Preview click safely when cmux is unavailable instead of leaking an unhandled UI rejection.
+- Let a user attach a newly proven provider conversation after cmux reuses an old surface, while retaining the previous task and run history.
+- Surface exact provider-conversation replacement as an Attention item when a persisted task binding still points at the reused surface.
+- Remove the obsolete v0.1 label from rejected-action messages so the security policy remains accurate across releases.
+- Report ribbon and command-palette view failures as notices instead of leaking rejected workspace promises into the console.
+- Report connection-test failures from both the main view and settings without leaking rejected promises into the console.
+
+### Security
+
+- Bound the number of persisted binding, run, and provider-session candidates examined during startup, including malformed synced data.
+- Re-resolve the complete live cmux tuple and exact provider identity before persisting each automatic binding.
+- Fail closed for ambiguous, duplicate, heuristic-only, invalid, shell, and unknown identities, and retain detached run history as a durable no-recreate marker.
+- Serialize automatic tracking, normalize canonical provider UUID casing, and derive stable task IDs so refreshes, reloads, source-format differences, and recoverable partial writes cannot duplicate a provider run.
+- Discard all conflicting persisted provider-session mappings instead of trusting array order, while preserving the user's durable task notes.
+- Ignore saved identity claims whose complete canonical cmux tuple is absent so stale surfaces cannot shadow fresh exact evidence.
+- Canonicalize cmux, task, binding, run, and provider UUID casing across CLI, process, Markdown, and plugin-data boundaries so case-only representations cannot bypass uniqueness or produce false missing/focus results.
+- Preserve the strongest agreeing identity proof when newer cmux detection and exact local process evidence describe the same provider session.
+- Relocate a stale binding only when its complete old cmux target is absent and one unique high-confidence live surface proves the same canonical provider session.
+- Require workspace, pane, and surface UUID agreement before projecting a task binding or considering its cmux target present.
+- Require high-confidence exact provider identity before treating a same-surface task binding as stale or replaceable.
+
 ## [0.2.0] - 2026-09-03
 
 ### Added

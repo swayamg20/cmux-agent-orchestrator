@@ -1,6 +1,8 @@
 import type { BindingRecord } from "../bindings/types";
+import { normalizeCanonicalUuid } from "../security/identifiers";
 import type { AttentionItem, AttentionReason, LiveSession } from "../state/types";
 import type { TaskRecord } from "../tasks/TaskSchema";
+import { bindingConflictsWithExactProviderIdentity } from "../tracking/AutomaticTaskTracking";
 
 const REVIEW_PATTERN = /\b(?:ready for review|review requested|completed|finished successfully|implementation complete)\b/i;
 
@@ -11,12 +13,13 @@ export class AttentionEngine {
     sessions: readonly LiveSession[],
     tasks: readonly TaskRecord[],
     bindings: readonly BindingRecord[],
-    now: number
+    now: number,
+    staleAfterMs: number
   ): AttentionItem[] {
     const items = new Map<string, AttentionItem>();
     const taskById = new Map(tasks.map((task) => [task.taskId, task]));
     const sessionByTarget = new Map(
-      sessions.map((session) => [`${session.workspaceId}:${session.surfaceId}`, session] as const)
+      sessions.map((session) => [exactTargetKey(session), session] as const)
     );
     const firstSessionByTask = new Map<string, LiveSession>();
     for (const session of sessions) {
@@ -53,6 +56,29 @@ export class AttentionEngine {
           confidence: session.assessment.confidence,
           firstObservedAt: firstSeen
         });
+      } else if (
+        session.assessment.executionPhase === "turn-finished" &&
+        (session.assessment.coverage === "structured" || session.assessment.coverage === "partial")
+      ) {
+        add(session.key, session, task, {
+          kind: "review-ready",
+          label: "Agent output may be ready for review",
+          detail: session.assessment.explanation,
+          severity: 3,
+          confidence: session.assessment.confidence,
+          firstObservedAt: firstSeen
+        });
+      }
+
+      if (isStaleWorkingSession(session, now, staleAfterMs)) {
+        add(session.key, session, task, {
+          kind: "stale",
+          label: "Working state may be stale",
+          detail: `No activity has been observed for at least ${formatDuration(staleAfterMs)} while structured lifecycle evidence still reports Working. The task workflow was not changed.`,
+          severity: 2,
+          confidence: lowerConfidence(session.assessment.confidence),
+          firstObservedAt: firstSeen
+        });
       }
 
       const unread = session.notifications.filter((notification) => !notification.isRead);
@@ -61,9 +87,11 @@ export class AttentionEngine {
         session.assessment.executionPhase !== "failed" &&
         session.assessment.executionPhase !== "waiting"
       ) {
-        const review = unread.some((notification) =>
-          REVIEW_PATTERN.test(`${notification.title}\n${notification.subtitle}\n${notification.body}`)
-        );
+        const review =
+          session.assessment.executionPhase === "turn-finished" ||
+          unread.some((notification) =>
+            REVIEW_PATTERN.test(`${notification.title}\n${notification.subtitle}\n${notification.body}`)
+          );
         add(session.key, session, task, {
           kind: review ? "review-ready" : "unread-notification",
           label: review ? "Output may be ready for review" : "Unread cmux notification",
@@ -76,10 +104,38 @@ export class AttentionEngine {
     }
 
     for (const binding of bindings) {
-      const exists = sessionByTarget.has(`${binding.workspaceId}:${binding.surfaceId}`);
-      if (exists) continue;
-      const key = `missing:${binding.workspaceId}:${binding.surfaceId}`;
-      add(key, null, taskById.get(binding.taskId) ?? null, {
+      const bindingKey = exactTargetKey(binding);
+      const session = sessionByTarget.get(bindingKey) ?? null;
+      const boundTask = taskById.get(binding.taskId) ?? null;
+      const key = session?.key ?? `missing:${bindingKey}`;
+      if (boundTask === null) {
+        add(key, session, null, {
+          kind: "linked-task-missing",
+          label: "Linked task note missing",
+          detail: "The saved binding remains, but its Markdown task is unavailable. Attach or create a replacement task explicitly.",
+          severity: 3,
+          confidence: "high",
+          firstObservedAt: this.seenAt(key, now)
+        });
+      }
+      if (session !== null) {
+        if (
+          boundTask !== null &&
+          bindingConflictsWithExactProviderIdentity(binding, session)
+        ) {
+          const taskKey = `task:${binding.taskId}`;
+          add(taskKey, null, boundTask, {
+            kind: "linked-session-changed",
+            label: "Linked agent run changed",
+            detail: "This cmux surface now proves a different provider conversation. The durable task and previous run remain unchanged; attach the new run explicitly or enable automatic tracking.",
+            severity: 3,
+            confidence: "high",
+            firstObservedAt: this.seenAt(taskKey, now)
+          });
+        }
+        continue;
+      }
+      add(key, null, boundTask, {
         kind: "linked-surface-missing",
         label: "Linked surface disappeared",
         detail: "The cmux surface is absent. The task remains unchanged and provider exit is not proven.",
@@ -124,7 +180,41 @@ export class AttentionEngine {
   }
 }
 
+function exactTargetKey(target: {
+  workspaceId: string;
+  paneId: string;
+  surfaceId: string;
+}): string {
+  return [target.workspaceId, target.paneId, target.surfaceId]
+    .map((id) => normalizeCanonicalUuid(id) ?? id)
+    .join(":");
+}
+
 function excerpt(value: string): string {
   const oneLine = value.replace(/\s+/g, " ").trim();
   return oneLine.length > 180 ? `${oneLine.slice(0, 177)}...` : oneLine;
+}
+
+function isStaleWorkingSession(session: LiveSession, now: number, staleAfterMs: number): boolean {
+  const lastActivityAt = session.assessment.lastActivityAt;
+  return (
+    session.assessment.executionPhase === "working" &&
+    session.assessment.coverage === "structured" &&
+    lastActivityAt !== null &&
+    Number.isFinite(staleAfterMs) &&
+    staleAfterMs > 0 &&
+    now >= lastActivityAt &&
+    now - lastActivityAt >= staleAfterMs
+  );
+}
+
+function lowerConfidence(confidence: LiveSession["assessment"]["confidence"]): LiveSession["assessment"]["confidence"] {
+  return confidence === "high" ? "medium" : "low";
+}
+
+function formatDuration(durationMs: number): string {
+  const minutes = Math.round(durationMs / 60_000);
+  if (minutes < 60 || minutes % 60 !== 0) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = minutes / 60;
+  return `${hours} hour${hours === 1 ? "" : "s"}`;
 }

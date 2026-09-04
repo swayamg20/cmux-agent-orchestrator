@@ -1,7 +1,9 @@
 import { homedir } from "node:os";
 import path from "node:path";
-import { open, readdir, readFile, stat } from "node:fs/promises";
+import { open, opendir, stat } from "node:fs/promises";
 import { isCanonicalUuid } from "../security/identifiers";
+import { readBoundedUtf8File } from "./readBoundedFile";
+import { resolveProviderDataRoot } from "./providerDataRoot";
 import { sanitizeProviderTitle } from "./titleSanitizer";
 import {
   ProviderMetadataError,
@@ -11,6 +13,7 @@ import {
 } from "./types";
 
 const MAX_ACTIVE_SESSION_FILES = 200;
+const MAX_ACTIVE_SESSION_ENTRIES = 1_000;
 const MAX_SESSION_FILE_BYTES = 64 * 1024;
 const TITLE_EDGE_BYTES = 128 * 1024;
 
@@ -23,7 +26,12 @@ interface ClaudeTitleMetadata {
 export class ClaudeSessionSource implements ProviderSessionSource {
   readonly provider = "claude" as const;
 
-  constructor(private readonly claudeRoot = path.join(homedir(), ".claude")) {}
+  constructor(
+    private readonly claudeRoot = resolveProviderDataRoot(
+      process.env.CLAUDE_CONFIG_DIR,
+      path.join(homedir(), ".claude")
+    )
+  ) {}
 
   async list(cwd: string, signal?: AbortSignal): Promise<ProviderSessionMetadata[]> {
     assertAbsoluteCwd(cwd);
@@ -66,29 +74,51 @@ export class ClaudeSessionSource implements ProviderSessionSource {
     signal?: AbortSignal
   ): Promise<ProviderSessionMetadata[]> {
     const directory = path.join(this.claudeRoot, "sessions");
-    let entries;
+    let handle;
     try {
-      entries = await readdir(directory, { withFileTypes: true });
+      throwIfAborted(signal);
+      handle = await opendir(directory);
     } catch (error) {
+      if (isAbort(error)) throw error;
       if (isMissing(error)) return [];
       throw new ProviderMetadataError("Claude session metadata is unavailable.", error);
     }
 
     const sessions: ProviderSessionMetadata[] = [];
-    for (const entry of entries.slice(0, MAX_ACTIVE_SESSION_FILES)) {
-      throwIfAborted(signal);
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const filename = path.join(directory, entry.name);
-      try {
-        const details = await stat(filename);
-        if (!details.isFile() || details.size > MAX_SESSION_FILE_BYTES) continue;
-        const content = await readFile(filename, { encoding: "utf8", signal });
-        const decoded = decodeClaudeSession(JSON.parse(content) as unknown, cwd, details.mtimeMs);
-        if (decoded) sessions.push(decoded);
-      } catch (error) {
-        if (isAbort(error)) throw error;
-        // One stale or malformed provider registry file must not hide healthy sessions.
+    let entriesExamined = 0;
+    let sessionFilesExamined = 0;
+    try {
+      while (
+        entriesExamined < MAX_ACTIVE_SESSION_ENTRIES &&
+        sessionFilesExamined < MAX_ACTIVE_SESSION_FILES
+      ) {
+        throwIfAborted(signal);
+        const entry = await handle.read();
+        throwIfAborted(signal);
+        if (entry === null) break;
+        entriesExamined += 1;
+        if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+        sessionFilesExamined += 1;
+        const filename = path.join(directory, entry.name);
+        try {
+          const snapshot = await readBoundedUtf8File(filename, MAX_SESSION_FILE_BYTES, signal);
+          if (!snapshot) continue;
+          const decoded = decodeClaudeSession(
+            JSON.parse(snapshot.content) as unknown,
+            cwd,
+            snapshot.modifiedAt
+          );
+          if (decoded) sessions.push(decoded);
+        } catch (error) {
+          if (isAbort(error)) throw error;
+          // One stale or malformed provider registry file must not hide healthy sessions.
+        }
       }
+    } catch (error) {
+      if (isAbort(error)) throw error;
+      throw new ProviderMetadataError("Claude session metadata is unavailable.", error);
+    } finally {
+      await handle.close().catch(() => undefined);
     }
     return sessions;
   }
@@ -121,7 +151,7 @@ export class ClaudeSessionSource implements ProviderSessionSource {
       const details = await stat(filename);
       if (!details.isFile()) return null;
       const content = await readBoundedEdges(filename, details.size, signal);
-      const title = decodeClaudeTitleRecords(content, sessionId);
+      const title = decodeClaudeTitleRecords(content, sessionId, cwd);
       return title ? { ...title, updatedAt: details.mtimeMs } : null;
     } catch (error) {
       if (isAbort(error)) throw error;
@@ -162,16 +192,23 @@ export function decodeClaudeSession(
 
 export function decodeClaudeTitleRecords(
   content: string,
-  sessionId: string
+  sessionId: string,
+  cwd?: string
 ): Pick<ClaudeTitleMetadata, "title" | "titleSource"> | null {
   assertProviderSessionId(sessionId);
+  if (cwd !== undefined) assertAbsoluteCwd(cwd);
   let aiTitle: string | null = null;
   let customTitle: string | null = null;
+  let exactCwdObserved = cwd === undefined;
   for (const line of content.split(/\r?\n/)) {
-    if (!/"type"\s*:\s*"(?:ai-title|custom-title)"/.test(line)) continue;
+    const isTitleRecord = /"type"\s*:\s*"(?:ai-title|custom-title)"/.test(line);
+    const mayContainCwd = cwd !== undefined && /"cwd"\s*:/.test(line);
+    if (!isTitleRecord && !mayContainCwd) continue;
     try {
       const raw = record(JSON.parse(line) as unknown);
       if (!raw || raw.sessionId !== sessionId) continue;
+      if (cwd !== undefined && raw.cwd === cwd) exactCwdObserved = true;
+      if (!isTitleRecord) continue;
       if (raw.type === "custom-title") {
         customTitle = sanitizeProviderTitle(raw.customTitle) ?? customTitle;
       } else if (raw.type === "ai-title") {
@@ -181,6 +218,7 @@ export function decodeClaudeTitleRecords(
       // Edge chunks may begin or end in the middle of a JSONL record.
     }
   }
+  if (!exactCwdObserved) return null;
   if (customTitle) return { title: customTitle, titleSource: "explicit-name" };
   if (aiTitle) return { title: aiTitle, titleSource: "ai-title" };
   return null;

@@ -1,6 +1,8 @@
 .workspace-leaf-content .view-content.agent-cockpit-view-content {
+  display: flex;
+  min-height: 0;
   padding: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .agent-cockpit {
@@ -11,14 +13,26 @@
   --ac-space-6: 24px;
   --ac-space-8: 32px;
   --ac-ease: cubic-bezier(0.25, 1, 0.5, 1);
-  min-height: 100%;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   color: var(--text-normal);
   background: var(--background-primary);
   container-type: inline-size;
 }
 
 .agent-cockpit-stable-slot {
+  flex: none;
   min-width: 0;
+}
+
+.agent-cockpit-panel-slot {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .agent-cockpit-tabs-slot {
@@ -327,13 +341,30 @@
 }
 
 .agent-cockpit-mode-host {
+  display: flex;
+  height: 100%;
   min-width: 0;
+  min-height: 0;
   border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .agent-cockpit-mode-panel {
+  flex: 1 1 auto;
   min-width: 0;
-  min-height: 320px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.agent-cockpit-mode-panel--work {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.agent-cockpit-mode-panel--work > .agent-cockpit-attention-panel {
+  flex: 0 1 auto;
+  max-height: min(34%, 280px);
+  overflow-y: auto;
 }
 
 .agent-cockpit button:focus-visible,
@@ -806,6 +837,10 @@
 }
 
 .agent-cockpit-kanban-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -817,15 +852,22 @@
 
 .agent-cockpit-kanban-board {
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: repeat(5, minmax(200px, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
   gap: var(--ac-space-3);
+  min-height: 0;
   padding-bottom: var(--ac-space-3);
   overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .agent-cockpit-kanban-column {
-  min-height: 170px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: var(--ac-space-3);
+  overflow: hidden;
   border-radius: var(--radius-s);
   background: var(--background-secondary);
 }
@@ -843,9 +885,13 @@
 
 .agent-cockpit-kanban-task-list {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: var(--ac-space-2);
-  min-height: 110px;
+  min-height: 0;
+  padding-right: var(--ac-space-1);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .agent-cockpit-kanban-column-empty {
@@ -928,6 +974,16 @@
   overflow: hidden;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-cockpit-task-run-title {
+  margin-top: var(--ac-space-2);
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

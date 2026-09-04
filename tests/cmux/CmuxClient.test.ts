@@ -20,6 +20,29 @@ describe("resolveTarget", () => {
     expect(resolved.surfaceTitle).toBe("Codex · parser tests");
   });
 
+  it("resolves mixed-case target UUIDs to the authoritative snapshot identity", async () => {
+    const snapshot = decodeTree(await fixture("tree.json"), 1);
+    const workspace = snapshot.windows[0]!.workspaces[0]!;
+    const pane = workspace.panes[0]!;
+    const surface = pane.surfaces[0]!;
+    workspace.id = "a2222222-a222-4222-8222-a22222222222";
+    pane.id = "b3333333-b333-4333-8333-b33333333333";
+    surface.id = "c4444444-c444-4444-8444-c44444444444";
+    surface.paneId = pane.id;
+
+    expect(
+      resolveTarget(snapshot, {
+        workspaceId: workspace.id.toUpperCase(),
+        paneId: pane.id.toUpperCase(),
+        surfaceId: surface.id.toUpperCase()
+      })
+    ).toMatchObject({
+      workspaceId: workspace.id,
+      paneId: pane.id,
+      surfaceId: surface.id
+    });
+  });
+
   it("fails when any part of the tuple is stale", async () => {
     const snapshot = decodeTree(await fixture("tree.json"), 1);
     expect(() =>
@@ -93,6 +116,32 @@ describe("CmuxClient focus safety", () => {
     await expect(client.focusExact(target)).resolves.toMatchObject({ verified: true });
   });
 
+  it("verifies focus when cmux reports the same target with different UUID casing", async () => {
+    const snapshot = decodeTree(await fixture("tree.json"), 1);
+    const workspace = snapshot.windows[0]!.workspaces[0]!;
+    const pane = workspace.panes[0]!;
+    const surface = pane.surfaces[0]!;
+    workspace.id = "a2222222-a222-4222-8222-a22222222222";
+    pane.id = "b3333333-b333-4333-8333-b33333333333";
+    surface.id = "c4444444-c444-4444-8444-c44444444444";
+    surface.paneId = pane.id;
+    const target = {
+      workspaceId: workspace.id,
+      paneId: pane.id,
+      surfaceId: surface.id
+    };
+    const transport = fakeTransport([snapshot, snapshot], [], {
+      workspaceId: target.workspaceId.toUpperCase(),
+      paneId: target.paneId.toUpperCase(),
+      surfaceId: target.surfaceId.toUpperCase()
+    });
+
+    await expect(new CmuxClient(transport).focusExact(target)).resolves.toMatchObject({
+      verified: true,
+      target
+    });
+  });
+
   it("retries focused-target verification for a bounded window when cmux selection propagation lags", async () => {
     const snapshot = decodeTree(await fixture("tree.json"), 1);
     const target = {
@@ -115,6 +164,28 @@ describe("CmuxClient focus safety", () => {
     const result = await new CmuxClient(transport).focusExact(target);
     expect(result.verified).toBe(true);
     expect(calls).toBe(2);
+  });
+});
+
+describe("CmuxClient preview safety", () => {
+  it("rejects terminal output attributed to a different pane", async () => {
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444"
+    };
+    const transport = fakeTransport([], []);
+    transport.readPreview = async () => ({
+      ...target,
+      paneId: "99999999-9999-4999-8999-999999999999",
+      text: "wrong pane output",
+      observedAt: 1,
+      truncated: false
+    });
+
+    await expect(
+      new CmuxClient(transport).readPreview(target, { lines: 60, maxBytes: 16 * 1024 })
+    ).rejects.toThrow(/different surface/);
   });
 });
 

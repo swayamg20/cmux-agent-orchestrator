@@ -7,7 +7,8 @@ export class TaskPickerModal extends SuggestModal<TaskRecord> {
   constructor(
     app: App,
     private readonly tasks: readonly TaskRecord[],
-    private readonly choose: (task: TaskRecord) => void
+    private readonly choose: (task: TaskRecord) => void,
+    private readonly closed: () => void = () => undefined
   ) {
     super(app);
     this.setPlaceholder("Attach to a task...");
@@ -37,9 +38,17 @@ export class TaskPickerModal extends SuggestModal<TaskRecord> {
   override onChooseSuggestion(task: TaskRecord): void {
     this.choose(task);
   }
+
+  override onClose(): void {
+    super.onClose();
+    this.closed();
+  }
 }
 
 export class CreateTaskModal extends Modal {
+  private active = false;
+  private focusTimer: number | null = null;
+  private lifecycleGeneration = 0;
   private title = "";
   private priority: TaskPriority = "normal";
   private repository: string | null;
@@ -48,7 +57,8 @@ export class CreateTaskModal extends Modal {
   constructor(
     app: App,
     session: LiveSession | null,
-    private readonly create: (options: CreateTaskOptions) => Promise<void>
+    private readonly create: (options: CreateTaskOptions) => Promise<void>,
+    private readonly closed: () => void = () => undefined
   ) {
     super(app);
     this.hasSession = session !== null;
@@ -57,6 +67,8 @@ export class CreateTaskModal extends Modal {
   }
 
   override onOpen(): void {
+    this.active = true;
+    const generation = ++this.lifecycleGeneration;
     this.titleEl.setText(this.hasSession ? "Track run in work board" : "Create coding task");
     this.contentEl.empty();
     if (this.hasSession) {
@@ -69,7 +81,10 @@ export class CreateTaskModal extends Modal {
       text.setValue(this.title).setPlaceholder("Describe the work item").onChange((value) => {
         this.title = value;
       });
-      window.setTimeout(() => text.inputEl.focus(), 0);
+      this.focusTimer = window.setTimeout(() => {
+        this.focusTimer = null;
+        if (this.active && generation === this.lifecycleGeneration) text.inputEl.focus();
+      }, 0);
     });
     new Setting(this.contentEl).setName("Repository").setDesc("Stored as task context only; never executed.").addText((text) =>
       text.setValue(this.repository ?? "").onChange((value) => {
@@ -94,6 +109,7 @@ export class CreateTaskModal extends Modal {
           .setButtonText(this.hasSession ? "Add to board" : "Create task")
           .onClick(() => {
             if (!this.title.trim()) return;
+            const submissionGeneration = this.lifecycleGeneration;
             button.setDisabled(true);
             void this.create({
               title: this.title,
@@ -101,14 +117,27 @@ export class CreateTaskModal extends Modal {
               workflowStatus: "active",
               repository: this.repository
             })
-              .then(() => this.close())
-              .catch(() => button.setDisabled(false));
+              .then(() => {
+                if (this.active && submissionGeneration === this.lifecycleGeneration) this.close();
+              })
+              .catch(() => {
+                if (this.active && submissionGeneration === this.lifecycleGeneration) {
+                  button.setDisabled(false);
+                }
+              });
           })
       );
   }
 
   override onClose(): void {
+    this.active = false;
+    this.lifecycleGeneration += 1;
+    if (this.focusTimer !== null) {
+      window.clearTimeout(this.focusTimer);
+      this.focusTimer = null;
+    }
     this.contentEl.empty();
+    this.closed();
   }
 }
 

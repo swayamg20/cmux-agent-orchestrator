@@ -6,6 +6,8 @@ import type { ProviderSessionSource } from "../../src/providers/types";
 import { isCanonicalUuid } from "../../src/security/identifiers";
 
 const live = process.env.CMUX_AGENT_ORCHESTRATOR_LIVE_PROVIDERS === "1" ? describe : describe.skip;
+// Codex may reject the state-DB hint and require a second bounded app-server exchange.
+const PROVIDER_METADATA_SMOKE_TIMEOUT_MS = 15_000;
 
 live("installed provider metadata read-only smoke", () => {
   it("reads bounded local Codex and Claude title metadata without changing sessions", async () => {
@@ -26,5 +28,5 @@ live("installed provider metadata read-only smoke", () => {
     } finally {
       for (const source of sources) source.dispose();
     }
-  });
+  }, PROVIDER_METADATA_SMOKE_TIMEOUT_MS);
 });

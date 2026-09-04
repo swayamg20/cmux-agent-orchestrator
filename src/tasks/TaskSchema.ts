@@ -1,5 +1,5 @@
 import type { TFile } from "obsidian";
-import { isCanonicalUuid } from "../security/identifiers";
+import { normalizeCanonicalUuid } from "../security/identifiers";
 
 export const WORKFLOW_STATUSES = ["backlog", "active", "review", "parked", "done"] as const;
 export type WorkflowStatus = (typeof WORKFLOW_STATUSES)[number];
@@ -44,11 +44,14 @@ export function isWorkflowStatus(value: unknown): value is WorkflowStatus {
 export function parseTaskRecord(file: TFile, frontmatter: unknown): TaskRecord | null {
   if (typeof frontmatter !== "object" || frontmatter === null) return null;
   const raw = frontmatter as Record<string, unknown>;
+  const taskId =
+    typeof raw["task-id"] === "string"
+      ? normalizeCanonicalUuid(raw["task-id"])
+      : null;
   if (
     raw["agent-cockpit"] !== "task" ||
     raw["schema-version"] !== 1 ||
-    typeof raw["task-id"] !== "string" ||
-    !isCanonicalUuid(raw["task-id"])
+    taskId === null
   ) {
     return null;
   }
@@ -57,7 +60,7 @@ export function parseTaskRecord(file: TFile, frontmatter: unknown): TaskRecord |
   const rawRunCount = raw["run-count"];
   return {
     file,
-    taskId: raw["task-id"],
+    taskId,
     title: optionalText(raw.title, 512) ?? file.basename.slice(0, 512),
     workflowStatus: oneOf(raw["workflow-status"], WORKFLOW_STATUSES, "backlog"),
     priority: oneOf(raw.priority, TASK_PRIORITIES, "normal"),

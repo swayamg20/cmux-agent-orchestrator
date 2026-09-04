@@ -7,7 +7,7 @@ import { renderRuntimeBadge } from "./StatusBadge";
 
 export interface TaskCardActions {
   open(task: TaskRecord): void;
-  move(task: TaskRecord, status: WorkflowStatus): void;
+  move(task: TaskRecord, status: WorkflowStatus): Promise<boolean>;
 }
 
 export function renderTaskCard(
@@ -43,6 +43,16 @@ export function renderTaskCard(
 
   const session = selectPrimarySession(sessions);
   if (session) {
+    const conversationTitle = session.conversation?.title.trim();
+    if (conversationTitle && conversationTitle.toLocaleLowerCase() !== task.title.toLocaleLowerCase()) {
+      card.createDiv({
+        cls: "agent-cockpit-task-run-title",
+        text: conversationTitle,
+        attr: {
+          title: `Current ${providerLabel(session.provider.provider)} conversation: ${conversationTitle}`
+        }
+      });
+    }
     const runtime = card.createDiv({ cls: "agent-cockpit-task-runtime" });
     runtime.createSpan({ text: providerLabel(session.provider.provider) });
     renderRuntimeBadge(runtime, session.assessment);
@@ -86,7 +96,16 @@ export function renderTaskCard(
   }
   select.addEventListener("change", () => {
     const status = select.value as WorkflowStatus;
-    actions.move(task, status);
+    select.disabled = true;
+    void actions
+      .move(task, status)
+      .catch(() => false)
+      .then((moved) => {
+        if (!moved) select.value = task.workflowStatus;
+      })
+      .finally(() => {
+        select.disabled = false;
+      });
   });
   return card;
 }

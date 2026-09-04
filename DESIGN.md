@@ -27,7 +27,7 @@ Use a 4 px spacing base with compact operational rhythm. Components adapt to the
 - Session and attention rows reveal secondary actions progressively.
 - Terminal preview is read-only, bounded, selectable, and visually subdued.
 - Buttons use Obsidian native classes and variables with explicit focus-visible treatment.
-- Destructive or disruptive actions are absent from v0.1.
+- Destructive or disruptive actions remain absent from the current release.
 
 ## Motion
 

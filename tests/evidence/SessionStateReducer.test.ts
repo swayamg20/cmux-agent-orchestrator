@@ -102,6 +102,44 @@ describe("reduceSessionEvidence", () => {
     });
   });
 
+  it("preserves a newer proven screen activity timestamp than an older lifecycle event", () => {
+    const result = reduceSessionEvidence([
+      present(),
+      {
+        id: "screen",
+        kind: "screen-observed",
+        sessionKey: key,
+        source: "terminal-preview",
+        authority: "heuristic",
+        confidence: "low",
+        observedAt: 1_500,
+        occurredAt: 1_500,
+        summary: "changed",
+        changed: true,
+        activity: "editing",
+        fingerprint: "abc"
+      },
+      {
+        id: "lifecycle",
+        kind: "lifecycle",
+        sessionKey: key,
+        source: "provider-lifecycle",
+        authority: "structured",
+        confidence: "high",
+        observedAt: 1_600,
+        occurredAt: 1_250,
+        summary: "turn started",
+        signal: "turn-started",
+        activity: "reasoning",
+        provider: "codex",
+        providerSessionId: "thread"
+      }
+    ], 1_600);
+
+    expect(result.executionPhase).toBe("working");
+    expect(result.lastActivityAt).toBe(1_500);
+  });
+
   it("keeps provider idle separate from workflow completion", () => {
     const result = reduceSessionEvidence([
       present(),

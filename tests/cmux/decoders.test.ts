@@ -30,6 +30,36 @@ describe("cmux 0.62.2 decoders", () => {
     expect(surface.selected).toBe(true);
   });
 
+  it("normalizes mixed-case UUIDs before joining independent cmux outputs", async () => {
+    const replacements = new Map([
+      ["11111111-1111-4111-8111-111111111111", "a1111111-a111-4111-8111-a11111111111"],
+      ["22222222-2222-4222-8222-222222222222", "b2222222-b222-4222-8222-b22222222222"],
+      ["33333333-3333-4333-8333-333333333333", "c3333333-c333-4333-8333-c33333333333"],
+      ["44444444-4444-4444-8444-444444444444", "d4444444-d444-4444-8444-d44444444444"],
+      ["55555555-5555-4555-8555-555555555555", "e5555555-e555-4555-8555-e55555555555"]
+    ]);
+    const replaceIds = (text: string, uppercase: boolean): string => {
+      let replaced = text;
+      for (const [from, to] of replacements) {
+        replaced = replaced.replaceAll(from, uppercase ? to.toUpperCase() : to);
+      }
+      return replaced;
+    };
+    const tree = replaceIds(await fixture("tree.json"), true);
+    const workspaces = replaceIds(await fixture("list-workspaces.json"), false);
+
+    const snapshot = decodeTree(tree, 1234, decodeWorkspaceDirectories(workspaces));
+    const workspace = snapshot.windows[0]!.workspaces[0]!;
+
+    expect(snapshot.windows[0]!.id).toBe("a1111111-a111-4111-8111-a11111111111");
+    expect(workspace.id).toBe("b2222222-b222-4222-8222-b22222222222");
+    expect(workspace.panes[0]!.id).toBe("c3333333-c333-4333-8333-c33333333333");
+    expect(workspace.panes[0]!.surfaces[0]!.id).toBe(
+      "d4444444-d444-4444-8444-d44444444444"
+    );
+    expect(workspace.currentDirectory).toBe("/Users/example/Projects/agent-cockpit");
+  });
+
   it("decodes capability feature names and access mode", async () => {
     const capabilities = decodeCapabilities(await fixture("capabilities.json"));
     expect(capabilities.accessMode).toBe("cmuxOnly");

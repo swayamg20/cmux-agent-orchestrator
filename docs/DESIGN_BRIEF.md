@@ -1,4 +1,4 @@
-# cmux Agent Orchestrator v0.1 Design Brief
+# cmux Agent Orchestrator Design Brief
 
 ## Feature summary
 
@@ -17,7 +17,7 @@ Recognize the session or task that needs human judgment and focus its exact exis
 
 ## Scope
 
-Production-ready desktop plugin surface covering Needs My Attention, Work Kanban, Live Sessions, settings, empty/loading/error states, and the explicit focus/task-linking flows. Mobile and embedded terminal interaction are excluded.
+Production-ready desktop plugin surface covering Work attention and the durable board, Agent runs, cmux, settings, empty/loading/error states, and the explicit focus/task-linking flows. Mobile and embedded terminal interaction are excluded.
 
 ## Layout strategy
 
@@ -30,11 +30,12 @@ The header establishes connection health and refresh without dominating. A compa
 - Empty task folder, task creation, linked and orphan sessions, stale binding, and every workflow column.
 - Preview idle, loading, loaded, truncated, timed out, and unavailable.
 - Conversation title resolving, automatically exact, unmatched with explicit cmux-title fallback, picker loading/empty, manual override, metadata unavailable, changed match, and duplicate assignment rejected.
+- Automatic task pending, created, already represented, disabled, detached, ambiguous, duplicate provider session, partial note write, and recoverable binding failure.
 - Focus resolving, succeeded, stale target, ambiguous target, command failure, and unverifiable postcondition.
 
 ## Interaction model
 
-The three modes use an accessible tablist with explicit hover, focus, selected, Home/End, and arrow-key behavior. Rows expand inline inside the active mode. Preview loading is explicit or visibility-triggered and never global. Kanban supports drag-and-drop plus an accessible workflow selector. Focus re-resolves canonical UUIDs before invoking cmux. Task creation, attachment, and manual provider-conversation overrides use native Obsidian modals and suggestions. A provider title replaces the primary cmux title only after the complete canonical surface tuple and exact provider session ID are automatically proven or manually associated.
+The three modes use an accessible tablist with explicit hover, focus, selected, Home/End, and arrow-key behavior. Rows expand inline inside the active mode. Preview loading is explicit or visibility-triggered and never global. Kanban supports drag-and-drop plus an accessible workflow selector. Focus re-resolves canonical UUIDs before invoking cmux. Exact, unique Claude and Codex sessions create one neutral Active task by default after startup or explicit Refresh; ambiguous sessions stay in Agent runs, and settings provide an opt-out. If an already tracked provider conversation is uniquely proven on a new surface after its old complete cmux target disappears, its existing binding follows without creating another task or run. If exact evidence instead proves that a surface was reused for another conversation, the previous task is not inherited; Attention exposes the change, and explicit attachment of the new run may replace only the current surface binding while retaining earlier task and run history. Automatic tracking never moves workflow state or controls the agent. Manual task creation, attachment, and provider-conversation overrides use native Obsidian modals and suggestions. A provider title replaces the primary cmux title only after the complete canonical surface tuple and exact provider session ID are automatically proven or manually associated.
 
 ## Content requirements
 

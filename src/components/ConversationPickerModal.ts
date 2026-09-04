@@ -5,7 +5,8 @@ export class ConversationPickerModal extends SuggestModal<ProviderSessionMetadat
   constructor(
     app: App,
     private readonly sessions: readonly ProviderSessionMetadata[],
-    private readonly choose: (session: ProviderSessionMetadata) => void
+    private readonly choose: (session: ProviderSessionMetadata) => void,
+    private readonly closed: () => void = () => undefined
   ) {
     super(app);
     const provider = sessions[0]?.provider === "claude" ? "Claude" : "Codex";
@@ -41,6 +42,11 @@ export class ConversationPickerModal extends SuggestModal<ProviderSessionMetadat
 
   override onChooseSuggestion(session: ProviderSessionMetadata): void {
     this.choose(session);
+  }
+
+  override onClose(): void {
+    super.onClose();
+    this.closed();
   }
 }
 

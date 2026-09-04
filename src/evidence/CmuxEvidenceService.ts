@@ -84,6 +84,17 @@ export class CmuxEvidenceService {
     this.ledger.replaceSource(key, "provider-detection", [providerEvidenceRecord(key, detection, observedAt)]);
   }
 
+  clearProviders(keys: ReadonlySet<string>): void {
+    for (const key of keys) this.ledger.replaceSource(key, "provider-detection", []);
+  }
+
+  clearPreviews(keys: ReadonlySet<string>): void {
+    for (const key of keys) {
+      this.ledger.replaceSource(key, "terminal-preview", []);
+      this.screenFingerprints.delete(key);
+    }
+  }
+
   recordLifecycle(
     liveKeys: ReadonlySet<string>,
     observations: readonly AutomaticLifecycleObservation[]

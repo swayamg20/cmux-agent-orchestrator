@@ -13,9 +13,18 @@ export interface ProviderObservation {
   observedAt: number;
 }
 
+export interface ProviderSurfaceIdentity {
+  key: string;
+  surfaceTitle: string;
+  surfaceType: string;
+  currentDirectory: string | null;
+}
+
 export class ProviderClassifier {
   private readonly detections = new Map<string, ProviderDetection>();
-  private readonly attempted = new Set<string>();
+  private readonly attempted = new Map<string, string>();
+  private readonly surfaceSignatures = new Map<string, string>();
+  private generation = 0;
 
   constructor(
     private readonly detector: AgentDetector,
@@ -26,32 +35,34 @@ export class ProviderClassifier {
     return this.detections;
   }
 
-  record(key: string, detection: ProviderDetection): void {
-    this.attempted.add(key);
-    if (detection.provider === "claude" || detection.provider === "codex") {
-      this.detections.set(key, detection);
-    }
-  }
-
-  detect(session: LiveSession, previewText: string): ProviderDetection {
+  detect(session: LiveSession, previewText: string): ProviderDetection | null {
+    const signature = surfaceSignature(session);
+    const currentSignature = this.surfaceSignatures.get(session.key);
+    if (currentSignature !== undefined && currentSignature !== signature) return null;
+    this.surfaceSignatures.set(session.key, signature);
     const detection = this.detector.detect(surfaceForDetection(session), previewText);
     this.record(session.key, detection);
     return detection;
   }
 
   classifyNew(sessions: readonly LiveSession[], client: CmuxClient): Promise<ProviderObservation[]> | null {
+    const generation = this.generation;
     const candidates = sessions.filter(
       (session) =>
         session.surfaceType === "terminal" &&
         session.provider.provider === "unknown" &&
-        !this.attempted.has(session.key)
+        this.attempted.get(session.key) !== surfaceSignature(session)
     );
     if (candidates.length === 0) return null;
-    for (const session of candidates) this.attempted.add(session.key);
+    for (const session of candidates) {
+      const signature = surfaceSignature(session);
+      this.surfaceSignatures.set(session.key, signature);
+      this.attempted.set(session.key, signature);
+    }
     return Promise.allSettled(
       candidates.map((session) =>
         this.scheduler
-          .schedule(`provider:${session.key}`, () =>
+          .schedule(`provider:${generation}:${session.key}:${surfaceSignature(session)}`, () =>
             client.readPreview(session, {
               lines: PROVIDER_EVIDENCE_LINES,
               maxBytes: PROVIDER_EVIDENCE_MAX_BYTES
@@ -60,10 +71,18 @@ export class ProviderClassifier {
           .then((preview) => ({ session, preview }))
       )
     ).then((results) => {
+      if (generation !== this.generation) return [];
       const observations: ProviderObservation[] = [];
-      for (const result of results) {
-        if (result.status !== "fulfilled") continue;
+      for (const [index, result] of results.entries()) {
+        if (result.status !== "fulfilled") {
+          const failed = candidates[index];
+          if (failed && this.attempted.get(failed.key) === surfaceSignature(failed)) {
+            this.attempted.delete(failed.key);
+          }
+          continue;
+        }
         const detection = this.detect(result.value.session, result.value.preview.text);
+        if (detection === null) continue;
         if (detection.provider === "claude" || detection.provider === "codex") {
           observations.push({
             key: result.value.session.key,
@@ -76,15 +95,43 @@ export class ProviderClassifier {
     });
   }
 
-  retain(keys: ReadonlySet<string>): void {
+  syncSurfaces(surfaces: readonly ProviderSurfaceIdentity[]): ReadonlySet<string> {
+    const keys = new Set(surfaces.map((surface) => surface.key));
+    const invalidated = new Set<string>();
+    for (const surface of surfaces) {
+      const signature = surfaceSignature(surface);
+      const previous = this.surfaceSignatures.get(surface.key);
+      if (previous !== undefined && previous !== signature) {
+        this.detections.delete(surface.key);
+        this.attempted.delete(surface.key);
+        invalidated.add(surface.key);
+      }
+      this.surfaceSignatures.set(surface.key, signature);
+    }
     retainMap(this.detections, keys);
-    for (const key of this.attempted) if (!keys.has(key)) this.attempted.delete(key);
+    retainMap(this.attempted, keys);
+    retainMap(this.surfaceSignatures, keys);
+    return invalidated;
   }
 
   clear(): void {
+    this.generation += 1;
     this.detections.clear();
     this.attempted.clear();
+    this.surfaceSignatures.clear();
   }
+
+  private record(key: string, detection: ProviderDetection): void {
+    const signature = this.surfaceSignatures.get(key);
+    if (signature !== undefined) this.attempted.set(key, signature);
+    if (detection.provider === "claude" || detection.provider === "codex") {
+      this.detections.set(key, detection);
+    }
+  }
+}
+
+function surfaceSignature(surface: ProviderSurfaceIdentity): string {
+  return JSON.stringify([surface.surfaceTitle, surface.surfaceType, surface.currentDirectory]);
 }
 
 function surfaceForDetection(session: LiveSession): CmuxSurface {

@@ -1,3 +1,5 @@
+import { normalizeCanonicalUuid } from "../security/identifiers";
+
 export type CmuxAccessMode = "cmuxOnly" | "automation" | "allowAll" | "password" | "unknown";
 
 export interface CmuxCapabilities {
@@ -84,6 +86,7 @@ export interface CmuxAgentRecord {
 
 export interface CmuxPreview {
   workspaceId: string;
+  paneId: string;
   surfaceId: string;
   text: string;
   observedAt: number;
@@ -127,5 +130,7 @@ export class CmuxError extends Error {
 }
 
 export function surfaceKey(target: Pick<CmuxTarget, "workspaceId" | "surfaceId">): string {
-  return `${target.workspaceId}:${target.surfaceId}`;
+  const workspaceId = normalizeCanonicalUuid(target.workspaceId) ?? target.workspaceId;
+  const surfaceId = normalizeCanonicalUuid(target.surfaceId) ?? target.surfaceId;
+  return `${workspaceId}:${surfaceId}`;
 }
