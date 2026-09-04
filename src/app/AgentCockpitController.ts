@@ -93,6 +93,7 @@ export class AgentCockpitController {
   private identityGeneration = 0;
   private automaticProviderMappings: AutomaticProviderSessionMapping[] = [];
   private client: CmuxClient | null = null;
+  private clientGeneration = 0;
   private focusAction: FocusSessionAction | null = null;
   private taskRepository: TaskRepository | null = null;
   private settings: AgentCockpitSettings | null = null;
@@ -183,19 +184,24 @@ export class AgentCockpitController {
     if (this.disposed) return;
     try {
       const client = this.requireClient();
+      const clientGeneration = this.clientGeneration;
       const settings = this.requireSettings();
       const requested = this.resolveCurrentSession(session);
       const signature = previewSurfaceSignature(requested);
       if (previewSurfaceSignature(session) !== signature) {
         throw new Error("The cmux surface changed before its preview could be loaded. Refresh and try again.");
       }
-      const preview = await this.previewScheduler.schedule(`preview:${requested.key}:${signature}`, () =>
+      const preview = await this.previewScheduler.schedule(`preview:${clientGeneration}:${requested.key}:${signature}`, () =>
         client.readPreview(requested, {
           lines: settings.previewLines,
           maxBytes: settings.previewMaxBytes
         })
       );
       if (this.disposed) return;
+      if (clientGeneration !== this.clientGeneration || client !== this.client) {
+        new Notice("The cmux connection changed while its preview was loading. The stale preview was discarded.");
+        return;
+      }
       if (
         !canonicalUuidEquals(preview.workspaceId, requested.workspaceId) ||
         !canonicalUuidEquals(preview.surfaceId, requested.surfaceId)
@@ -506,6 +512,7 @@ export class AgentCockpitController {
 
   dispose(): void {
     this.disposed = true;
+    this.clientGeneration += 1;
     this.cancelAutomaticTaskTracking();
     this.refreshCoordinator.dispose();
     this.previewScheduler.dispose();
@@ -527,6 +534,10 @@ export class AgentCockpitController {
 
   private async connect(): Promise<void> {
     if (this.disposed) return;
+    const clientGeneration = ++this.clientGeneration;
+    this.client?.dispose();
+    this.client = null;
+    this.focusAction = null;
     this.store.update({
       connection: {
         ...this.store.getState().connection,
@@ -535,11 +546,20 @@ export class AgentCockpitController {
         checkedAt: Date.now()
       }
     });
+    let candidate: CmuxClient | null = null;
     try {
-      this.client?.dispose();
-      this.client = await this.createClient(this.requireSettings().cmuxBinaryPath);
-      const probe = await this.client.probe();
-      this.focusAction = new FocusSessionAction(this.client);
+      candidate = await this.createClient(this.requireSettings().cmuxBinaryPath);
+      if (this.disposed || clientGeneration !== this.clientGeneration) {
+        candidate.dispose();
+        return;
+      }
+      const probe = await candidate.probe();
+      if (this.disposed || clientGeneration !== this.clientGeneration) {
+        candidate.dispose();
+        return;
+      }
+      this.client = candidate;
+      this.focusAction = new FocusSessionAction(candidate);
       const checkedAt = Date.now();
       this.store.update((state) => ({
         connection: {
@@ -562,7 +582,8 @@ export class AgentCockpitController {
         error: null
       }));
     } catch (error) {
-      this.client?.dispose();
+      candidate?.dispose();
+      if (this.disposed || clientGeneration !== this.clientGeneration) return;
       this.client = null;
       this.focusAction = null;
       this.handleError(error);

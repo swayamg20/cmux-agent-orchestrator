@@ -529,6 +529,73 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not apply or deduplicate a preview from an earlier cmux connection", async () => {
+    let clientCreations = 0;
+    let finishOldPreview: ((text: string) => void) | null = null;
+    let currentPreviewReads = 0;
+    const titledSnapshot = (): CmuxSnapshot => {
+      const current = snapshot(Date.now());
+      current.windows[0]!.workspaces[0]!.panes[0]!.surfaces[0]!.title = "Codex";
+      return current;
+    };
+    const firstTransport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      snapshot: async () => titledSnapshot(),
+      readPreview: (target) =>
+        new Promise((resolve) => {
+          finishOldPreview = (text) => resolve({
+            ...target,
+            text,
+            observedAt: Date.now(),
+            truncated: false
+          });
+        })
+    };
+    const currentTransport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      snapshot: async () => titledSnapshot(),
+      readPreview: async (target) => {
+        currentPreviewReads += 1;
+        return {
+          ...target,
+          text: "current output after reconnect",
+          observedAt: Date.now(),
+          truncated: false
+        };
+      }
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(clientCreations++ === 0 ? firstTransport : currentTransport)
+    );
+
+    await controller.initialize();
+    const staleLoad = controller.loadPreview(controller.store.getState().sessions[0]!);
+    await vi.waitFor(() => expect(finishOldPreview).not.toBeNull());
+
+    await controller.testConnection();
+    await controller.loadPreview(controller.store.getState().sessions[0]!);
+    expect(currentPreviewReads).toBe(1);
+
+    finishOldPreview!("stale output from the old connection");
+    await staleLoad;
+
+    expect(controller.store.getState().sessions[0]?.preview?.text).toBe(
+      "current output after reconnect"
+    );
+    expect(notices.slice(noticeStart)).toContain(
+      "The cmux connection changed while its preview was loading. The stale preview was discarded."
+    );
+    controller.dispose();
+  });
+
   it("re-probes and fully loads the cockpit after access setup succeeds", async () => {
     let clientAttempts = 0;
     let snapshotCalls = 0;
