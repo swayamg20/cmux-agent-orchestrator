@@ -22,6 +22,7 @@ All notable changes to this project will be documented in this file.
 - Keep a successful task-note write authoritative while Obsidian's metadata index catches up, preventing Kanban state or run counts from snapping backward.
 - Prevent a malformed cross-task binding from rewriting or clearing another task's provider-run identity.
 - Drop conflicting persisted binding or run identity claims instead of resolving ambiguous synced records by array order.
+- Discard contradictory exact conversation claims across task bindings and saved surface mappings while retaining run history.
 - Refuse a conversation-picker selection that contradicts a fresh, exact cmux or provider-process session identity.
 - Discard cached or in-flight terminal previews when a surface identity, exact provider conversation, or cmux connection changes.
 - Invalidate heuristic provider labels when a live cmux UUID changes title, surface type, or working directory, and ignore late preview evidence captured before that change.

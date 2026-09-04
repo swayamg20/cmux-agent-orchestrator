@@ -197,11 +197,15 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
   }
   const runs = unambiguousRuns(runCandidates);
   const runsById = new Map(runs.map((run) => [run.runId, run] as const));
-  const bindings = decodedBindings.filter((binding) => {
+  const linkedBindings = decodedBindings.filter((binding) => {
     const run = runsById.get(binding.runId);
     return run !== undefined && bindingMatchesRun(binding, run);
   });
-  const providerSessions = decodeProviderSessions(raw.providerSessions);
+  const decodedProviderSessions = decodeProviderSessions(raw.providerSessions);
+  const { bindings, providerSessions } = reconcileProviderClaims(
+    linkedBindings,
+    decodedProviderSessions
+  );
   return {
     bindings,
     runs,
@@ -294,6 +298,91 @@ function bindingMatchesRun(binding: BindingRecord, run: AgentRunRecord): boolean
     binding.provider === run.provider &&
     binding.providerSessionId === run.providerSessionId
   );
+}
+
+interface ExactProviderClaim {
+  workspaceId: string;
+  paneId: string;
+  surfaceId: string;
+  identity: string;
+}
+
+function reconcileProviderClaims(
+  bindings: BindingRecord[],
+  providerSessions: ProviderSessionMapping[]
+): Pick<MachineBindings, "bindings" | "providerSessions"> {
+  const claims = [
+    ...bindings.flatMap(exactBindingClaim),
+    ...providerSessions.map(exactProviderSessionClaim)
+  ];
+  const identitiesBySurface = new Map<string, Set<string>>();
+  const targetsBySurface = new Map<string, Set<string>>();
+  const surfacesByIdentity = new Map<string, Set<string>>();
+  for (const claim of claims) {
+    addClaim(identitiesBySurface, claim.surfaceId, claim.identity);
+    addClaim(
+      targetsBySurface,
+      claim.surfaceId,
+      `${claim.workspaceId}:${claim.paneId}`
+    );
+    addClaim(surfacesByIdentity, claim.identity, claim.surfaceId);
+  }
+  const ambiguousSurfaces = new Set(
+    [...identitiesBySurface]
+      .filter(([surfaceId, identities]) =>
+        identities.size > 1 || (targetsBySurface.get(surfaceId)?.size ?? 0) > 1
+      )
+      .map(([surfaceId]) => surfaceId)
+  );
+  const ambiguousIdentities = new Set(
+    [...surfacesByIdentity]
+      .filter(([, surfaces]) => surfaces.size > 1)
+      .map(([identity]) => identity)
+  );
+  const claimIsUnambiguous = (claim: ExactProviderClaim): boolean =>
+    !ambiguousSurfaces.has(claim.surfaceId) &&
+    !ambiguousIdentities.has(claim.identity);
+
+  return {
+    bindings: bindings.filter((binding) => {
+      const claim = exactBindingClaim(binding)[0];
+      return claim === undefined || claimIsUnambiguous(claim);
+    }),
+    providerSessions: providerSessions.filter((mapping) =>
+      claimIsUnambiguous(exactProviderSessionClaim(mapping))
+    )
+  };
+}
+
+function exactBindingClaim(binding: BindingRecord): ExactProviderClaim[] {
+  const providerSessionId = normalizeCanonicalUuid(binding.providerSessionId ?? "");
+  if (
+    (binding.provider !== "claude" && binding.provider !== "codex") ||
+    providerSessionId === null
+  ) {
+    return [];
+  }
+  return [{
+    workspaceId: binding.workspaceId,
+    paneId: binding.paneId,
+    surfaceId: binding.surfaceId,
+    identity: `${binding.provider}:${providerSessionId}`
+  }];
+}
+
+function exactProviderSessionClaim(mapping: ProviderSessionMapping): ExactProviderClaim {
+  return {
+    workspaceId: mapping.workspaceId,
+    paneId: mapping.paneId,
+    surfaceId: mapping.surfaceId,
+    identity: `${mapping.provider}:${mapping.providerSessionId}`
+  };
+}
+
+function addClaim(index: Map<string, Set<string>>, key: string, value: string): void {
+  const values = index.get(key) ?? new Set<string>();
+  values.add(value);
+  index.set(key, values);
 }
 
 function decodeProviderSessions(value: unknown): ProviderSessionMapping[] {

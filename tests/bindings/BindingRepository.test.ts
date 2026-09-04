@@ -264,6 +264,93 @@ describe("BindingRepository", () => {
     expect(reloaded.list()).toEqual([]);
   });
 
+  it("drops a provider conversation claimed by a binding and a different surface mapping", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex" as const,
+      providerSessionId: "55555555-5555-4555-8555-555555555555"
+    };
+    await repository.attach({
+      ...target,
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+    await repository.mapProviderSession({
+      ...target,
+      matchedAt: "2026-09-04T00:01:00.000Z"
+    });
+    const machine = Object.values(
+      (data as {
+        machines: Record<string, {
+          providerSessions: Array<{ surfaceId: string }>;
+        }>;
+      }).machines
+    )[0]!;
+    machine.providerSessions[0]!.surfaceId = "66666666-6666-4666-8666-666666666666";
+
+    const reloaded = new BindingRepository(plugin);
+    await reloaded.load();
+
+    expect(reloaded.list()).toEqual([]);
+    expect(reloaded.listProviderSessions()).toEqual([]);
+    expect(reloaded.listRuns()).toHaveLength(1);
+  });
+
+  it("drops conflicting exact conversations claimed for the same persisted surface", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "claude" as const,
+      providerSessionId: "55555555-5555-4555-8555-555555555555"
+    };
+    await repository.attach({
+      ...target,
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+    await repository.mapProviderSession({
+      ...target,
+      matchedAt: "2026-09-04T00:01:00.000Z"
+    });
+    const machine = Object.values(
+      (data as {
+        machines: Record<string, {
+          providerSessions: Array<{ providerSessionId: string }>;
+        }>;
+      }).machines
+    )[0]!;
+    machine.providerSessions[0]!.providerSessionId =
+      "66666666-6666-4666-8666-666666666666";
+
+    const reloaded = new BindingRepository(plugin);
+    await reloaded.load();
+
+    expect(reloaded.list()).toEqual([]);
+    expect(reloaded.listProviderSessions()).toEqual([]);
+    expect(reloaded.listRuns()).toHaveLength(1);
+  });
+
   it("does not retain a binding when persistence fails and recovers the save queue", async () => {
     let shouldFail = true;
     const plugin = {
