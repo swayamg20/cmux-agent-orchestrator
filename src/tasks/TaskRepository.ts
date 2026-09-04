@@ -30,6 +30,7 @@ export interface EnsureTaskResult {
 }
 
 export class TaskRepository {
+  private mutationChain: Promise<void> = Promise.resolve();
   private readonly recentTasks = new Map<string, TaskRecord>();
   private taskFolder: string;
 
@@ -86,16 +87,19 @@ export class TaskRepository {
   }
 
   async create(options: CreateTaskOptions): Promise<TaskRecord> {
-    return this.createWithId(options, randomUUID());
+    const taskId = randomUUID();
+    return this.enqueueMutation(() => this.createWithId(options, taskId));
   }
 
   async ensure(options: EnsureTaskOptions): Promise<EnsureTaskResult> {
     const taskId = normalizeCanonicalUuid(options.taskId);
     if (taskId === null) throw new Error("Task ID is not a canonical UUID.");
-    const matches = this.findMatchesById(taskId);
-    if (matches.length > 1) throw new Error("The automatic task ID is duplicated in the vault.");
-    if (matches[0]) return { task: matches[0], created: false };
-    return { task: await this.createWithId(options, taskId), created: true };
+    return this.enqueueMutation(async () => {
+      const matches = this.findMatchesById(taskId);
+      if (matches.length > 1) throw new Error("The automatic task ID is duplicated in the vault.");
+      if (matches[0]) return { task: matches[0], created: false };
+      return { task: await this.createWithId(options, taskId), created: true };
+    });
   }
 
   private async createWithId(options: CreateTaskOptions, taskId: string): Promise<TaskRecord> {
@@ -139,71 +143,77 @@ export class TaskRepository {
 
   async updateWorkflow(task: TaskRecord, workflowStatus: WorkflowStatus): Promise<void> {
     assertWorkflowTransition(task.workflowStatus, workflowStatus);
-    const latest = this.findById(task.taskId);
-    const updatedAt = new Date().toISOString();
-    await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
-      if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
-        throw new Error("Task identity changed before the update.");
-      }
-      if (workflowStatusFromFrontmatter(frontmatter["workflow-status"]) !== task.workflowStatus) {
-        throw new Error("Task workflow changed before the update. Refresh and try again.");
-      }
-      frontmatter["workflow-status"] = workflowStatus;
-      frontmatter["updated-at"] = updatedAt;
+    return this.enqueueMutation(async () => {
+      const latest = this.findById(task.taskId);
+      const updatedAt = new Date().toISOString();
+      await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
+        if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
+          throw new Error("Task identity changed before the update.");
+        }
+        if (workflowStatusFromFrontmatter(frontmatter["workflow-status"]) !== task.workflowStatus) {
+          throw new Error("Task workflow changed before the update. Refresh and try again.");
+        }
+        frontmatter["workflow-status"] = workflowStatus;
+        frontmatter["updated-at"] = updatedAt;
+      });
+      this.recentTasks.set(task.taskId, { ...latest, workflowStatus, updatedAt });
     });
-    this.recentTasks.set(task.taskId, { ...latest, workflowStatus, updatedAt });
   }
 
   async incrementRunCount(task: TaskRecord): Promise<number> {
-    const latest = this.findById(task.taskId);
-    let nextCount = task.runCount + 1;
-    const updatedAt = new Date().toISOString();
-    await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
-      if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
-        throw new Error("Task identity changed before the update.");
-      }
-      const current =
-        typeof frontmatter["run-count"] === "number" &&
-        Number.isFinite(frontmatter["run-count"]) &&
-        frontmatter["run-count"] >= 0
-          ? Math.min(Math.floor(frontmatter["run-count"]), 999_999)
-          : 0;
-      nextCount = current + 1;
-      frontmatter["run-count"] = nextCount;
-      frontmatter["updated-at"] = updatedAt;
+    return this.enqueueMutation(async () => {
+      const latest = this.findById(task.taskId);
+      let nextCount = task.runCount + 1;
+      const updatedAt = new Date().toISOString();
+      await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
+        if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
+          throw new Error("Task identity changed before the update.");
+        }
+        const current =
+          typeof frontmatter["run-count"] === "number" &&
+          Number.isFinite(frontmatter["run-count"]) &&
+          frontmatter["run-count"] >= 0
+            ? Math.min(Math.floor(frontmatter["run-count"]), 999_999)
+            : 0;
+        nextCount = current + 1;
+        frontmatter["run-count"] = nextCount;
+        frontmatter["updated-at"] = updatedAt;
+      });
+      this.recentTasks.set(task.taskId, { ...latest, runCount: nextCount, updatedAt });
+      return nextCount;
     });
-    this.recentTasks.set(task.taskId, { ...latest, runCount: nextCount, updatedAt });
-    return nextCount;
   }
 
   async ensureRunCountAtLeast(task: TaskRecord, minimum: number): Promise<number> {
     if (!Number.isSafeInteger(minimum) || minimum < 0 || minimum > 1_000_000) {
       throw new Error("Minimum run count must be an integer between 0 and 1000000.");
     }
-    const latest = this.findById(task.taskId);
-    if (latest.runCount >= minimum) return latest.runCount;
+    return this.enqueueMutation(async () => {
+      const latest = this.findById(task.taskId);
+      if (latest.runCount >= minimum) return latest.runCount;
 
-    let nextCount = latest.runCount;
-    let changed = false;
-    const updatedAt = new Date().toISOString();
-    await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
-      if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
-        throw new Error("Task identity changed before the update.");
-      }
-      const current =
-        typeof frontmatter["run-count"] === "number" &&
-        Number.isFinite(frontmatter["run-count"]) &&
-        frontmatter["run-count"] >= 0
-          ? Math.min(Math.floor(frontmatter["run-count"]), 1_000_000)
-          : 0;
-      nextCount = Math.max(current, minimum);
-      if (nextCount === current) return;
-      changed = true;
-      frontmatter["run-count"] = nextCount;
-      frontmatter["updated-at"] = updatedAt;
+      let nextCount = latest.runCount;
+      let changed = false;
+      const updatedAt = new Date().toISOString();
+      await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
+        if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
+          throw new Error("Task identity changed before the update.");
+        }
+        const current =
+          typeof frontmatter["run-count"] === "number" &&
+          Number.isFinite(frontmatter["run-count"]) &&
+          frontmatter["run-count"] >= 0
+            ? Math.min(Math.floor(frontmatter["run-count"]), 1_000_000)
+            : 0;
+        nextCount = Math.max(current, minimum);
+        if (nextCount === current) return;
+        changed = true;
+        frontmatter["run-count"] = nextCount;
+        frontmatter["updated-at"] = updatedAt;
+      });
+      if (changed) this.recentTasks.set(task.taskId, { ...latest, runCount: nextCount, updatedAt });
+      return nextCount;
     });
-    if (changed) this.recentTasks.set(task.taskId, { ...latest, runCount: nextCount, updatedAt });
-    return nextCount;
   }
 
   async open(task: TaskRecord): Promise<void> {
@@ -261,6 +271,15 @@ export class TaskRepository {
 
   private isInTaskFolder(path: string): boolean {
     return normalizePath(path).startsWith(`${this.taskFolder}/`);
+  }
+
+  private enqueueMutation<T>(mutation: () => Promise<T>): Promise<T> {
+    const operation = this.mutationChain.then(mutation, mutation);
+    this.mutationChain = operation.then(
+      () => undefined,
+      () => undefined
+    );
+    return operation;
   }
 }
 

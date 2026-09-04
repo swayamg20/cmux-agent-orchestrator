@@ -1,6 +1,7 @@
 import { TFile, TFolder, type App } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
 import { TaskRepository } from "../../src/tasks/TaskRepository";
+import { createMemoryTaskApp } from "../helpers/memoryTaskApp";
 
 function file(path: string, extension = "md"): TFile {
   const name = path.split("/").pop() ?? path;
@@ -109,6 +110,55 @@ describe("TaskRepository", () => {
 
     repository.setTaskFolder("Different Tasks");
     expect(repository.list()).toEqual([]);
+  });
+
+  it("serializes concurrent deterministic task creation", async () => {
+    let markCreateStarted!: () => void;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const memory = createMemoryTaskApp({
+      beforeCreate: async () => {
+        markCreateStarted();
+        await createGate;
+      }
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+
+    const firstPromise = repository.ensure(options);
+    await createStarted;
+    const secondPromise = repository.ensure(options);
+    releaseCreate();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.task.taskId).toBe(first.task.taskId);
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(memory.createdPaths).toHaveLength(1);
+  });
+
+  it("continues processing mutations after an earlier write fails", async () => {
+    const memory = createMemoryTaskApp({ failFrontmatterWrites: 1 });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const task = await repository.create({ title: "Recoverable task write" });
+
+    await expect(repository.updateWorkflow(task, "review")).rejects.toThrow(
+      "simulated task frontmatter write failure"
+    );
+    await expect(repository.incrementRunCount(task)).resolves.toBe(1);
+
+    expect(memory.frontmatterWriteAttempts()).toBe(2);
+    expect(repository.findById(task.taskId).runCount).toBe(1);
   });
 
   it("fails closed when two Markdown notes claim the same task ID", async () => {
