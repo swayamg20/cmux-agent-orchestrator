@@ -47,6 +47,17 @@ export class TaskRepository {
     this.taskFolder = normalized;
   }
 
+  invalidatePaths(paths: readonly string[]): void {
+    const roots = paths.map((path) => normalizePath(path));
+    if (roots.length === 0) return;
+    for (const [taskId, task] of this.recentTasks) {
+      const taskPath = normalizePath(task.file.path);
+      if (roots.some((root) => taskPath === root || taskPath.startsWith(`${root}/`))) {
+        this.recentTasks.delete(taskId);
+      }
+    }
+  }
+
   list(): TaskRecord[] {
     const indexed = this.indexedTasks();
     const byId = new Map(indexed.map((task) => [task.taskId, task]));

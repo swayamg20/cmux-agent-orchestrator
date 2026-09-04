@@ -161,6 +161,19 @@ describe("TaskRepository", () => {
     expect(repository.findById(task.taskId).runCount).toBe(1);
   });
 
+  it("drops write-through task state when a vault event invalidates its path", async () => {
+    const memory = createMemoryTaskApp();
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const task = await repository.create({ title: "No longer managed" });
+
+    memory.replaceFrontmatter(task.file.path, {});
+    expect(repository.list()).toMatchObject([{ taskId: task.taskId }]);
+
+    repository.invalidatePaths(["Agent Cockpit/Tasks"]);
+
+    expect(repository.list()).toEqual([]);
+  });
+
   it("fails closed when two Markdown notes claim the same task ID", async () => {
     const first = file("Agent Cockpit/Tasks/first.md");
     const second = file("Agent Cockpit/Tasks/second.md");

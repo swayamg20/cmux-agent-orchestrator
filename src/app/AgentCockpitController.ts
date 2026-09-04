@@ -378,8 +378,9 @@ export class AgentCockpitController {
     }
   }
 
-  async reloadTasks(): Promise<void> {
+  async reloadTasks(changedPaths: readonly string[] = []): Promise<void> {
     if (this.taskRepository === null) return;
+    this.taskRepository.invalidatePaths(changedPaths);
     this.store.update({ tasks: this.taskRepository.list() });
     this.recomputeSessions();
   }

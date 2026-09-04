@@ -13,6 +13,7 @@ export interface MemoryTaskApp {
   markdownWrites: string[];
   createdPaths: string[];
   frontmatterWriteAttempts: () => number;
+  replaceFrontmatter(path: string, value: Record<string, unknown>): void;
 }
 
 /**
@@ -107,6 +108,11 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
     app,
     markdownWrites,
     createdPaths,
-    frontmatterWriteAttempts: () => frontmatterWriteAttempts
+    frontmatterWriteAttempts: () => frontmatterWriteAttempts,
+    replaceFrontmatter: (path, value) => {
+      const entry = entries.get(path);
+      if (!(entry instanceof TFile)) throw new Error(`Missing task fixture at ${path}.`);
+      cachedFrontmatter.set(entry, value);
+    }
   };
 }

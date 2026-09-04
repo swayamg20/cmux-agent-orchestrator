@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Invalidate short-lived task write-through records on vault change, rename, or delete events so manual Markdown schema or identity edits become authoritative immediately.
 - Reconcile a new run count idempotently after a transient Markdown write failure, avoiding both a missing count and a duplicate increment when the vault write outcome is ambiguous.
 - Keep newer provider conversation metadata authoritative when overlapping local reads finish out of order, and prevent an in-flight read from undoing an explicit Forget action.
 - Retry provider classification on a later refresh when a bounded cmux preview read fails transiently, without repeatedly polling successful but inconclusive shell previews.

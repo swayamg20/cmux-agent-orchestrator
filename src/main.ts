@@ -12,6 +12,7 @@ import { AGENT_COCKPIT_VIEW_TYPE, AgentCockpitView } from "./views/AgentCockpitV
 export default class AgentCockpitPlugin extends Plugin {
   private controller: AgentCockpitController | null = null;
   private taskReloadQueued = false;
+  private readonly pendingTaskReloadPaths = new Set<string>();
 
   override async onload(): Promise<void> {
     const providerMetadata = new ProviderMetadataService();
@@ -46,18 +47,18 @@ export default class AgentCockpitPlugin extends Plugin {
 
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
-        if (this.taskFolderAffected(file.path)) this.reloadTasksFromVaultEvent();
+        if (this.taskFolderAffected(file.path)) this.reloadTasksFromVaultEvent(file.path);
       })
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
-        if (this.taskFolderAffected(file.path)) this.reloadTasksFromVaultEvent();
+        if (this.taskFolderAffected(file.path)) this.reloadTasksFromVaultEvent(file.path);
       })
     );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         if (this.taskFolderAffected(file.path) || this.taskFolderAffected(oldPath)) {
-          this.reloadTasksFromVaultEvent();
+          this.reloadTasksFromVaultEvent(file.path, oldPath);
         }
       })
     );
@@ -93,14 +94,17 @@ export default class AgentCockpitPlugin extends Plugin {
     return controller !== null && pathAffectsTaskFolder(path, controller.getSettings().taskFolder);
   }
 
-  private reloadTasksFromVaultEvent(): void {
+  private reloadTasksFromVaultEvent(...paths: string[]): void {
+    for (const path of paths) this.pendingTaskReloadPaths.add(path);
     if (this.taskReloadQueued) return;
     this.taskReloadQueued = true;
     queueMicrotask(() => {
       this.taskReloadQueued = false;
+      const changedPaths = [...this.pendingTaskReloadPaths];
+      this.pendingTaskReloadPaths.clear();
       const controller = this.controller;
       if (controller === null) return;
-      void controller.reloadTasks().catch((error: unknown) => {
+      void controller.reloadTasks(changedPaths).catch((error: unknown) => {
         new Notice(error instanceof Error ? error.message : "Could not refresh agent task notes.");
       });
     });
