@@ -110,7 +110,7 @@ export class CodexAppServerClient implements CodexAppServerRequester {
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const child = spawn(binaryPath, [...codexAppServerCommand()], {
-        env: process.env,
+        env: codexMetadataEnvironment(process.env),
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true
@@ -331,6 +331,12 @@ function assertProviderSessionId(sessionId: string): void {
 
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function codexMetadataEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(environment).filter(([key]) => !key.startsWith("CMUX_"))
+  );
 }
 
 function terminateOwnedChild(child: ChildProcessWithoutNullStreams): void {

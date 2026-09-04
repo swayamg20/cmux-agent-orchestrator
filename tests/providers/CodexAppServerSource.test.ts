@@ -113,6 +113,42 @@ describe("CodexAppServerSource", () => {
     await expect(request).rejects.toThrow("disposed");
   });
 
+  it("does not pass cmux connection context to the Codex metadata child", async () => {
+    const child = appServerChild();
+    const spawnCalls = spawnMock.mock.calls.length;
+    spawnMock.mockReturnValueOnce(child);
+    vi.stubEnv("CMUX_SOCKET_PASSWORD", "test-only-password");
+    vi.stubEnv("CMUX_SURFACE_ID", "44444444-4444-4444-8444-444444444444");
+    vi.stubEnv("CODEX_HOME", "/tmp/test-codex-home");
+    const client = new CodexAppServerClient();
+    (client as unknown as { binaryPath: Promise<string> | null }).binaryPath =
+      Promise.resolve("/opt/homebrew/bin/codex");
+
+    try {
+      const request = client.request("thread/list", { cwd: "/repository" });
+      const requestOutcome = request.then(
+        () => null,
+        (error: unknown) => error
+      );
+      await vi.waitFor(() => expect(spawnMock.mock.calls.length).toBe(spawnCalls + 1));
+      const options = spawnMock.mock.calls[spawnCalls]![2] as {
+        env?: NodeJS.ProcessEnv;
+      };
+
+      expect(options.env?.CODEX_HOME).toBe("/tmp/test-codex-home");
+      expect(options.env?.CMUX_SOCKET_PASSWORD).toBeUndefined();
+      expect(options.env?.CMUX_SURFACE_ID).toBeUndefined();
+
+      client.dispose();
+      const outcome = await requestOutcome;
+      expect(outcome).toBeInstanceOf(Error);
+      expect(outcome instanceof Error ? outcome.message : "").toContain("disposed");
+    } finally {
+      client.dispose();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("settles an active exchange immediately on disposal and ignores late initialization", async () => {
     const child = appServerChild();
     const writes: string[] = [];
