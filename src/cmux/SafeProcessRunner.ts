@@ -4,7 +4,7 @@ import { clearTimeout as cancelTimer, setTimeout as startTimer } from "node:time
 const FORCE_KILL_AFTER_MS = 250;
 
 function isRunning(child: ChildProcess): boolean {
-  return child.exitCode === null && child.signalCode === null;
+  return child.pid !== undefined && child.exitCode === null && child.signalCode === null;
 }
 
 export type ProcessFailureReason = "aborted" | "exit" | "output-limit" | "spawn" | "timeout";
@@ -39,7 +39,7 @@ export interface ProcessRunOptions {
 }
 
 export class SafeProcessRunner {
-  private readonly children = new Set<ChildProcess>();
+  private readonly terminateByChild = new Map<ChildProcess, (reason: ProcessFailureReason) => void>();
   private disposed = false;
 
   async run(
@@ -62,57 +62,94 @@ export class SafeProcessRunner {
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true
       });
-      this.children.add(child);
-
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
       let stdoutBytes = 0;
       let stderrBytes = 0;
-      let failureReason: ProcessFailureReason | null = null;
       let settled = false;
       let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
+      let timer: ReturnType<typeof setTimeout> | null = null;
 
       const output = (chunks: readonly Buffer[]): string => Buffer.concat(chunks).toString("utf8");
-      const terminate = (reason: ProcessFailureReason): void => {
-        failureReason ??= reason;
+      const releaseRequest = (): void => {
+        if (timer !== null) {
+          cancelTimer(timer);
+          timer = null;
+        }
+        options.signal?.removeEventListener("abort", abort);
+      };
+      const releaseChild = (): void => {
+        if (forceKillTimer !== null) {
+          cancelTimer(forceKillTimer);
+          forceKillTimer = null;
+        }
+        this.terminateByChild.delete(child);
+      };
+      const stopChild = (): void => {
         if (!isRunning(child)) return;
         child.kill("SIGTERM");
         forceKillTimer ??= startTimer(() => {
           if (isRunning(child)) child.kill("SIGKILL");
         }, FORCE_KILL_AFTER_MS);
+        forceKillTimer.unref();
       };
-      const abort = (): void => terminate("aborted");
+      const fail = (reason: ProcessFailureReason): void => {
+        if (settled) return;
+        settled = true;
+        releaseRequest();
+        stopChild();
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        const descriptions: Record<ProcessFailureReason, string> = {
+          aborted: "Process was aborted.",
+          exit: "Process failed.",
+          "output-limit": "Process output exceeded the configured limit.",
+          spawn: "Process could not be started.",
+          timeout: "Process exceeded the configured timeout."
+        };
+        reject(
+          new ProcessExecutionError(
+            reason,
+            descriptions[reason],
+            child.exitCode,
+            output(stdoutChunks),
+            output(stderrChunks)
+          )
+        );
+      };
+      const abort = (): void => fail("aborted");
       options.signal?.addEventListener("abort", abort, { once: true });
+      this.terminateByChild.set(child, fail);
 
-      const timer = startTimer(() => terminate("timeout"), options.timeoutMs);
+      timer = startTimer(() => fail("timeout"), options.timeoutMs);
       child.stdout?.on("data", (chunk: Buffer) => {
+        if (settled) return;
         stdoutBytes += chunk.byteLength;
         if (stdoutBytes > options.maxStdoutBytes) {
-          terminate("output-limit");
+          const remaining = options.maxStdoutBytes - (stdoutBytes - chunk.byteLength);
+          if (remaining > 0) stdoutChunks.push(chunk.subarray(0, remaining));
+          fail("output-limit");
           return;
         }
         stdoutChunks.push(chunk);
       });
       child.stderr?.on("data", (chunk: Buffer) => {
+        if (settled) return;
         stderrBytes += chunk.byteLength;
         if (stderrBytes > options.maxStderrBytes) {
-          terminate("output-limit");
+          const remaining = options.maxStderrBytes - (stderrBytes - chunk.byteLength);
+          if (remaining > 0) stderrChunks.push(chunk.subarray(0, remaining));
+          fail("output-limit");
           return;
         }
         stderrChunks.push(chunk);
       });
 
-      const cleanup = (): void => {
-        cancelTimer(timer);
-        if (forceKillTimer !== null) cancelTimer(forceKillTimer);
-        options.signal?.removeEventListener("abort", abort);
-        this.children.delete(child);
-      };
-
       child.once("error", (error) => {
         if (settled) return;
+        releaseChild();
         settled = true;
-        cleanup();
+        releaseRequest();
         reject(
           new ProcessExecutionError(
             "spawn",
@@ -126,41 +163,25 @@ export class SafeProcessRunner {
       });
 
       child.once("close", (code) => {
+        releaseChild();
         if (settled) return;
         settled = true;
-        cleanup();
+        releaseRequest();
         const stdout = output(stdoutChunks);
         const stderr = output(stderrChunks);
-        if (failureReason !== null) {
-          const descriptions: Record<ProcessFailureReason, string> = {
-            aborted: "Process was aborted.",
-            exit: "Process failed.",
-            "output-limit": "Process output exceeded the configured limit.",
-            spawn: "Process could not be started.",
-            timeout: "Process exceeded the configured timeout."
-          };
-          reject(new ProcessExecutionError(failureReason, descriptions[failureReason], code, stdout, stderr));
-          return;
-        }
         if (code !== 0) {
           reject(new ProcessExecutionError("exit", `Process exited with code ${String(code)}.`, code, stdout, stderr));
           return;
         }
         resolve({ stdout, stderr, exitCode: 0, durationMs: Date.now() - startedAt });
       });
+
+      if (options.signal?.aborted) fail("aborted");
     });
   }
 
   dispose(): void {
     this.disposed = true;
-    for (const child of this.children) {
-      if (!isRunning(child)) continue;
-      child.kill("SIGTERM");
-      const forceKillTimer = startTimer(() => {
-        if (isRunning(child)) child.kill("SIGKILL");
-      }, FORCE_KILL_AFTER_MS);
-      forceKillTimer.unref();
-    }
-    this.children.clear();
+    for (const terminate of [...this.terminateByChild.values()]) terminate("aborted");
   }
 }
