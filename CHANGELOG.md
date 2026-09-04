@@ -14,7 +14,7 @@ All notable changes to this project will be documented in this file.
 
 - Re-resolve the complete live cmux tuple and exact provider identity before persisting each automatic binding.
 - Fail closed for ambiguous, duplicate, heuristic-only, invalid, shell, and unknown identities, and retain detached run history as a durable no-recreate marker.
-- Serialize automatic tracking and derive stable task IDs so refreshes, reloads, and recoverable partial writes cannot duplicate a provider run.
+- Serialize automatic tracking, normalize canonical provider UUID casing, and derive stable task IDs so refreshes, reloads, source-format differences, and recoverable partial writes cannot duplicate a provider run.
 
 ## [0.2.0] - 2026-09-03
 

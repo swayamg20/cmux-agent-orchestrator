@@ -31,7 +31,9 @@ export function selectAutomaticTrackCandidates(
 ): AutomaticTrackCandidate[] {
   const knownRuns = new Set(
     runs.flatMap((run) =>
-      isTrackableProvider(run.provider) && run.providerSessionId !== null
+      isTrackableProvider(run.provider) &&
+      run.providerSessionId !== null &&
+      isCanonicalUuid(run.providerSessionId)
         ? [providerSessionKey(run.provider, run.providerSessionId)]
         : []
     )
@@ -76,13 +78,14 @@ export function exactTrackableIdentity(
   ) {
     return null;
   }
-  return { provider: provider.provider, sessionId: provider.sessionId };
+  return { provider: provider.provider, sessionId: provider.sessionId.toLowerCase() };
 }
 
 export function automaticTaskId(provider: TrackableProvider, providerSessionId: string): string {
   if (!isCanonicalUuid(providerSessionId)) throw new Error("Provider session ID is not a canonical UUID.");
+  const canonicalSessionId = providerSessionId.toLowerCase();
   const characters = createHash("sha256")
-    .update(`cmux-agent-orchestrator\0automatic-task\0${provider}\0${providerSessionId}`)
+    .update(`cmux-agent-orchestrator\0automatic-task\0${provider}\0${canonicalSessionId}`)
     .digest("hex")
     .slice(0, 32)
     .split("");
@@ -99,7 +102,7 @@ export function automaticTaskTitle(session: LiveSession, provider: TrackableProv
 }
 
 export function providerSessionKey(provider: TrackableProvider, sessionId: string): string {
-  return `${provider}:${sessionId}`;
+  return `${provider}:${sessionId.toLowerCase()}`;
 }
 
 function isTrackableProvider(value: string): value is TrackableProvider {

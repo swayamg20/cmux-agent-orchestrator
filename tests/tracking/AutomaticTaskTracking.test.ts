@@ -121,7 +121,7 @@ describe("automatic task tracking policy", () => {
     );
     const duplicateB = session(
       "66666666-6666-4666-8666-666666666666",
-      exactProvider("codex", CODEX_SESSION_ID, "codex-writer-lock")
+      exactProvider("codex", CODEX_SESSION_ID.toUpperCase(), "codex-writer-lock")
     );
     const heuristic = session("77777777-7777-4777-8777-777777777777", {
       ...exactProvider("claude", CLAUDE_SESSION_ID),
@@ -150,7 +150,7 @@ describe("automatic task tracking policy", () => {
       runId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       taskId: automaticTaskId("codex", CODEX_SESSION_ID),
       provider: "codex",
-      providerSessionId: CODEX_SESSION_ID,
+      providerSessionId: CODEX_SESSION_ID.toUpperCase(),
       relation: "initial",
       parentRunId: null,
       firstAttachedAt: "2026-09-04T00:00:00.000Z",
@@ -172,6 +172,9 @@ describe("automatic task tracking policy", () => {
     expect(title).not.toContain("Secret provider conversation title");
     expect(title).not.toContain("Private surface title");
     expect(automaticTaskId("codex", CODEX_SESSION_ID)).toBe(
+      automaticTaskId("codex", CODEX_SESSION_ID)
+    );
+    expect(automaticTaskId("codex", CODEX_SESSION_ID.toUpperCase())).toBe(
       automaticTaskId("codex", CODEX_SESSION_ID)
     );
     expect(automaticTaskId("codex", CODEX_SESSION_ID)).not.toBe(
