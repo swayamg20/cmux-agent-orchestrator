@@ -21,6 +21,7 @@ export interface MemoryTaskApp {
   replaceFrontmatter(path: string, value: Record<string, unknown>): void;
   replaceFile(path: string, frontmatter?: Record<string, unknown>): TFile;
   renameFile(oldPath: string, newPath: string): TFile;
+  renameFolder(oldPath: string, newPath: string): TFolder;
 }
 
 /**
@@ -45,9 +46,14 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
   const createFolder = async (path: string): Promise<void> => {
     await options.beforeCreateFolder?.(path);
     createdFolderPaths.push(path);
-    const created = Object.assign(new TFolder(), { path, children: [] as Array<TFile | TFolder> });
-    entries.set(path, created);
     const parent = entries.get(path.split("/").slice(0, -1).join("/"));
+    const created = Object.assign(new TFolder(), {
+      path,
+      name: path.split("/").pop() ?? path,
+      parent: parent instanceof TFolder ? parent : null,
+      children: [] as Array<TFile | TFolder>
+    });
+    entries.set(path, created);
     if (parent instanceof TFolder) parent.children.push(created);
   };
   const app = {
@@ -63,15 +69,17 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
         createdPaths.push(path);
         markdownWrites.push(markdown);
         const name = path.split("/").pop() ?? path;
+        const parent = entries.get(path.split("/").slice(0, -1).join("/"));
         const created = Object.assign(new TFile(), {
           path,
+          name,
           extension: "md",
           basename: name.replace(/\.md$/, ""),
+          parent: parent instanceof TFolder ? parent : null,
           stat: { ctime: Date.now(), mtime: Date.now() }
         });
         entries.set(path, created);
         markdownByFile.set(created, markdown);
-        const parent = entries.get(path.split("/").slice(0, -1).join("/"));
         if (parent instanceof TFolder) parent.children.push(created);
         cachedFrontmatter.set(created, {
           "agent-cockpit": "task",
@@ -151,8 +159,10 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
       const name = path.split("/").pop() ?? path;
       const replacement = Object.assign(new TFile(), {
         path,
+        name,
         extension: "md",
         basename: name.replace(/\.md$/, ""),
+        parent: parent instanceof TFolder ? parent : null,
         stat: { ctime: Date.now(), mtime: Date.now() }
       });
       entries.set(path, replacement);
@@ -182,10 +192,53 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
       entries.delete(oldPath);
       Object.assign(file, {
         path: newPath,
-        basename: name.replace(/\.md$/, "")
+        name,
+        basename: name.replace(/\.[^.]+$/, ""),
+        extension: name.includes(".") ? name.split(".").pop() ?? "" : "",
+        parent: newParent
       });
       entries.set(newPath, file);
       return file;
+    },
+    renameFolder: (oldPath, newPath) => {
+      const renamedFolder = entries.get(oldPath);
+      if (!(renamedFolder instanceof TFolder)) {
+        throw new Error(`Missing task fixture folder at ${oldPath}.`);
+      }
+      if (entries.has(newPath)) throw new Error(`Task fixture already exists at ${newPath}.`);
+      const oldParentPath = oldPath.split("/").slice(0, -1).join("/");
+      const newParentPath = newPath.split("/").slice(0, -1).join("/");
+      const oldParent = entries.get(oldParentPath);
+      const newParent = entries.get(newParentPath);
+      if (!(newParent instanceof TFolder)) {
+        throw new Error(`Missing task fixture folder at ${newParentPath}.`);
+      }
+      if (oldParent !== newParent) {
+        if (oldParent instanceof TFolder) {
+          const index = oldParent.children.indexOf(renamedFolder);
+          if (index >= 0) oldParent.children.splice(index, 1);
+        }
+        newParent.children.push(renamedFolder);
+      }
+      const movedEntries = [...entries]
+        .filter(([path]) => path === oldPath || path.startsWith(`${oldPath}/`));
+      for (const [path] of movedEntries) entries.delete(path);
+      for (const [path, entry] of movedEntries) {
+        const movedPath = `${newPath}${path.slice(oldPath.length)}`;
+        const name = movedPath.split("/").pop() ?? movedPath;
+        const attributes: Record<string, unknown> = {
+          path: movedPath,
+          name
+        };
+        if (entry === renamedFolder) attributes.parent = newParent;
+        if (entry instanceof TFile) {
+          attributes.basename = name.replace(/\.[^.]+$/, "");
+          attributes.extension = name.includes(".") ? name.split(".").pop() ?? "" : "";
+        }
+        Object.assign(entry, attributes);
+        entries.set(movedPath, entry);
+      }
+      return renamedFolder;
     }
   };
 }

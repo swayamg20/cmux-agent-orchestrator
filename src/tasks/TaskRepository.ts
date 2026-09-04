@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { normalizePath, TFile, TFolder, type App } from "obsidian";
+import { normalizePath, TFile, TFolder, type App, type TAbstractFile } from "obsidian";
 import { canonicalUuidEquals, normalizeCanonicalUuid } from "../security/identifiers";
 import { createTaskMarkdown, type NewTaskInput } from "./TaskTemplate";
 import {
@@ -27,6 +27,16 @@ export interface EnsureTaskOptions extends CreateTaskOptions {
 export interface EnsureTaskResult {
   task: TaskRecord;
   created: boolean;
+}
+
+export interface TaskInvalidationEvidence {
+  file: TAbstractFile;
+  path: string;
+}
+
+export interface TaskRenameEvidence {
+  file: TAbstractFile;
+  oldPath: string;
 }
 
 type MutationGuard = () => boolean;
@@ -92,15 +102,24 @@ export class TaskRepository {
     }
   }
 
-  invalidatePaths(paths: readonly string[]): void {
-    const roots = paths.map((path) => normalizePath(path));
-    if (roots.length === 0) return;
+  invalidateVaultEvents(
+    invalidations: readonly TaskInvalidationEvidence[],
+    renames: readonly TaskRenameEvidence[]
+  ): void {
+    if (invalidations.length === 0 && renames.length === 0) return;
     for (const recentTasks of this.scope.recentTasksByFolder.values()) {
       for (const [taskId, task] of recentTasks) {
-        const taskPath = normalizePath(task.file.path);
-        if (roots.some((root) => taskPath === root || taskPath.startsWith(`${root}/`))) {
-          this.trustedRecentTasks.delete(task);
-          if (!this.shouldBridgeMetadataLag(task)) recentTasks.delete(taskId);
+        const invalidated = invalidations.some((evidence) =>
+          this.invalidationAffectsTask(task, evidence)
+        );
+        const renamed = renames.some(({ file }) => this.eventFileContainsTask(file, task.file));
+        if (!invalidated && !renamed) continue;
+        this.trustedRecentTasks.delete(task);
+        if (
+          invalidated ||
+          !renames.some(({ file, oldPath }) => this.shouldBridgeRename(task, file, oldPath))
+        ) {
+          recentTasks.delete(taskId);
         }
       }
     }
@@ -422,6 +441,7 @@ export class TaskRepository {
   }
 
   private recentTaskIsDisproved(task: TaskRecord): boolean {
+    if (task.file.extension !== "md") return true;
     const currentFile = this.app.vault.getAbstractFileByPath(normalizePath(task.file.path));
     if (currentFile !== task.file) return true;
     if (this.trustedRecentTasks.has(task)) return false;
@@ -431,9 +451,66 @@ export class TaskRepository {
     return indexed === null || indexed.taskId !== task.taskId;
   }
 
-  private shouldBridgeMetadataLag(task: TaskRecord): boolean {
-    const currentFile = this.app.vault.getAbstractFileByPath(normalizePath(task.file.path));
-    return currentFile === task.file && this.app.metadataCache.getFileCache(task.file) === null;
+  private shouldBridgeRename(
+    task: TaskRecord,
+    renamedFile: TAbstractFile,
+    oldPath: string
+  ): boolean {
+    const taskPath = normalizePath(task.file.path);
+    const previousTaskPath = this.previousTaskPathForRename(task, renamedFile, oldPath);
+    return previousTaskPath !== null &&
+      task.file.extension === "md" &&
+      this.isInTaskFolder(previousTaskPath) &&
+      this.isInTaskFolder(taskPath) &&
+      this.app.vault.getAbstractFileByPath(taskPath) === task.file &&
+      this.app.metadataCache.getFileCache(task.file) === null;
+  }
+
+  private invalidationAffectsTask(
+    task: TaskRecord,
+    { file, path }: TaskInvalidationEvidence
+  ): boolean {
+    if (this.eventFileContainsTask(file, task.file)) return true;
+    if (!(file instanceof TFolder)) return false;
+    const taskPath = normalizePath(task.file.path);
+    const eventPath = normalizePath(path);
+    const liveEventFile = this.app.vault.getAbstractFileByPath(normalizePath(file.path));
+    const liveTaskFile = this.app.vault.getAbstractFileByPath(taskPath);
+    return liveEventFile === null &&
+      liveTaskFile !== task.file &&
+      (taskPath === eventPath || taskPath.startsWith(`${eventPath}/`));
+  }
+
+  private eventFileContainsTask(eventFile: TAbstractFile, taskFile: TFile): boolean {
+    let current: TAbstractFile | null = taskFile;
+    const visited = new Set<TAbstractFile>();
+    while (current !== null && !visited.has(current)) {
+      if (current === eventFile) return true;
+      visited.add(current);
+      current = current.parent ?? null;
+    }
+    if (!(eventFile instanceof TFolder)) return false;
+    const eventPath = normalizePath(eventFile.path);
+    const taskPath = normalizePath(taskFile.path);
+    return this.app.vault.getAbstractFileByPath(eventPath) === eventFile &&
+      this.app.vault.getAbstractFileByPath(taskPath) === taskFile &&
+      taskPath.startsWith(`${eventPath}/`);
+  }
+
+  private previousTaskPathForRename(
+    task: TaskRecord,
+    renamedFile: TAbstractFile,
+    oldPath: string
+  ): string | null {
+    if (task.file === renamedFile) return normalizePath(oldPath);
+    if (!(renamedFile instanceof TFolder) || !this.eventFileContainsTask(renamedFile, task.file)) {
+      return null;
+    }
+    const taskPath = normalizePath(task.file.path);
+    const renamedFolderPath = normalizePath(renamedFile.path);
+    if (this.app.vault.getAbstractFileByPath(renamedFolderPath) !== renamedFile) return null;
+    if (!taskPath.startsWith(`${renamedFolderPath}/`)) return null;
+    return normalizePath(`${normalizePath(oldPath)}${taskPath.slice(renamedFolderPath.length)}`);
   }
 
   private rememberRecentTask(taskFolder: string, task: TaskRecord): void {

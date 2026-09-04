@@ -49,7 +49,11 @@ import type {
   SessionFilters,
   SourceHealth
 } from "../state/types";
-import type { CreateTaskOptions } from "../tasks/TaskRepository";
+import type {
+  CreateTaskOptions,
+  TaskInvalidationEvidence,
+  TaskRenameEvidence
+} from "../tasks/TaskRepository";
 import { TaskRepository } from "../tasks/TaskRepository";
 import type { TaskRecord, WorkflowStatus } from "../tasks/TaskSchema";
 import {
@@ -480,9 +484,12 @@ export class AgentCockpitController {
     }
   }
 
-  async reloadTasks(changedPaths: readonly string[] = []): Promise<void> {
+  async reloadTasks(
+    invalidations: readonly TaskInvalidationEvidence[] = [],
+    renames: readonly TaskRenameEvidence[] = []
+  ): Promise<void> {
     if (this.disposed || this.taskRepository === null) return;
-    this.taskRepository.invalidatePaths(changedPaths);
+    this.taskRepository.invalidateVaultEvents(invalidations, renames);
     this.store.update({ tasks: this.taskRepository.list() });
     this.recomputeSessions();
   }

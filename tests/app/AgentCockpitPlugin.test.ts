@@ -1,4 +1,4 @@
-import type { App, PluginManifest } from "obsidian";
+import type { App, PluginManifest, TAbstractFile } from "obsidian";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 interface Deferred<T> {
@@ -123,13 +123,17 @@ describe("AgentCockpitPlugin lifecycle", () => {
     const plugin = createPlugin();
     const testablePlugin = plugin as unknown as {
       controller: typeof controller | null;
-      reloadTasksFromVaultEvent: (...paths: string[]) => void;
+      reloadTasksFromVaultEvent: (file: TAbstractFile) => void;
     };
+    const file = { path: "Agent Work/Tasks/example.md" } as TAbstractFile;
     testablePlugin.controller = controller;
 
-    testablePlugin.reloadTasksFromVaultEvent("Agent Work/Tasks/example.md");
+    testablePlugin.reloadTasksFromVaultEvent(file);
+    file.path = "Agent Work/Tasks/renamed.md";
     await Promise.resolve();
-    expect(controller.reloadTasks).toHaveBeenCalledWith(["Agent Work/Tasks/example.md"]);
+    expect(controller.reloadTasks).toHaveBeenCalledWith([
+      { file, path: "Agent Work/Tasks/example.md" }
+    ], []);
 
     plugin.onunload();
     reload.reject(new Error("Late task reload failure."));
@@ -138,6 +142,31 @@ describe("AgentCockpitPlugin lifecycle", () => {
 
     expect(controller.dispose).toHaveBeenCalledOnce();
     expect(harness.notices).toEqual([]);
+  });
+
+  it("forwards exact rename evidence as one batch separate from generic invalidation", async () => {
+    const controller = {
+      dispose: vi.fn(),
+      reloadTasks: vi.fn(async () => undefined)
+    };
+    const plugin = createPlugin();
+    const testablePlugin = plugin as unknown as {
+      controller: typeof controller | null;
+      reloadTasksFromRenameEvent: (file: TAbstractFile, oldPath: string) => void;
+    };
+    const firstFile = { path: "Agent Work/Tasks/second.md" } as TAbstractFile;
+    const secondFile = { path: "Agent Work/Tasks/first.md" } as TAbstractFile;
+    testablePlugin.controller = controller;
+
+    testablePlugin.reloadTasksFromRenameEvent(firstFile, "Agent Work/Tasks/first.md");
+    testablePlugin.reloadTasksFromRenameEvent(secondFile, "Agent Work/Tasks/second.md");
+    await Promise.resolve();
+
+    expect(controller.reloadTasks).toHaveBeenCalledOnce();
+    expect(controller.reloadTasks).toHaveBeenCalledWith([], [
+      { file: firstFile, oldPath: "Agent Work/Tasks/first.md" },
+      { file: secondFile, oldPath: "Agent Work/Tasks/second.md" }
+    ]);
   });
 
   it("does not reveal a newly prepared view after unload", async () => {

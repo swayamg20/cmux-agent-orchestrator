@@ -255,8 +255,8 @@ describe("TaskRepository", () => {
     const oldPath = created.task.file.path;
     const newPath = "Folder A/renamed-task.md";
 
-    memory.renameFile(oldPath, newPath);
-    repository.invalidatePaths([newPath, oldPath]);
+    const renamedFile = memory.renameFile(oldPath, newPath);
+    repository.invalidateVaultEvents([], [{ file: renamedFile, oldPath }]);
     const reused = await repository.ensure(options);
 
     expect(created).toMatchObject({ created: true });
@@ -266,6 +266,119 @@ describe("TaskRepository", () => {
     });
     expect(memory.markdownWrites).toHaveLength(1);
     expect(memory.createdPaths).toEqual([oldPath]);
+  });
+
+  it("does not bridge a renamed task that is no longer Markdown", async () => {
+    const memory = createMemoryTaskApp({ metadataVisible: () => false });
+    const repository = new TaskRepository(memory.app, "Folder A");
+    const task = await repository.create({ title: "No longer Markdown" });
+    const oldPath = task.file.path;
+    const renamedFile = memory.renameFile(oldPath, "Folder A/no-longer-markdown.txt");
+
+    repository.invalidateVaultEvents([], [{ file: renamedFile, oldPath }]);
+
+    expect(repository.list()).toEqual([]);
+    expect(() => repository.findById(task.taskId)).toThrow("The linked task no longer exists.");
+  });
+
+  it("bridges descendant task identity across a nested-folder rename", async () => {
+    const memory = createMemoryTaskApp({ metadataVisible: () => false });
+    const repository = new TaskRepository(memory.app, "Folder A");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Nested deterministic task",
+      repository: "/repository"
+    };
+    const created = await repository.ensure(options);
+    await memory.app.vault.createFolder("Folder A/Nested");
+    const originalPath = created.task.file.path;
+    const nestedPath = "Folder A/Nested/nested-deterministic-task.md";
+    const nestedFile = memory.renameFile(originalPath, nestedPath);
+    repository.invalidateVaultEvents([], [{ file: nestedFile, oldPath: originalPath }]);
+    const nestedFolder = memory.renameFolder("Folder A/Nested", "Folder A/Renamed");
+
+    repository.invalidateVaultEvents([], [{ file: nestedFolder, oldPath: "Folder A/Nested" }]);
+    const reused = await repository.ensure(options);
+
+    expect(reused).toMatchObject({
+      created: false,
+      task: { taskId: options.taskId, file: { path: "Folder A/Renamed/nested-deterministic-task.md" } }
+    });
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(memory.createdPaths).toEqual([originalPath]);
+  });
+
+  it("preserves each exact identity across an interacting rename batch", async () => {
+    const memory = createMemoryTaskApp({ metadataVisible: () => false });
+    const repository = new TaskRepository(memory.app, "Folder A");
+    const firstOptions = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "First",
+      repository: "/repository"
+    };
+    const secondOptions = {
+      taskId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      title: "Second",
+      repository: "/repository"
+    };
+    const first = await repository.ensure(firstOptions);
+    const second = await repository.ensure(secondOptions);
+    const firstPath = first.task.file.path;
+    const secondPath = second.task.file.path;
+    const temporaryPath = "Folder A/temporary.md";
+    const firstFile = memory.renameFile(firstPath, temporaryPath);
+    const secondFile = memory.renameFile(secondPath, firstPath);
+    memory.renameFile(temporaryPath, secondPath);
+    const renames = [
+      { file: firstFile, oldPath: firstPath },
+      { file: secondFile, oldPath: secondPath }
+    ];
+
+    repository.invalidateVaultEvents([], renames);
+    const reusedFirst = await repository.ensure(firstOptions);
+    const reusedSecond = await repository.ensure(secondOptions);
+
+    expect(reusedFirst).toMatchObject({
+      created: false,
+      task: { taskId: firstOptions.taskId, file: { path: secondPath } }
+    });
+    expect(reusedSecond).toMatchObject({
+      created: false,
+      task: { taskId: secondOptions.taskId, file: { path: firstPath } }
+    });
+    expect(memory.markdownWrites).toHaveLength(2);
+  });
+
+  it("does not let a later rename launder an earlier generic change", async () => {
+    const memory = createMemoryTaskApp({ metadataVisible: () => false });
+    const repository = new TaskRepository(memory.app, "Folder A");
+    const task = await repository.create({ title: "Changed then renamed" });
+    const oldPath = task.file.path;
+    memory.replaceFrontmatter(oldPath, {});
+    const invalidation = { file: task.file, path: oldPath };
+    const renamedFile = memory.renameFile(oldPath, "Folder A/renamed-after-change.md");
+
+    repository.invalidateVaultEvents([invalidation], [{ file: renamedFile, oldPath }]);
+
+    expect(repository.list()).toEqual([]);
+    expect(() => repository.findById(task.taskId)).toThrow("The linked task no longer exists.");
+  });
+
+  it("does not apply old-path evidence to a different replacement file", async () => {
+    const memory = createMemoryTaskApp({ metadataVisible: () => false });
+    const repository = new TaskRepository(memory.app, "Folder A");
+    const changed = await repository.create({ title: "Reusable path" });
+    const oldPath = changed.file.path;
+    const invalidation = { file: changed.file, path: oldPath };
+    const renamedFile = memory.renameFile(oldPath, "Folder A/changed-and-renamed.md");
+    const replacement = await repository.create({ title: "Reusable path" });
+
+    repository.invalidateVaultEvents([invalidation], [{ file: renamedFile, oldPath }]);
+
+    expect(() => repository.findById(changed.taskId)).toThrow("The linked task no longer exists.");
+    expect(repository.findById(replacement.taskId).file).toBe(replacement.file);
+    expect(repository.list()).toMatchObject([{ taskId: replacement.taskId }]);
+    expect(memory.markdownWrites).toHaveLength(2);
   });
 
   it("cancels guarded deterministic creation before queued vault work starts", async () => {
@@ -468,17 +581,31 @@ describe("TaskRepository", () => {
     expect(repository.findById(task.taskId).runCount).toBe(1);
   });
 
-  it("drops write-through task state when a vault event invalidates its path", async () => {
+  it("drops descendant write-through state for an exact task-folder event", async () => {
     const memory = createMemoryTaskApp();
     const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
     const task = await repository.create({ title: "No longer managed" });
+    const taskFolder = memory.app.vault.getAbstractFileByPath("Agent Cockpit/Tasks");
+    if (!(taskFolder instanceof TFolder)) throw new Error("Missing task folder fixture.");
 
     memory.replaceFrontmatter(task.file.path, {});
     expect(repository.list()).toMatchObject([{ taskId: task.taskId }]);
 
-    repository.invalidatePaths(["Agent Cockpit/Tasks"]);
+    repository.invalidateVaultEvents([{ file: taskFolder, path: taskFolder.path }], []);
 
     expect(repository.list()).toEqual([]);
+  });
+
+  it("drops unindexed write-through state after a generic file change", async () => {
+    const memory = createMemoryTaskApp({ metadataVisible: () => false });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const task = await repository.create({ title: "Changed before reindexing" });
+
+    memory.replaceFrontmatter(task.file.path, {});
+    repository.invalidateVaultEvents([{ file: task.file, path: task.file.path }], []);
+
+    expect(repository.list()).toEqual([]);
+    expect(() => repository.findById(task.taskId)).toThrow("The linked task no longer exists.");
   });
 
   it("does not let recent write-through state mask a changed task identity at the same path", async () => {
@@ -540,7 +667,7 @@ describe("TaskRepository", () => {
     expect(repository.list()[0]?.workflowStatus).toBe("review");
     expect(repository.findById(taskId).workflowStatus).toBe("review");
 
-    repository.invalidatePaths([taskFile.path]);
+    repository.invalidateVaultEvents([{ file: taskFile, path: taskFile.path }], []);
     expect(repository.list()[0]?.workflowStatus).toBe("active");
   });
 
