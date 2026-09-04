@@ -16,6 +16,7 @@ const paneId = "b3333333-b333-4333-8333-b33333333333";
 const surfaceId = "c4444444-c444-4444-8444-c44444444444";
 const secondSurfaceId = "e6666666-e666-4666-8666-e66666666666";
 const sessionId = "d5555555-d555-4555-8555-d5555555555a";
+const secondSessionId = "f7777777-f777-4777-8777-f77777777777";
 
 function snapshot(): CmuxSnapshot {
   return {
@@ -218,6 +219,130 @@ describe("AutomaticProviderSessionResolver", () => {
 
     expect(result.mappings).toEqual([]);
     expect(get).not.toHaveBeenCalled();
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it.each(["missing", "failed"] as const)(
+    "fails closed when one of several Codex writer locks has %s metadata",
+    async (failure) => {
+      const source: ProviderSessionSource = {
+        provider: "codex",
+        list: async () => [],
+        get: async (requestedId, cwd) => {
+          if (requestedId === secondSessionId) {
+            if (failure === "failed") throw new Error("metadata unavailable");
+            return null;
+          }
+          return {
+            provider: "codex",
+            sessionId,
+            title: "Root thread",
+            titleSource: "explicit-name",
+            cwd,
+            updatedAt: 900,
+            status: "idle",
+            parentSessionId: null,
+            sourceKind: "cli"
+          };
+        },
+        dispose: () => undefined
+      };
+      const metadata = new ProviderMetadataService([source]);
+      const processes = new FakeProcessSource([processRecord()]);
+      processes.readLocks.mockResolvedValue([sessionId, secondSessionId]);
+      const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+      const result = await resolver.resolve(snapshot(), client());
+
+      expect(result.mappings).toEqual([]);
+      resolver.dispose();
+      metadata.dispose();
+    }
+  );
+
+  it("accepts one proven root Codex lock when every competing lock is a proven subagent", async () => {
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async (requestedId, cwd) => ({
+        provider: "codex",
+        sessionId: requestedId,
+        title: requestedId === sessionId ? "Root thread" : "Subagent thread",
+        titleSource: "explicit-name",
+        cwd,
+        updatedAt: 900,
+        status: "idle",
+        parentSessionId: requestedId === sessionId ? null : sessionId,
+        sourceKind: requestedId === sessionId ? "cli" : "subAgent"
+      }),
+      dispose: () => undefined
+    };
+    const metadata = new ProviderMetadataService([source]);
+    const processes = new FakeProcessSource([processRecord()]);
+    processes.readLocks.mockResolvedValue([sessionId, secondSessionId]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(result.mappings).toEqual([
+      expect.objectContaining({ providerSessionId: sessionId, confidence: "high" })
+    ]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("fails closed when Codex returns metadata for a different writer-lock ID", async () => {
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async (_requestedId, cwd) => ({
+        provider: "codex",
+        sessionId: secondSessionId,
+        title: "Different thread",
+        titleSource: "explicit-name",
+        cwd,
+        updatedAt: 900,
+        status: "idle",
+        parentSessionId: null,
+        sourceKind: "cli"
+      }),
+      dispose: () => undefined
+    };
+    const metadata = new ProviderMetadataService([source]);
+    const processes = new FakeProcessSource([processRecord()]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(result.mappings).toEqual([]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("fails closed when Codex writer-lock metadata cannot be classified", async () => {
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async (requestedId, cwd) => ({
+        provider: "codex",
+        sessionId: requestedId,
+        title: "Unclassified thread",
+        titleSource: "explicit-name",
+        cwd,
+        updatedAt: 900,
+        status: "idle",
+        sourceKind: "cli"
+      }),
+      dispose: () => undefined
+    };
+    const metadata = new ProviderMetadataService([source]);
+    const processes = new FakeProcessSource([processRecord()]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(result.mappings).toEqual([]);
     resolver.dispose();
     metadata.dispose();
   });

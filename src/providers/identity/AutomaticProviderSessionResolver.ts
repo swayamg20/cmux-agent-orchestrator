@@ -6,7 +6,11 @@ import {
   type CmuxSnapshot,
   type CmuxTarget
 } from "../../cmux/types";
-import { isCanonicalUuid, normalizeCanonicalUuid } from "../../security/identifiers";
+import {
+  canonicalUuidEquals,
+  isCanonicalUuid,
+  normalizeCanonicalUuid
+} from "../../security/identifiers";
 import type { Confidence } from "../../state/types";
 import type { ProviderMetadataService } from "../ProviderMetadataService";
 import type { ProviderSessionKind, ProviderSessionMetadata } from "../types";
@@ -217,12 +221,19 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     const rootThreads: ProviderSessionMetadata[] = [];
     for (const sessionId of writerIds) {
       if (signal?.aborted || this.disposed) return null;
+      let thread: ProviderSessionMetadata | null;
       try {
-        const thread = await this.metadata.get("codex", sessionId, cwd, signal);
-        if (thread?.parentSessionId === null && thread.sourceKind !== "subAgent") rootThreads.push(thread);
+        thread = await this.metadata.get("codex", sessionId, cwd, signal);
       } catch {
-        // One unreadable writer lock must not make a different candidate look exact.
+        return null;
       }
+      if (thread === null || !canonicalUuidEquals(thread.sessionId, sessionId)) return null;
+      const isRoot = thread.parentSessionId === null && thread.sourceKind !== "subAgent";
+      const isSubagent =
+        thread.sourceKind === "subAgent" ||
+        normalizeCanonicalUuid(thread.parentSessionId ?? "") !== null;
+      if (!isRoot && !isSubagent) return null;
+      if (isRoot) rootThreads.push(thread);
     }
     if (rootThreads.length !== 1) return null;
     const thread = rootThreads[0]!;
