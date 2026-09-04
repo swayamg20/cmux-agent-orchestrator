@@ -13,10 +13,17 @@ const METADATA_CONCURRENCY = 2;
 const MAX_METADATA_ENTRIES = 1_000;
 const MAX_REQUEST_REVISIONS = 2_000;
 
+interface ExactRequestResult {
+  revision: number;
+  promise: Promise<ProviderSessionMetadata | null>;
+  resolve(value: ProviderSessionMetadata | null): void;
+}
+
 export class ProviderMetadataService {
   private readonly sources: ReadonlyMap<ProviderSessionKind, ProviderSessionSource>;
   private readonly metadata = new Map<string, ProviderSessionMetadata>();
   private readonly requestRevisions = new Map<string, number>();
+  private readonly exactRequestResults = new Map<string, ExactRequestResult>();
   private readonly controllers = new Set<AbortController>();
   private requestSequence = 0;
   private retiredThrough = 0;
@@ -43,7 +50,13 @@ export class ProviderMetadataService {
         .map((session) => normalizeMetadata(session, provider, cwd))
         .filter((session): session is ProviderSessionMetadata => session !== null);
       if (this.disposed || request.controller.signal.aborted) return [];
-      for (const session of sessions) this.cache(session, request.revision);
+      for (const session of sessions) {
+        this.cache(session, request.revision);
+        const key = providerMetadataKey(session.provider, session.sessionId);
+        if (this.isLatestRequest(key, request.revision)) {
+          this.beginExactRequestResult(key, request.revision).resolve(session);
+        }
+      }
       return sessions.map((session) => ({ ...session }));
     } finally {
       request.close();
@@ -62,16 +75,50 @@ export class ProviderMetadataService {
       if (canonicalSessionId === null) return null;
       const key = providerMetadataKey(provider, canonicalSessionId);
       this.markRequest(key, request.revision);
-      const loaded = await this.requireSource(provider).get(
-        canonicalSessionId,
-        cwd,
-        request.controller.signal
-      );
-      if (this.disposed || request.controller.signal.aborted) return null;
-      const session = loaded === null ? null : normalizeMetadata(loaded, provider, cwd);
-      if (session) this.cache(session, request.revision);
-      else if (this.isLatestRequest(key, request.revision)) this.metadata.delete(key);
-      return session ? { ...session } : null;
+      const published = this.beginExactRequestResult(key, request.revision);
+      try {
+        const loaded = await this.requireSource(provider).get(
+          canonicalSessionId,
+          cwd,
+          request.controller.signal
+        );
+        if (this.disposed || request.controller.signal.aborted) {
+          published.resolve(null);
+          return null;
+        }
+        const session = normalizeExactMetadata(
+          loaded,
+          provider,
+          canonicalSessionId,
+          cwd
+        );
+        if (!this.isLatestRequest(key, request.revision)) {
+          const latest = this.exactRequestResults.get(key);
+          const replacement = latest !== undefined && latest.revision > request.revision
+            ? await latest.promise
+            : null;
+          if (this.disposed || request.controller.signal.aborted) {
+            published.resolve(null);
+            return null;
+          }
+          const result = normalizeExactMetadata(
+            replacement,
+            provider,
+            canonicalSessionId,
+            cwd
+          );
+          published.resolve(result);
+          return result === null ? null : { ...result };
+        }
+        if (session) this.cache(session, request.revision);
+        else this.metadata.delete(key);
+        const result = session ? { ...session } : null;
+        published.resolve(result);
+        return result;
+      } catch (error) {
+        published.resolve(null);
+        throw error;
+      }
     } finally {
       request.close();
     }
@@ -145,7 +192,9 @@ export class ProviderMetadataService {
   forget(provider: ProviderSessionKind, sessionId: string): void {
     if (this.disposed) return;
     const key = providerMetadataKey(provider, sessionId);
-    this.markRequest(key, ++this.requestSequence);
+    const revision = ++this.requestSequence;
+    this.markRequest(key, revision);
+    this.beginExactRequestResult(key, revision).resolve(null);
     this.metadata.delete(key);
   }
 
@@ -153,6 +202,8 @@ export class ProviderMetadataService {
     this.disposed = true;
     for (const controller of this.controllers) controller.abort();
     this.controllers.clear();
+    for (const result of this.exactRequestResults.values()) result.resolve(null);
+    this.exactRequestResults.clear();
     for (const source of this.sources.values()) source.dispose();
     this.metadata.clear();
     this.requestRevisions.clear();
@@ -207,6 +258,40 @@ export class ProviderMetadataService {
     );
   }
 
+  private beginExactRequestResult(key: string, revision: number): ExactRequestResult {
+    const previous = this.exactRequestResults.get(key);
+    let settle!: (value: ProviderSessionMetadata | null) => void;
+    const promise = new Promise<ProviderSessionMetadata | null>((resolve) => {
+      settle = resolve;
+    });
+    let settled = false;
+    const result: ExactRequestResult = {
+      revision,
+      promise,
+      resolve: (value) => {
+        if (settled) return;
+        settled = true;
+        settle(value === null ? null : { ...value });
+      }
+    };
+    this.exactRequestResults.delete(key);
+    this.exactRequestResults.set(key, result);
+    if (previous !== undefined && previous.revision < revision) {
+      void result.promise.then(
+        (value) => previous.resolve(value),
+        () => previous.resolve(null)
+      );
+    }
+    while (this.exactRequestResults.size > MAX_REQUEST_REVISIONS) {
+      const oldest = this.exactRequestResults.entries().next();
+      if (oldest.done) break;
+      const [oldestKey, oldestResult] = oldest.value;
+      this.exactRequestResults.delete(oldestKey);
+      oldestResult.resolve(null);
+    }
+    return result;
+  }
+
   private markRequest(key: string, revision: number): boolean {
     if (revision <= this.retiredThrough) return false;
     this.requestRevisions.delete(key);
@@ -236,4 +321,15 @@ function normalizeMetadata(
   const sessionId = normalizeCanonicalUuid(session.sessionId);
   if (sessionId === null || session.provider !== provider || session.cwd !== cwd) return null;
   return { ...session, sessionId };
+}
+
+function normalizeExactMetadata(
+  session: ProviderSessionMetadata | null,
+  provider: ProviderSessionKind,
+  sessionId: string,
+  cwd: string
+): ProviderSessionMetadata | null {
+  if (session === null) return null;
+  const normalized = normalizeMetadata(session, provider, cwd);
+  return normalized?.sessionId === sessionId ? normalized : null;
 }

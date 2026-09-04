@@ -158,6 +158,23 @@ describe("ProviderMetadataService", () => {
     service.dispose();
   });
 
+  it("rejects an exact source result for a different provider session", async () => {
+    const otherSessionId = "66666666-6666-4666-8666-66666666666a";
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async () => ({ ...metadata, sessionId: otherSessionId }),
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+
+    await expect(
+      service.get("codex", metadata.sessionId, metadata.cwd)
+    ).resolves.toBeNull();
+    expect(service.evidence.size).toBe(0);
+    service.dispose();
+  });
+
   it("propagates caller cancellation into an active provider metadata request", async () => {
     let providerSignal: AbortSignal | undefined;
     const source: ProviderSessionSource = {
@@ -250,6 +267,89 @@ describe("ProviderMetadataService", () => {
     service.dispose();
   });
 
+  it("returns newer listed metadata to a superseded exact reader", async () => {
+    let resolveGet!: (value: ProviderSessionMetadata | null) => void;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [{ ...metadata, title: "New listed title", updatedAt: 2_000 }],
+      get: async () => new Promise<ProviderSessionMetadata | null>((resolve) => {
+        resolveGet = resolve;
+      }),
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const older = service.get("codex", metadata.sessionId, metadata.cwd);
+
+    await service.list("codex", metadata.cwd);
+    resolveGet({ ...metadata, title: "Old exact title", updatedAt: 1_000 });
+
+    await expect(older).resolves.toMatchObject({
+      title: "New listed title",
+      updatedAt: 2_000
+    });
+    expect(service.evidence.get(`codex:${metadata.sessionId}`)).toMatchObject({
+      title: "New listed title",
+      updatedAt: 2_000
+    });
+    service.dispose();
+  });
+
+  it("does not substitute newer metadata from a different working directory", async () => {
+    const resolvers: Array<(value: ProviderSessionMetadata | null) => void> = [];
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async () => new Promise<ProviderSessionMetadata | null>((resolve) => resolvers.push(resolve)),
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const older = service.get("codex", metadata.sessionId, "/workspace/old");
+    const newer = service.get("codex", metadata.sessionId, "/workspace/new");
+
+    resolvers[1]!({ ...metadata, cwd: "/workspace/new", title: "Moved session" });
+    await newer;
+    resolvers[0]!({ ...metadata, cwd: "/workspace/old", title: "Stale location" });
+
+    await expect(older).resolves.toBeNull();
+    expect(service.evidence.get(`codex:${metadata.sessionId}`)).toMatchObject({
+      cwd: "/workspace/new",
+      title: "Moved session"
+    });
+    service.dispose();
+  });
+
+  it("forwards a superseded reader through an unresolved intermediate request", async () => {
+    const resolvers: Array<(value: ProviderSessionMetadata | null) => void> = [];
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async () => new Promise<ProviderSessionMetadata | null>((resolve) => resolvers.push(resolve)),
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const first = service.get("codex", metadata.sessionId, metadata.cwd);
+    const second = service.get("codex", metadata.sessionId, metadata.cwd);
+
+    resolvers[0]!({ ...metadata, title: "First title", updatedAt: 1_000 });
+    for (let index = 0; index < 4; index += 1) await Promise.resolve();
+    const third = service.get("codex", metadata.sessionId, metadata.cwd);
+    resolvers[2]!({ ...metadata, title: "Newest title", updatedAt: 3_000 });
+    await third;
+
+    let observed: ProviderSessionMetadata | null | undefined;
+    void first.then((value) => {
+      observed = value;
+    });
+    await vi.waitFor(
+      () => expect(observed).toMatchObject({ title: "Newest title", updatedAt: 3_000 }),
+      { timeout: 50, interval: 1 }
+    );
+    resolvers[1]!({ ...metadata, title: "Intermediate title", updatedAt: 2_000 });
+    await second;
+
+    service.dispose();
+  });
+
   it("does not let an older exact read restore metadata after a newer miss", async () => {
     const resolvers: Array<(value: ProviderSessionMetadata | null) => void> = [];
     const source: ProviderSessionSource = {
@@ -265,7 +365,7 @@ describe("ProviderMetadataService", () => {
     resolvers[1]!(null);
     await newer;
     resolvers[0]!(metadata);
-    await older;
+    await expect(older).resolves.toBeNull();
 
     expect(service.evidence.has(`codex:${metadata.sessionId}`)).toBe(false);
     service.dispose();
@@ -286,7 +386,7 @@ describe("ProviderMetadataService", () => {
 
     service.forget("codex", metadata.sessionId);
     resolveGet(metadata);
-    await pending;
+    await expect(pending).resolves.toBeNull();
 
     expect(service.evidence.has(`codex:${metadata.sessionId}`)).toBe(false);
     service.dispose();
