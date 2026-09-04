@@ -414,6 +414,119 @@ describe("BindingRepository", () => {
     ]);
   });
 
+  it("serializes saves across reloaded plugin instances for the same vault", async () => {
+    let persisted: unknown = { schemaVersion: 3, settings: {}, machines: {} };
+    let releaseOldSave: (() => void) | undefined;
+    let markOldSaveStarted: (() => void) | undefined;
+    const oldSaveStarted = new Promise<void>((resolve) => {
+      markOldSaveStarted = resolve;
+    });
+    const oldSaveGate = new Promise<void>((resolve) => {
+      releaseOldSave = resolve;
+    });
+    const sharedAdapter = {};
+    const oldPlugin = {
+      app: { vault: { adapter: sharedAdapter } },
+      manifest: { id: "cmux-agent-orchestrator" },
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        markOldSaveStarted?.();
+        await oldSaveGate;
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const newPlugin = {
+      app: { vault: { adapter: sharedAdapter } },
+      manifest: { id: "cmux-agent-orchestrator" },
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const common = {
+      workspaceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      paneId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      provider: "codex" as const,
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    };
+    const oldRepository = new BindingRepository(oldPlugin);
+    await oldRepository.load();
+
+    const oldAttach = oldRepository.attach({
+      ...common,
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      surfaceId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+    });
+    await oldSaveStarted;
+
+    const newRepository = new BindingRepository(newPlugin);
+    let newLoadFinished = false;
+    const newLoad = newRepository.load().then(() => {
+      newLoadFinished = true;
+    });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    const newLoadFinishedBeforeRelease = newLoadFinished;
+    releaseOldSave?.();
+    await Promise.all([oldAttach, newLoad]);
+
+    expect(newLoadFinishedBeforeRelease).toBe(false);
+    expect(newRepository.list()).toMatchObject([
+      { surfaceId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" }
+    ]);
+    const newAttach = newRepository.attach({
+      ...common,
+      taskId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      surfaceId: "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    });
+
+    await newAttach;
+    const reloaded = new BindingRepository(newPlugin);
+    await reloaded.load();
+    expect(reloaded.list().map((binding) => binding.surfaceId).sort()).toEqual([
+      "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    ]);
+  });
+
+  it("isolates persistence coordination for different plugin IDs in one vault", async () => {
+    const sharedAdapter = {};
+    let firstPersisted: unknown = { schemaVersion: 3, settings: {}, machines: {} };
+    let secondPersisted: unknown;
+    const firstPlugin = {
+      app: { vault: { adapter: sharedAdapter } },
+      manifest: { id: "cmux-agent-orchestrator" },
+      loadData: async () => structuredClone(firstPersisted),
+      saveData: async (next: unknown) => {
+        firstPersisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const secondPlugin = {
+      app: { vault: { adapter: sharedAdapter } },
+      manifest: { id: "a-different-plugin" },
+      loadData: async () => structuredClone(secondPersisted),
+      saveData: async (next: unknown) => {
+        secondPersisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const firstRepository = new BindingRepository(firstPlugin, async () => undefined);
+    const secondRepository = new BindingRepository(secondPlugin, async () => undefined);
+    await firstRepository.load();
+    await secondRepository.load();
+
+    await expect(secondRepository.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      paneId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      surfaceId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      provider: "codex",
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    })).resolves.toMatchObject({ isNewRun: true });
+
+    expect(secondPersisted).toMatchObject({ schemaVersion: 3 });
+  });
+
   it("rebases a conditional local attachment onto another repository's saved binding", async () => {
     let persisted: unknown = { schemaVersion: 3, settings: {}, machines: {} };
     const plugin = {

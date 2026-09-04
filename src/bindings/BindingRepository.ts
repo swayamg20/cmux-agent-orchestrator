@@ -61,11 +61,29 @@ const PROVIDER_SESSION_KEYS = new Set([
   "matchedAt"
 ]);
 
-// Obsidian does not expose compare-and-swap for plugin data. This process-local
-// queue still prevents two repository instances from reading the same snapshot
-// and then overwriting one another inside one Obsidian process.
-const pluginSaveChains = new WeakMap<object, Promise<void>>();
-const pluginsWithObservedData = new WeakSet<object>();
+interface PersistenceCoordinator {
+  scopes: WeakMap<object, Map<string, PersistenceScopeState>>;
+}
+
+interface PersistenceScopeState {
+  tail: Promise<void>;
+  observedData: boolean;
+}
+
+// Obsidian does not expose compare-and-swap for plugin data. Keep this
+// coordinator on the shared JavaScript global so it survives plugin instance
+// replacement and serializes saves for the same vault adapter.
+const PERSISTENCE_COORDINATOR_SYMBOL = Symbol.for(
+  "obsidian.cmux-agent-orchestrator.persistence-coordinator.v1"
+);
+const headlessPersistenceHost = {};
+const persistenceHost = typeof window === "undefined" ? headlessPersistenceHost : window;
+const sharedGlobal = persistenceHost as typeof persistenceHost & {
+  [PERSISTENCE_COORDINATOR_SYMBOL]?: PersistenceCoordinator;
+};
+const persistenceCoordinator = sharedGlobal[PERSISTENCE_COORDINATOR_SYMBOL] ??= {
+  scopes: new WeakMap<object, Map<string, PersistenceScopeState>>()
+};
 
 interface PersistedPluginData {
   schemaVersion: 3;
@@ -79,17 +97,34 @@ interface DecodePluginDataOptions {
   strictForWrite?: boolean;
 }
 
-function enqueuePluginSave<T>(plugin: Plugin, work: () => Promise<T>): Promise<T> {
-  const previous = pluginSaveChains.get(plugin) ?? Promise.resolve();
-  const operation = previous.catch(() => undefined).then(work);
-  pluginSaveChains.set(
-    plugin,
-    operation.then(
-      () => undefined,
-      () => undefined
-    )
-  );
+function enqueuePersistenceWork<T>(scope: PersistenceScopeState, work: () => Promise<T>): Promise<T> {
+  const operation = scope.tail.catch(() => undefined).then(work);
+  scope.tail = operation.then(() => undefined, () => undefined);
   return operation;
+}
+
+function pluginPersistenceScope(plugin: Plugin): PersistenceScopeState {
+  const adapter = plugin.app?.vault?.adapter;
+  const vault = plugin.app?.vault;
+  const storage = typeof adapter === "object" && adapter !== null
+    ? adapter
+    : typeof vault === "object" && vault !== null
+      ? vault
+      : plugin;
+  const pluginId = typeof plugin.manifest?.id === "string" && plugin.manifest.id.length > 0
+    ? plugin.manifest.id
+    : "cmux-agent-orchestrator";
+  let scopes = persistenceCoordinator.scopes.get(storage);
+  if (scopes === undefined) {
+    scopes = new Map<string, PersistenceScopeState>();
+    persistenceCoordinator.scopes.set(storage, scopes);
+  }
+  let scope = scopes.get(pluginId);
+  if (scope === undefined) {
+    scope = { tail: Promise.resolve(), observedData: false };
+    scopes.set(pluginId, scope);
+  }
+  return scope;
 }
 
 function machineId(): string {
@@ -676,30 +711,33 @@ function decodeProviderSessions(value: unknown): ProviderSessionMapping[] {
 
 export class BindingRepository {
   private readonly currentMachineId = machineId();
+  private readonly persistenceScope: PersistenceScopeState;
   private data: PersistedPluginData | null = null;
   private hasObservedCurrentData = false;
 
   constructor(
     private readonly plugin: Plugin,
     private readonly loadLegacyData: () => Promise<unknown> = () => loadLegacyPluginData(plugin)
-  ) {}
+  ) {
+    this.persistenceScope = pluginPersistenceScope(plugin);
+  }
 
   async load(): Promise<void> {
-    let loaded: unknown = await this.plugin.loadData();
-    this.hasObservedCurrentData = !isMissingPluginData(loaded);
-    if (this.hasObservedCurrentData) pluginsWithObservedData.add(this.plugin);
-    let importedLegacyData = false;
-    if (isMissingPluginData(loaded)) {
-      const legacyData = await this.loadLegacyData();
-      if (hasPersistedPluginData(legacyData)) {
-        loaded = legacyData;
-        importedLegacyData = true;
+    await enqueuePersistenceWork(this.persistenceScope, async () => {
+      let loaded: unknown = await this.plugin.loadData();
+      this.hasObservedCurrentData = !isMissingPluginData(loaded);
+      if (this.hasObservedCurrentData) this.persistenceScope.observedData = true;
+      let importedLegacyData = false;
+      if (isMissingPluginData(loaded)) {
+        const legacyData = await this.loadLegacyData();
+        if (hasPersistedPluginData(legacyData)) {
+          loaded = legacyData;
+          importedLegacyData = true;
+        }
       }
-    }
-    this.data = decodePluginData(loaded, this.currentMachineId);
-    if (importedLegacyData) {
-      const imported = structuredClone(this.data);
-      await enqueuePluginSave(this.plugin, async () => {
+      this.data = decodePluginData(loaded, this.currentMachineId);
+      if (importedLegacyData) {
+        const imported = structuredClone(this.data);
         const current = (await this.plugin.loadData()) as unknown;
         if (!isMissingPluginData(current)) {
           this.markCurrentDataObserved();
@@ -707,8 +745,8 @@ export class BindingRepository {
           return;
         }
         await this.persistDraft(imported);
-      });
-    }
+      }
+    });
   }
 
   getSettings(): AgentCockpitSettings {
@@ -1000,7 +1038,7 @@ export class BindingRepository {
   }
 
   private commit(mutate: (draft: PersistedPluginData) => void): Promise<void> {
-    return enqueuePluginSave(this.plugin, async () => {
+    return enqueuePersistenceWork(this.persistenceScope, async () => {
       const latest = await this.loadLatestForMutation(this.requireData());
       const draft = structuredClone(latest);
       mutate(draft);
@@ -1009,7 +1047,7 @@ export class BindingRepository {
   }
 
   private commitConditional(mutate: (draft: PersistedPluginData) => boolean): Promise<boolean> {
-    return enqueuePluginSave(this.plugin, async () => {
+    return enqueuePersistenceWork(this.persistenceScope, async () => {
       const latest = await this.loadLatestForMutation(this.requireData());
       const draft = structuredClone(latest);
       if (!mutate(draft)) return false;
@@ -1019,7 +1057,7 @@ export class BindingRepository {
   }
 
   private commitSettings(desired: AgentCockpitSettings): Promise<void> {
-    return enqueuePluginSave(this.plugin, async () => {
+    return enqueuePersistenceWork(this.persistenceScope, async () => {
       const base = this.requireData();
       const latest = await this.loadLatest(base);
       if (
@@ -1047,7 +1085,10 @@ export class BindingRepository {
   private async loadLatest(base: PersistedPluginData): Promise<PersistedPluginData> {
     const loaded = (await this.plugin.loadData()) as unknown;
     if (isMissingPluginData(loaded)) {
-      if (this.hasObservedCurrentData || pluginsWithObservedData.has(this.plugin)) {
+      if (
+        this.hasObservedCurrentData ||
+        this.persistenceScope.observedData
+      ) {
         throw new Error(`${PRODUCT_NAME} data became unavailable before it could be saved.`);
       }
       return structuredClone(base);
@@ -1080,7 +1121,7 @@ export class BindingRepository {
 
   private markCurrentDataObserved(): void {
     this.hasObservedCurrentData = true;
-    pluginsWithObservedData.add(this.plugin);
+    this.persistenceScope.observedData = true;
   }
 }
 
