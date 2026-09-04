@@ -1101,6 +1101,11 @@ describe("AutomaticProviderSessionResolver", () => {
     const result = await resolver.resolve(snapshot(), client(agents));
 
     expect(result.mappings).toEqual([]);
+    expect(result.suppressedSurfaceIds).toEqual([surfaceId]);
+    expect(result.suppressedProviderSessionKeys).toEqual([
+      `claude:${sessionId}`,
+      `codex:${sessionId}`
+    ]);
     resolver.dispose();
     metadata.dispose();
   });

@@ -67,6 +67,18 @@ interface NormalizedMappings {
   rejectedProviderSessionKeys: ReadonlySet<string>;
 }
 
+interface NativeMappingResolution {
+  mappings: AutomaticProviderSessionMapping[];
+  rejectedSurfaceIds: ReadonlySet<string>;
+  rejectedProviderSessionKeys: ReadonlySet<string>;
+}
+
+interface NativeMappingAttempt {
+  mapping: AutomaticProviderSessionMapping | null;
+  rejectedSurfaceId: string | null;
+  rejectedProviderSessionKeys: readonly string[];
+}
+
 type ExactMetadataReader = (
   provider: ProviderSessionKind,
   sessionId: string,
@@ -111,7 +123,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     const nativeAgents = await nativePromise;
     if (this.disposed || signal?.aborted) return emptyResolution(checkedAt);
 
-    const nativeMappings = await this.resolveNativeMappings(
+    const nativeResolution = await this.resolveNativeMappings(
       nativeAgents.records,
       processResolutions.map((resolution) => resolution.mapping),
       surfaces,
@@ -127,11 +139,13 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     if (this.disposed || signal?.aborted) return emptyResolution(checkedAt);
     const rejectedSurfaceIds = new Set([
       ...localResolution.rejectedSurfaceIds,
-      ...processRevalidation.rejectedSurfaceIds
+      ...processRevalidation.rejectedSurfaceIds,
+      ...nativeResolution.rejectedSurfaceIds
     ]);
     const rejectedProviderSessionKeys = new Set([
       ...localResolution.rejectedProviderSessionKeys,
-      ...processRevalidation.rejectedProviderSessionKeys
+      ...processRevalidation.rejectedProviderSessionKeys,
+      ...nativeResolution.rejectedProviderSessionKeys
     ]);
     const survivingProcessMappings = processRevalidation.resolutions.map(
       (resolution) => resolution.mapping
@@ -139,7 +153,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     const survivingProcessSurfaceIds = new Set(
       survivingProcessMappings.map((mapping) => mapping.surfaceId)
     );
-    const publishableNativeMappings = nativeMappings.filter(
+    const publishableNativeMappings = nativeResolution.mappings.filter(
       (mapping) => !survivingProcessSurfaceIds.has(mapping.surfaceId)
     );
     const normalizedMappings = normalizeMappings(
@@ -547,7 +561,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     verifyExact: ExactMetadataReader,
     signal: AbortSignal | undefined,
     issues: string[]
-  ): Promise<AutomaticProviderSessionMapping[]> {
+  ): Promise<NativeMappingResolution> {
     const processBySurface = new Map(
       processMappings.map((mapping) => [normalizeCanonicalUuid(mapping.surfaceId)!, mapping])
     );
@@ -556,29 +570,38 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
         record.sessionId !== null &&
         isCanonicalUuid(record.sessionId) &&
         normalizeCanonicalUuid(record.surfaceId) !== null &&
-        surfaces.get(normalizeCanonicalUuid(record.surfaceId)!)?.currentDirectory !== null
+        surfaces.has(normalizeCanonicalUuid(record.surfaceId)!)
     );
-    return (
-      await mapLimited(candidates, RESOLUTION_CONCURRENCY, async (record) => {
-        const surfaceId = normalizeCanonicalUuid(record.surfaceId);
-        if (surfaceId === null) return null;
-        const surface = surfaces.get(surfaceId);
-        if (!surface?.currentDirectory || !record.sessionId) return null;
-        const providerSessionId = normalizeCanonicalUuid(record.sessionId);
-        if (providerSessionId === null) return null;
-        const processMapping = processBySurface.get(surfaceId);
-        let provider: ProviderSessionKind | null =
-          processMapping?.providerSessionId === providerSessionId ? processMapping.provider : null;
-        if (!provider) {
-          provider = await this.identifyNativeProvider(
-            providerSessionId,
-            surface.currentDirectory,
-            verifyExact,
-            signal
-          );
-        }
-        if (!provider) return null;
-        return {
+    const attempts = await mapLimited(candidates, RESOLUTION_CONCURRENCY, async (record) => {
+      const surfaceId = normalizeCanonicalUuid(record.surfaceId);
+      if (surfaceId === null) return null;
+      const surface = surfaces.get(surfaceId);
+      if (!surface || !record.sessionId) return null;
+      const providerSessionId = normalizeCanonicalUuid(record.sessionId);
+      if (providerSessionId === null) return null;
+      const processMapping = processBySurface.get(surfaceId);
+      if (!surface.currentDirectory) {
+        return processMapping === undefined
+          ? rejectedNativeIdentity(surfaceId, providerSessionId)
+          : null;
+      }
+      let provider: ProviderSessionKind | null =
+        processMapping?.providerSessionId === providerSessionId ? processMapping.provider : null;
+      if (!provider) {
+        provider = await this.identifyNativeProvider(
+          providerSessionId,
+          surface.currentDirectory,
+          verifyExact,
+          signal
+        );
+      }
+      if (!provider) {
+        return processMapping === undefined
+          ? rejectedNativeIdentity(surfaceId, providerSessionId)
+          : null;
+      }
+      return {
+        mapping: {
           ...surface,
           provider,
           providerSessionId,
@@ -586,9 +609,31 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
           confidence: confidenceForNativeSource(record.source),
           explanation: `cmux reported this canonical provider session ID for the exact surface via its ${record.source} agent source.`,
           observedAt: checkedAt
-        };
-      })
-    ).filter(isPresent);
+        },
+        rejectedSurfaceId: null,
+        rejectedProviderSessionKeys: []
+      };
+    });
+    const mappings: AutomaticProviderSessionMapping[] = [];
+    const rejectedSurfaceIds = new Set<string>();
+    const rejectedProviderSessionKeys = new Set<string>();
+    for (const attempt of attempts) {
+      if (attempt === null) continue;
+      if (attempt.mapping !== null) {
+        mappings.push(attempt.mapping);
+        continue;
+      }
+      if (attempt.rejectedSurfaceId !== null) {
+        rejectedSurfaceIds.add(attempt.rejectedSurfaceId);
+      }
+      for (const identityKey of attempt.rejectedProviderSessionKeys) {
+        rejectedProviderSessionKeys.add(identityKey);
+      }
+    }
+    if (rejectedSurfaceIds.size > 0) {
+      issues.push("Unverified cmux agent provider identities were discarded for safety.");
+    }
+    return { mappings, rejectedSurfaceIds, rejectedProviderSessionKeys };
   }
 
   private async identifyNativeProvider(
@@ -825,6 +870,20 @@ function canonicalProviderSessionKeys(
       })
     )
   ].sort();
+}
+
+function rejectedNativeIdentity(
+  surfaceId: string,
+  providerSessionId: string
+): NativeMappingAttempt {
+  return {
+    mapping: null,
+    rejectedSurfaceId: surfaceId,
+    rejectedProviderSessionKeys: [
+      `claude:${providerSessionId}`,
+      `codex:${providerSessionId}`
+    ]
+  };
 }
 
 function isRejectedProcessIdentity(
