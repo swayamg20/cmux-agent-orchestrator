@@ -314,48 +314,30 @@ export class BindingRepository {
     }
     const normalized = normalizeProviderSessionMapping(mapping);
     await this.commit((data) => {
-      const machine = this.machineFor(data);
-      const conflicting = machine.providerSessions.find(
-        (candidate) =>
-          candidate.provider === normalized.provider &&
-          candidate.providerSessionId === normalized.providerSessionId &&
-          candidate.surfaceId !== normalized.surfaceId
-      );
-      const conflictingBinding = machine.bindings.find(
-        (candidate) =>
-          candidate.provider === normalized.provider &&
-          candidate.providerSessionId === normalized.providerSessionId &&
-          candidate.surfaceId !== normalized.surfaceId
-      );
-      if (conflicting || conflictingBinding) {
-        throw new Error("That provider conversation is already matched to another cmux surface.");
-      }
-      const replacing = machine.providerSessions.some(
-        (candidate) => candidate.surfaceId === normalized.surfaceId
-      );
-      if (!replacing && machine.providerSessions.length >= MAX_PROVIDER_SESSIONS_PER_MACHINE) {
-        throw new Error(`${PRODUCT_NAME} has reached the provider-session mapping limit for this machine.`);
-      }
-      machine.providerSessions = machine.providerSessions.filter(
-        (candidate) => candidate.surfaceId !== normalized.surfaceId
-      );
-      machine.providerSessions.push(normalized);
+      mapProviderSessionToMachine(this.machineFor(data), normalized);
+    });
+  }
 
-      const binding = machine.bindings.find(
-        (candidate) =>
-          candidate.workspaceId === normalized.workspaceId &&
-          candidate.paneId === normalized.paneId &&
-          candidate.surfaceId === normalized.surfaceId
-      );
-      if (binding) {
-        binding.provider = normalized.provider;
-        binding.providerSessionId = normalized.providerSessionId;
-        const run = machine.runs.find((candidate) => candidate.runId === binding.runId);
-        if (run) {
-          run.provider = normalized.provider;
-          run.providerSessionId = normalized.providerSessionId;
-        }
-      }
+  async mapProviderSessionIfUnchanged(
+    mapping: ProviderSessionMapping,
+    expected: ProviderSessionMapping | null
+  ): Promise<boolean> {
+    if (!isProviderSessionMapping(mapping)) {
+      throw new Error("Provider session mapping contains an invalid canonical identity or value.");
+    }
+    if (expected !== null && !isProviderSessionMapping(expected)) {
+      throw new Error("Expected provider session mapping contains an invalid canonical identity or value.");
+    }
+    const normalized = normalizeProviderSessionMapping(mapping);
+    const normalizedExpected = expected === null ? null : normalizeProviderSessionMapping(expected);
+    return this.commitConditional((data) => {
+      const machine = this.machineFor(data);
+      const current = machine.providerSessions.find(
+        (candidate) => candidate.surfaceId === normalized.surfaceId
+      ) ?? null;
+      if (!sameProviderSessionMapping(current, normalizedExpected)) return false;
+      mapProviderSessionToMachine(machine, normalized);
+      return true;
     });
   }
 
@@ -797,6 +779,53 @@ function sameProviderSessionMapping(
     left.providerSessionId === right.providerSessionId &&
     left.matchedAt === right.matchedAt
   );
+}
+
+function mapProviderSessionToMachine(
+  machine: MachineBindings,
+  normalized: ProviderSessionMapping
+): void {
+  const conflicting = machine.providerSessions.find(
+    (candidate) =>
+      candidate.provider === normalized.provider &&
+      candidate.providerSessionId === normalized.providerSessionId &&
+      candidate.surfaceId !== normalized.surfaceId
+  );
+  const conflictingBinding = machine.bindings.find(
+    (candidate) =>
+      candidate.provider === normalized.provider &&
+      candidate.providerSessionId === normalized.providerSessionId &&
+      candidate.surfaceId !== normalized.surfaceId
+  );
+  if (conflicting || conflictingBinding) {
+    throw new Error("That provider conversation is already matched to another cmux surface.");
+  }
+  const replacing = machine.providerSessions.some(
+    (candidate) => candidate.surfaceId === normalized.surfaceId
+  );
+  if (!replacing && machine.providerSessions.length >= MAX_PROVIDER_SESSIONS_PER_MACHINE) {
+    throw new Error(`${PRODUCT_NAME} has reached the provider-session mapping limit for this machine.`);
+  }
+  machine.providerSessions = machine.providerSessions.filter(
+    (candidate) => candidate.surfaceId !== normalized.surfaceId
+  );
+  machine.providerSessions.push(normalized);
+
+  const binding = machine.bindings.find(
+    (candidate) =>
+      candidate.workspaceId === normalized.workspaceId &&
+      candidate.paneId === normalized.paneId &&
+      candidate.surfaceId === normalized.surfaceId
+  );
+  if (binding) {
+    binding.provider = normalized.provider;
+    binding.providerSessionId = normalized.providerSessionId;
+    const run = machine.runs.find((candidate) => candidate.runId === binding.runId);
+    if (run) {
+      run.provider = normalized.provider;
+      run.providerSessionId = normalized.providerSessionId;
+    }
+  }
 }
 
 function forgetProviderSessionFromMachine(

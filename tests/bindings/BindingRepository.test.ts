@@ -745,6 +745,64 @@ describe("BindingRepository", () => {
     expect(repository.listRuns()[0]?.providerSessionId).toBe(replacement.providerSessionId);
   });
 
+  it("does not let a stale conditional conversation choice replace a queued mapping", async () => {
+    let data: unknown;
+    let releaseReplacementSave: (() => void) | undefined;
+    let markReplacementSaveStarted: (() => void) | undefined;
+    const replacementSaveStarted = new Promise<void>((resolve) => {
+      markReplacementSaveStarted = resolve;
+    });
+    const replacementSaveGate = new Promise<void>((resolve) => {
+      releaseReplacementSave = resolve;
+    });
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        if (saveCount === 2) {
+          markReplacementSaveStarted?.();
+          await replacementSaveGate;
+        }
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex" as const
+    };
+    const original = {
+      ...target,
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      matchedAt: "2026-09-04T00:00:00.000Z"
+    };
+    const replacement = {
+      ...target,
+      providerSessionId: "66666666-6666-4666-8666-666666666666",
+      matchedAt: "2026-09-04T00:01:00.000Z"
+    };
+    const staleChoice = {
+      ...target,
+      providerSessionId: "77777777-7777-4777-8777-777777777777",
+      matchedAt: "2026-09-04T00:02:00.000Z"
+    };
+    await expect(repository.mapProviderSessionIfUnchanged(original, null)).resolves.toBe(true);
+
+    const replacementWrite = repository.mapProviderSession(replacement);
+    await replacementSaveStarted;
+    const staleWrite = repository.mapProviderSessionIfUnchanged(staleChoice, original);
+    releaseReplacementSave?.();
+
+    await expect(replacementWrite).resolves.toBeUndefined();
+    await expect(staleWrite).resolves.toBe(false);
+    expect(saveCount).toBe(2);
+    expect(repository.listProviderSessions()).toEqual([replacement]);
+  });
+
   it("keeps several runs for one durable task and reuses the run on repeated attachment", async () => {
     let data: unknown;
     const plugin = {

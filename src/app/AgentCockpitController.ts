@@ -4,7 +4,7 @@ import { validateBinarySetting, validateBindingIdentity } from "../actions/valid
 import { AgentDetector } from "../agents/AgentDetector";
 import { ProviderClassifier } from "../agents/ProviderClassifier";
 import { BindingRepository } from "../bindings/BindingRepository";
-import type { BindingRecord } from "../bindings/types";
+import type { BindingRecord, ProviderSessionMapping } from "../bindings/types";
 import { CMUX_SETUP_CLIPBOARD_TEXT } from "../cmux/accessSetup";
 import { CmuxClient } from "../cmux/CmuxClient";
 import {
@@ -1184,7 +1184,8 @@ export class AgentCockpitController {
     conversation: ProviderSessionMetadata
   ): Promise<void> {
     try {
-      const current = this.resolveCurrentSession(original);
+      const expectedMapping = this.expectedProviderSessionMapping(original);
+      const current = this.resolveCurrentBindingSession(original);
       if (
         current.currentDirectory === null ||
         current.currentDirectory !== conversation.cwd ||
@@ -1192,14 +1193,17 @@ export class AgentCockpitController {
       ) {
         throw new Error("The cmux surface no longer matches the selected provider conversation.");
       }
-      await this.bindings.mapProviderSession({
+      const mapping = {
         workspaceId: current.workspaceId,
         paneId: current.paneId,
         surfaceId: current.surfaceId,
         provider: conversation.provider,
         providerSessionId: conversation.sessionId,
         matchedAt: new Date().toISOString()
-      });
+      };
+      if (!(await this.bindings.mapProviderSessionIfUnchanged(mapping, expectedMapping))) {
+        throw new Error("The saved provider conversation changed while the picker was open. Refresh and try again.");
+      }
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
       this.recomputeSessions();
       this.scheduleAutomaticTaskTracking();
@@ -1221,6 +1225,32 @@ export class AgentCockpitController {
       );
     if (!current) throw new Error("The exact cmux surface no longer exists. Refresh and try again.");
     return current;
+  }
+
+  private expectedProviderSessionMapping(original: LiveSession): ProviderSessionMapping | null {
+    const mapping = this.bindings
+      .listProviderSessions()
+      .find(
+        (candidate) =>
+          canonicalUuidEquals(candidate.workspaceId, original.workspaceId) &&
+          canonicalUuidEquals(candidate.paneId, original.paneId) &&
+          canonicalUuidEquals(candidate.surfaceId, original.surfaceId)
+      ) ?? null;
+    if (original.provider.source !== "provider-session-mapping") {
+      if (mapping !== null) {
+        throw new Error("The saved provider conversation changed while the picker was open. Refresh and try again.");
+      }
+      return null;
+    }
+    if (
+      mapping === null ||
+      original.provider.sessionId === null ||
+      mapping.provider !== original.provider.provider ||
+      !canonicalUuidEquals(mapping.providerSessionId, original.provider.sessionId)
+    ) {
+      throw new Error("The saved provider conversation changed while the picker was open. Refresh and try again.");
+    }
+    return mapping;
   }
 
   private resolveCurrentBindingSession(original: LiveSession): LiveSession {
