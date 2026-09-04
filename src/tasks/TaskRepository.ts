@@ -99,8 +99,8 @@ export class TaskRepository {
       for (const [taskId, task] of recentTasks) {
         const taskPath = normalizePath(task.file.path);
         if (roots.some((root) => taskPath === root || taskPath.startsWith(`${root}/`))) {
-          recentTasks.delete(taskId);
           this.trustedRecentTasks.delete(task);
+          if (!this.shouldBridgeMetadataLag(task)) recentTasks.delete(taskId);
         }
       }
     }
@@ -429,6 +429,11 @@ export class TaskRepository {
     if (cache === null) return false;
     const indexed = parseTaskRecord(task.file, cache.frontmatter);
     return indexed === null || indexed.taskId !== task.taskId;
+  }
+
+  private shouldBridgeMetadataLag(task: TaskRecord): boolean {
+    const currentFile = this.app.vault.getAbstractFileByPath(normalizePath(task.file.path));
+    return currentFile === task.file && this.app.metadataCache.getFileCache(task.file) === null;
   }
 
   private rememberRecentTask(taskFolder: string, task: TaskRecord): void {

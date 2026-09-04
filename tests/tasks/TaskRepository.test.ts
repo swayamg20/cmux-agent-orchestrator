@@ -243,6 +243,31 @@ describe("TaskRepository", () => {
     expect(() => repository.findById(task.taskId)).toThrow("The linked task no longer exists.");
   });
 
+  it("bridges deterministic task identity across rename before metadata reindexing", async () => {
+    const memory = createMemoryTaskApp({ metadataVisible: () => false });
+    const repository = new TaskRepository(memory.app, "Folder A");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+    const created = await repository.ensure(options);
+    const oldPath = created.task.file.path;
+    const newPath = "Folder A/renamed-task.md";
+
+    memory.renameFile(oldPath, newPath);
+    repository.invalidatePaths([newPath, oldPath]);
+    const reused = await repository.ensure(options);
+
+    expect(created).toMatchObject({ created: true });
+    expect(reused).toMatchObject({
+      created: false,
+      task: { taskId: options.taskId, file: { path: newPath } }
+    });
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(memory.createdPaths).toEqual([oldPath]);
+  });
+
   it("cancels guarded deterministic creation before queued vault work starts", async () => {
     let markCreateStarted!: () => void;
     const createStarted = new Promise<void>((resolve) => {

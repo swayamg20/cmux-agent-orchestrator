@@ -20,6 +20,7 @@ export interface MemoryTaskApp {
   frontmatterWriteAttempts: () => number;
   replaceFrontmatter(path: string, value: Record<string, unknown>): void;
   replaceFile(path: string, frontmatter?: Record<string, unknown>): TFile;
+  renameFile(oldPath: string, newPath: string): TFile;
 }
 
 /**
@@ -158,6 +159,33 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
       if (parent instanceof TFolder) parent.children.push(replacement);
       if (frontmatter !== undefined) cachedFrontmatter.set(replacement, frontmatter);
       return replacement;
+    },
+    renameFile: (oldPath, newPath) => {
+      const file = entries.get(oldPath);
+      if (!(file instanceof TFile)) throw new Error(`Missing task fixture at ${oldPath}.`);
+      if (entries.has(newPath)) throw new Error(`Task fixture already exists at ${newPath}.`);
+      const oldParentPath = oldPath.split("/").slice(0, -1).join("/");
+      const newParentPath = newPath.split("/").slice(0, -1).join("/");
+      const oldParent = entries.get(oldParentPath);
+      const newParent = entries.get(newParentPath);
+      if (!(newParent instanceof TFolder)) {
+        throw new Error(`Missing task fixture folder at ${newParentPath}.`);
+      }
+      if (oldParent !== newParent) {
+        if (oldParent instanceof TFolder) {
+          const index = oldParent.children.indexOf(file);
+          if (index >= 0) oldParent.children.splice(index, 1);
+        }
+        newParent.children.push(file);
+      }
+      const name = newPath.split("/").pop() ?? newPath;
+      entries.delete(oldPath);
+      Object.assign(file, {
+        path: newPath,
+        basename: name.replace(/\.md$/, "")
+      });
+      entries.set(newPath, file);
+      return file;
     }
   };
 }
