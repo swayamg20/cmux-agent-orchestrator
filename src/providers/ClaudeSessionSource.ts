@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import path from "node:path";
-import { open, readdir, stat } from "node:fs/promises";
+import { open, opendir, stat } from "node:fs/promises";
 import { isCanonicalUuid } from "../security/identifiers";
 import { readBoundedUtf8File } from "./readBoundedFile";
 import { sanitizeProviderTitle } from "./titleSanitizer";
@@ -12,6 +12,7 @@ import {
 } from "./types";
 
 const MAX_ACTIVE_SESSION_FILES = 200;
+const MAX_ACTIVE_SESSION_ENTRIES = 1_000;
 const MAX_SESSION_FILE_BYTES = 64 * 1024;
 const TITLE_EDGE_BYTES = 128 * 1024;
 
@@ -67,32 +68,51 @@ export class ClaudeSessionSource implements ProviderSessionSource {
     signal?: AbortSignal
   ): Promise<ProviderSessionMetadata[]> {
     const directory = path.join(this.claudeRoot, "sessions");
-    let entries;
+    let handle;
     try {
-      entries = await readdir(directory, { withFileTypes: true });
+      throwIfAborted(signal);
+      handle = await opendir(directory);
     } catch (error) {
+      if (isAbort(error)) throw error;
       if (isMissing(error)) return [];
       throw new ProviderMetadataError("Claude session metadata is unavailable.", error);
     }
 
     const sessions: ProviderSessionMetadata[] = [];
-    for (const entry of entries.slice(0, MAX_ACTIVE_SESSION_FILES)) {
-      throwIfAborted(signal);
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const filename = path.join(directory, entry.name);
-      try {
-        const snapshot = await readBoundedUtf8File(filename, MAX_SESSION_FILE_BYTES, signal);
-        if (!snapshot) continue;
-        const decoded = decodeClaudeSession(
-          JSON.parse(snapshot.content) as unknown,
-          cwd,
-          snapshot.modifiedAt
-        );
-        if (decoded) sessions.push(decoded);
-      } catch (error) {
-        if (isAbort(error)) throw error;
-        // One stale or malformed provider registry file must not hide healthy sessions.
+    let entriesExamined = 0;
+    let sessionFilesExamined = 0;
+    try {
+      while (
+        entriesExamined < MAX_ACTIVE_SESSION_ENTRIES &&
+        sessionFilesExamined < MAX_ACTIVE_SESSION_FILES
+      ) {
+        throwIfAborted(signal);
+        const entry = await handle.read();
+        throwIfAborted(signal);
+        if (entry === null) break;
+        entriesExamined += 1;
+        if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+        sessionFilesExamined += 1;
+        const filename = path.join(directory, entry.name);
+        try {
+          const snapshot = await readBoundedUtf8File(filename, MAX_SESSION_FILE_BYTES, signal);
+          if (!snapshot) continue;
+          const decoded = decodeClaudeSession(
+            JSON.parse(snapshot.content) as unknown,
+            cwd,
+            snapshot.modifiedAt
+          );
+          if (decoded) sessions.push(decoded);
+        } catch (error) {
+          if (isAbort(error)) throw error;
+          // One stale or malformed provider registry file must not hide healthy sessions.
+        }
       }
+    } catch (error) {
+      if (isAbort(error)) throw error;
+      throw new ProviderMetadataError("Claude session metadata is unavailable.", error);
+    } finally {
+      await handle.close().catch(() => undefined);
     }
     return sessions;
   }
