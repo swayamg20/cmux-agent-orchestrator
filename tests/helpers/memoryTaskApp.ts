@@ -8,6 +8,7 @@ export interface MemoryTaskAppOptions {
   beforeCreateFolder?: (path: string) => Promise<void>;
   beforeFrontmatter?: () => Promise<void>;
   beforeLookup?: (path: string) => void;
+  metadataVisible?: (file: TFile) => boolean;
   removeAfterCreate?: boolean;
 }
 
@@ -18,6 +19,7 @@ export interface MemoryTaskApp {
   createdPaths: string[];
   frontmatterWriteAttempts: () => number;
   replaceFrontmatter(path: string, value: Record<string, unknown>): void;
+  replaceFile(path: string, frontmatter?: Record<string, unknown>): TFile;
 }
 
 /**
@@ -99,7 +101,11 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
       read: async (file: TFile) => markdownByFile.get(file) ?? ""
     },
     metadataCache: {
-      getFileCache: (file: TFile) => ({ frontmatter: cachedFrontmatter.get(file) })
+      getFileCache: (file: TFile) => {
+        if (options.metadataVisible?.(file) === false) return null;
+        const frontmatter = cachedFrontmatter.get(file);
+        return frontmatter === undefined ? null : { frontmatter };
+      }
     },
     fileManager: {
       processFrontMatter: async (
@@ -130,6 +136,28 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
       const entry = entries.get(path);
       if (!(entry instanceof TFile)) throw new Error(`Missing task fixture at ${path}.`);
       cachedFrontmatter.set(entry, value);
+    },
+    replaceFile: (path, frontmatter) => {
+      const previous = entries.get(path);
+      if (!(previous instanceof TFile)) throw new Error(`Missing task fixture at ${path}.`);
+      const parent = entries.get(path.split("/").slice(0, -1).join("/"));
+      if (parent instanceof TFolder) {
+        const index = parent.children.indexOf(previous);
+        if (index >= 0) parent.children.splice(index, 1);
+      }
+      cachedFrontmatter.delete(previous);
+      markdownByFile.delete(previous);
+      const name = path.split("/").pop() ?? path;
+      const replacement = Object.assign(new TFile(), {
+        path,
+        extension: "md",
+        basename: name.replace(/\.md$/, ""),
+        stat: { ctime: Date.now(), mtime: Date.now() }
+      });
+      entries.set(path, replacement);
+      if (parent instanceof TFolder) parent.children.push(replacement);
+      if (frontmatter !== undefined) cachedFrontmatter.set(replacement, frontmatter);
+      return replacement;
     }
   };
 }

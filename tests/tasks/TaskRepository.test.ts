@@ -147,6 +147,102 @@ describe("TaskRepository", () => {
     expect(memory.createdPaths).toHaveLength(1);
   });
 
+  it("serializes deterministic creation across repository replacements before metadata catches up", async () => {
+    let markCreateStarted!: () => void;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const memory = createMemoryTaskApp({
+      beforeCreate: async () => {
+        markCreateStarted();
+        await createGate;
+      },
+      metadataVisible: () => false
+    });
+    const firstRepository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const replacementRepository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+
+    const firstPromise = firstRepository.ensure(options);
+    await createStarted;
+    const replacementPromise = replacementRepository.ensure(options);
+    releaseCreate();
+    const [first, replacement] = await Promise.all([firstPromise, replacementPromise]);
+
+    expect(first).toMatchObject({ created: true, task: { taskId: options.taskId } });
+    expect(replacement).toMatchObject({ created: false, task: { taskId: options.taskId } });
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(memory.createdPaths).toEqual(["Agent Cockpit/Tasks/codex-run-repository.md"]);
+  });
+
+  it("does not restore stale write-through state after leaving and returning to a task folder", async () => {
+    const memory = createMemoryTaskApp();
+    const repository = new TaskRepository(memory.app, "Folder A");
+    const task = await repository.create({ title: "Task" });
+
+    repository.setTaskFolder("Folder B");
+    memory.replaceFrontmatter(task.file.path, {});
+    repository.setTaskFolder("Folder A");
+
+    expect(repository.list()).toEqual([]);
+    expect(() => repository.findById(task.taskId)).toThrow("The linked task no longer exists.");
+  });
+
+  it("preserves an unindexed deterministic task across task-folder navigation", async () => {
+    const memory = createMemoryTaskApp({ metadataVisible: () => false });
+    const repository = new TaskRepository(memory.app, "Folder A");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+    const created = await repository.ensure(options);
+
+    repository.setTaskFolder("Folder B");
+    repository.setTaskFolder("Folder A");
+    const reused = await repository.ensure(options);
+
+    expect(created).toMatchObject({ created: true });
+    expect(reused).toMatchObject({ created: false, task: { taskId: options.taskId } });
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(memory.createdPaths).toEqual(["Folder A/codex-run-repository.md"]);
+  });
+
+  it("does not reuse known-invalid write-through state after repository replacement", async () => {
+    const memory = createMemoryTaskApp();
+    const firstRepository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const task = await firstRepository.create({ title: "Task" });
+    memory.replaceFrontmatter(task.file.path, {});
+
+    const replacementRepository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+
+    expect(replacementRepository.list()).toEqual([]);
+    expect(() => replacementRepository.findById(task.taskId)).toThrow(
+      "The linked task no longer exists."
+    );
+  });
+
+  it("drops write-through state when a task file is replaced at the same path", async () => {
+    const memory = createMemoryTaskApp();
+    const repository = new TaskRepository(memory.app, "Folder A");
+    const task = await repository.create({ title: "Task" });
+
+    repository.setTaskFolder("Folder B");
+    memory.replaceFile(task.file.path, {});
+    repository.setTaskFolder("Folder A");
+
+    expect(repository.list()).toEqual([]);
+    expect(() => repository.findById(task.taskId)).toThrow("The linked task no longer exists.");
+  });
+
   it("cancels guarded deterministic creation before queued vault work starts", async () => {
     let markCreateStarted!: () => void;
     const createStarted = new Promise<void>((resolve) => {

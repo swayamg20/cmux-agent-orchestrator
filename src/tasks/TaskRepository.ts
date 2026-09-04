@@ -31,9 +31,49 @@ export interface EnsureTaskResult {
 
 type MutationGuard = () => boolean;
 
+interface TaskVaultScope {
+  tail: Promise<void>;
+  recentTasksByFolder: Map<string, Map<string, TaskRecord>>;
+}
+
+interface TaskRepositoryCoordinator {
+  vaults: WeakMap<object, TaskVaultScope>;
+}
+
+// Obsidian can replace the plugin instance while an earlier vault mutation is
+// still settling. Keep the coordinator on the shared renderer global so the
+// replacement instance cannot race that write or lose its write-through state.
+const TASK_REPOSITORY_COORDINATOR_SYMBOL = Symbol.for(
+  "obsidian.cmux-agent-orchestrator.task-repository-coordinator.v1"
+);
+const headlessTaskRepositoryHost = {};
+const taskRepositoryHost = typeof window === "undefined" ? headlessTaskRepositoryHost : window;
+const taskRepositoryGlobal = taskRepositoryHost as typeof taskRepositoryHost & {
+  [TASK_REPOSITORY_COORDINATOR_SYMBOL]?: TaskRepositoryCoordinator;
+};
+const taskRepositoryCoordinator = taskRepositoryGlobal[TASK_REPOSITORY_COORDINATOR_SYMBOL] ??= {
+  vaults: new WeakMap<object, TaskVaultScope>()
+};
+
+function taskVaultScope(app: App): TaskVaultScope {
+  const adapter = app.vault.adapter;
+  const vaultIdentity = typeof adapter === "object" && adapter !== null
+    ? adapter
+    : app.vault;
+  let scope = taskRepositoryCoordinator.vaults.get(vaultIdentity);
+  if (scope === undefined) {
+    scope = {
+      tail: Promise.resolve(),
+      recentTasksByFolder: new Map<string, Map<string, TaskRecord>>()
+    };
+    taskRepositoryCoordinator.vaults.set(vaultIdentity, scope);
+  }
+  return scope;
+}
+
 export class TaskRepository {
-  private mutationChain: Promise<void> = Promise.resolve();
-  private readonly recentTasks = new Map<string, TaskRecord>();
+  private readonly scope: TaskVaultScope;
+  private trustedRecentTasks = new WeakSet<TaskRecord>();
   private taskFolder: string;
 
   constructor(
@@ -41,21 +81,27 @@ export class TaskRepository {
     taskFolder: string
   ) {
     this.taskFolder = normalizePath(taskFolder);
+    this.scope = taskVaultScope(app);
   }
 
   setTaskFolder(taskFolder: string): void {
     const normalized = normalizePath(taskFolder);
-    if (normalized !== this.taskFolder) this.recentTasks.clear();
-    this.taskFolder = normalized;
+    if (normalized !== this.taskFolder) {
+      this.taskFolder = normalized;
+      this.trustedRecentTasks = new WeakSet<TaskRecord>();
+    }
   }
 
   invalidatePaths(paths: readonly string[]): void {
     const roots = paths.map((path) => normalizePath(path));
     if (roots.length === 0) return;
-    for (const [taskId, task] of this.recentTasks) {
-      const taskPath = normalizePath(task.file.path);
-      if (roots.some((root) => taskPath === root || taskPath.startsWith(`${root}/`))) {
-        this.recentTasks.delete(taskId);
+    for (const recentTasks of this.scope.recentTasksByFolder.values()) {
+      for (const [taskId, task] of recentTasks) {
+        const taskPath = normalizePath(task.file.path);
+        if (roots.some((root) => taskPath === root || taskPath.startsWith(`${root}/`))) {
+          recentTasks.delete(taskId);
+          this.trustedRecentTasks.delete(task);
+        }
       }
     }
   }
@@ -66,15 +112,19 @@ export class TaskRepository {
       indexed.map((task) => [normalizePath(task.file.path), task] as const)
     );
     const candidates = [...indexed];
-    for (const [taskId, task] of this.recentTasks) {
+    const recentTasks = this.recentTasks();
+    for (const [taskId, task] of recentTasks) {
       const taskPath = normalizePath(task.file.path);
-      if (this.app.vault.getAbstractFileByPath(taskPath) === null || !this.isInTaskFolder(taskPath)) {
-        this.recentTasks.delete(taskId);
+      if (
+        !this.isInTaskFolder(taskPath) ||
+        this.recentTaskIsDisproved(task)
+      ) {
+        recentTasks.delete(taskId);
         continue;
       }
       const indexedTask = indexedByPath.get(taskPath);
       if (indexedTask !== undefined && indexedTask.taskId !== taskId) {
-        this.recentTasks.delete(taskId);
+        recentTasks.delete(taskId);
         continue;
       }
       candidates.push(task);
@@ -182,7 +232,7 @@ export class TaskRepository {
       updatedAt: now,
       runCount: 0
     };
-    if (taskFolder === this.taskFolder) this.recentTasks.set(task.taskId, task);
+    this.rememberRecentTask(taskFolder, task);
     return task;
   }
 
@@ -218,7 +268,7 @@ export class TaskRepository {
         frontmatter["workflow-status"] = workflowStatus;
         frontmatter["updated-at"] = updatedAt;
       });
-      this.recentTasks.set(task.taskId, { ...latest, workflowStatus, updatedAt });
+      this.rememberRecentTask(this.taskFolder, { ...latest, workflowStatus, updatedAt });
     });
   }
 
@@ -241,7 +291,7 @@ export class TaskRepository {
         frontmatter["run-count"] = nextCount;
         frontmatter["updated-at"] = updatedAt;
       });
-      this.recentTasks.set(task.taskId, { ...latest, runCount: nextCount, updatedAt });
+      this.rememberRecentTask(this.taskFolder, { ...latest, runCount: nextCount, updatedAt });
       return nextCount;
     });
   }
@@ -291,7 +341,9 @@ export class TaskRepository {
         frontmatter["updated-at"] = updatedAt;
       });
       if (cancelled) return null;
-      if (changed) this.recentTasks.set(task.taskId, { ...latest, runCount: nextCount, updatedAt });
+      if (changed) {
+        this.rememberRecentTask(this.taskFolder, { ...latest, runCount: nextCount, updatedAt });
+      }
       return nextCount;
     });
   }
@@ -341,20 +393,21 @@ export class TaskRepository {
     if (normalizedTaskId === null) return [];
     const indexed = this.indexedTasks();
     const matches = indexed.filter((task) => task.taskId === normalizedTaskId);
-    const recent = this.recentTasks.get(normalizedTaskId);
+    const recentTasks = this.recentTasks();
+    const recent = recentTasks.get(normalizedTaskId);
     if (recent === undefined) return matches;
     if (
-      this.app.vault.getAbstractFileByPath(recent.file.path) === null ||
-      !this.isInTaskFolder(recent.file.path)
+      !this.isInTaskFolder(recent.file.path) ||
+      this.recentTaskIsDisproved(recent)
     ) {
-      this.recentTasks.delete(normalizedTaskId);
+      recentTasks.delete(normalizedTaskId);
       return matches;
     }
     const indexedAtRecentPath = indexed.find(
       (task) => normalizePath(task.file.path) === normalizePath(recent.file.path)
     );
     if (indexedAtRecentPath !== undefined && indexedAtRecentPath.taskId !== normalizedTaskId) {
-      this.recentTasks.delete(normalizedTaskId);
+      recentTasks.delete(normalizedTaskId);
       return matches;
     }
     const indexedMatch = matches.findIndex((task) => task.file.path === recent.file.path);
@@ -368,9 +421,34 @@ export class TaskRepository {
     return normalizePath(path).startsWith(`${this.taskFolder}/`);
   }
 
+  private recentTaskIsDisproved(task: TaskRecord): boolean {
+    const currentFile = this.app.vault.getAbstractFileByPath(normalizePath(task.file.path));
+    if (currentFile !== task.file) return true;
+    if (this.trustedRecentTasks.has(task)) return false;
+    const cache = this.app.metadataCache.getFileCache(task.file);
+    if (cache === null) return false;
+    const indexed = parseTaskRecord(task.file, cache.frontmatter);
+    return indexed === null || indexed.taskId !== task.taskId;
+  }
+
+  private rememberRecentTask(taskFolder: string, task: TaskRecord): void {
+    this.recentTasks(taskFolder).set(task.taskId, task);
+    this.trustedRecentTasks.add(task);
+  }
+
+  private recentTasks(taskFolder = this.taskFolder): Map<string, TaskRecord> {
+    const folder = normalizePath(taskFolder);
+    let recentTasks = this.scope.recentTasksByFolder.get(folder);
+    if (recentTasks === undefined) {
+      recentTasks = new Map<string, TaskRecord>();
+      this.scope.recentTasksByFolder.set(folder, recentTasks);
+    }
+    return recentTasks;
+  }
+
   private enqueueMutation<T>(mutation: () => Promise<T>): Promise<T> {
-    const operation = this.mutationChain.then(mutation, mutation);
-    this.mutationChain = operation.then(
+    const operation = this.scope.tail.then(mutation, mutation);
+    this.scope.tail = operation.then(
       () => undefined,
       () => undefined
     );

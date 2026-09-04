@@ -2733,6 +2733,75 @@ describe("AgentCockpitController connection failures", () => {
     expect(controller.store.getState().runs).toEqual([]);
   });
 
+  it("reuses an unindexed automatic task created by the disposed controller", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: true } };
+    let metadataVisible = false;
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    let markCreateStarted!: () => void;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    let blockFirstCreate = true;
+    const { app, createdPaths, markdownWrites } = memoryTaskApp({
+      beforeCreate: async () => {
+        if (!blockFirstCreate) return;
+        blockFirstCreate = false;
+        markCreateStarted();
+        await createGate;
+      },
+      metadataVisible: () => metadataVisible
+    });
+    const createPlugin = () => ({
+      app,
+      manifest: { id: "cmux-agent-orchestrator" },
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin);
+    const createController = () => new AgentCockpitController(
+      app,
+      createPlugin(),
+      async () => new CmuxClient(connectedTransport(4_647)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    const first = createController();
+    await first.initialize();
+    await createStarted;
+    first.dispose();
+    releaseCreate();
+    await first.waitForBackgroundWork();
+    expect(markdownWrites).toHaveLength(1);
+
+    const replacement = createController();
+    await replacement.initialize();
+    await replacement.waitForBackgroundWork();
+
+    const expectedTaskId = automaticTaskId(
+      "codex",
+      "55555555-5555-4555-8555-555555555555"
+    );
+    expect(markdownWrites).toHaveLength(1);
+    expect(createdPaths).toEqual(["Agent Cockpit/Tasks/codex-run-repository.md"]);
+    expect(replacement.store.getState().tasks).toMatchObject([
+      { taskId: expectedTaskId, runCount: 1 }
+    ]);
+    expect(replacement.store.getState().bindings).toMatchObject([
+      { taskId: expectedTaskId, providerSessionId: "55555555-5555-4555-8555-555555555555" }
+    ]);
+
+    metadataVisible = true;
+    expect(
+      (replacement as unknown as { taskRepository: TaskRepository }).taskRepository.list()
+    ).toHaveLength(1);
+    replacement.dispose();
+  });
+
   it("does not continue automatic binding work after its save outlives disposal", async () => {
     let persisted: unknown;
     let releaseSave!: () => void;
