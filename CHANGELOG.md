@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Retry provider classification on a later refresh when a bounded cmux preview read fails transiently, without repeatedly polling successful but inconclusive shell previews.
 - Reject previews that race with plugin unload, and recover scheduler capacity when a preview loader throws synchronously.
 - Serialize durable task-note mutations so automatic tracking and manual workflow or run-count writes cannot race, while keeping later writes usable after a failure.
 - Keep retrying recoverable automatic-tracking writes without repeating the same failure notice on every reconciliation, while reporting the error again if it recurs after recovery.

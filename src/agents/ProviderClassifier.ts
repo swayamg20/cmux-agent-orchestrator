@@ -61,8 +61,12 @@ export class ProviderClassifier {
       )
     ).then((results) => {
       const observations: ProviderObservation[] = [];
-      for (const result of results) {
-        if (result.status !== "fulfilled") continue;
+      for (const [index, result] of results.entries()) {
+        if (result.status !== "fulfilled") {
+          const failed = candidates[index];
+          if (failed) this.attempted.delete(failed.key);
+          continue;
+        }
         const detection = this.detect(result.value.session, result.value.preview.text);
         if (detection.provider === "claude" || detection.provider === "codex") {
           observations.push({
