@@ -11,6 +11,7 @@ import type {
   MachineBindings,
   NewBindingRecord,
   ProviderSessionMapping,
+  RelocateBindingInput,
   RunRelation
 } from "./types";
 import { loadLegacyPluginData } from "./LegacyDataImporter";
@@ -460,6 +461,78 @@ export class BindingRepository {
     });
   }
 
+  async relocateProviderSession(input: RelocateBindingInput): Promise<BindingRecord> {
+    if (!isRelocateBindingInput(input)) {
+      throw new Error("Binding relocation contains an invalid canonical identity or value.");
+    }
+    const normalized = normalizeRelocateBindingInput(input);
+    let relocated: BindingRecord | null = null;
+    await this.commit((data) => {
+      const machine = this.machineFor(data);
+      const binding = machine.bindings.find(
+        (candidate) => candidate.bindingId === normalized.bindingId
+      );
+      if (!binding || !bindingMatchesRelocationSource(binding, normalized)) {
+        throw new Error("The provider-session binding changed before it could be relocated.");
+      }
+      const run = machine.runs.find((candidate) => candidate.runId === normalized.runId);
+      if (
+        !run ||
+        run.taskId !== normalized.taskId ||
+        run.provider !== normalized.provider ||
+        run.providerSessionId !== normalized.providerSessionId
+      ) {
+        throw new Error("The provider-session run changed before its binding could be relocated.");
+      }
+      const conflictingBinding = machine.bindings.some(
+        (candidate) =>
+          candidate.bindingId !== binding.bindingId &&
+          (candidate.surfaceId === normalized.toSurfaceId ||
+            (candidate.provider === normalized.provider &&
+              candidate.providerSessionId === normalized.providerSessionId))
+      );
+      if (conflictingBinding) {
+        throw new Error("The relocation target is already claimed by another task binding.");
+      }
+
+      const identityMappings = machine.providerSessions.filter(
+        (candidate) =>
+          candidate.provider === normalized.provider &&
+          candidate.providerSessionId === normalized.providerSessionId
+      );
+      const sourceSurfaceMapping = machine.providerSessions.find(
+        (candidate) => candidate.surfaceId === normalized.fromSurfaceId
+      );
+      const targetSurfaceMapping = machine.providerSessions.find(
+        (candidate) => candidate.surfaceId === normalized.toSurfaceId
+      );
+      const sourceMapping = identityMappings[0] ?? null;
+      if (
+        identityMappings.length > 1 ||
+        (sourceSurfaceMapping !== undefined && sourceSurfaceMapping !== sourceMapping) ||
+        (targetSurfaceMapping !== undefined && targetSurfaceMapping !== sourceMapping) ||
+        (sourceMapping !== null && !providerMappingMatchesRelocationSource(sourceMapping, normalized))
+      ) {
+        throw new Error("The saved provider conversation changed before its binding could be relocated.");
+      }
+
+      binding.workspaceId = normalized.toWorkspaceId;
+      binding.paneId = normalized.toPaneId;
+      binding.surfaceId = normalized.toSurfaceId;
+      binding.attachedAt = normalized.relocatedAt;
+      run.lastAttachedAt = normalized.relocatedAt;
+      if (sourceMapping !== null) {
+        sourceMapping.workspaceId = normalized.toWorkspaceId;
+        sourceMapping.paneId = normalized.toPaneId;
+        sourceMapping.surfaceId = normalized.toSurfaceId;
+        sourceMapping.matchedAt = normalized.relocatedAt;
+      }
+      relocated = { ...binding };
+    });
+    if (relocated === null) throw new Error(`${PRODUCT_NAME} could not relocate the session attachment.`);
+    return relocated;
+  }
+
   private currentMachine(): MachineBindings {
     return this.machineFor(this.requireData());
   }
@@ -508,6 +581,79 @@ function stableUuid(seed: string): string {
 
 function normalizeProviderSessionId(value: string | null): string | null {
   return value === null ? null : normalizeCanonicalUuid(value) ?? value;
+}
+
+function isRelocateBindingInput(value: RelocateBindingInput): boolean {
+  const ids = [
+    value.bindingId,
+    value.runId,
+    value.taskId,
+    value.providerSessionId,
+    value.fromWorkspaceId,
+    value.fromPaneId,
+    value.fromSurfaceId,
+    value.toWorkspaceId,
+    value.toPaneId,
+    value.toSurfaceId
+  ];
+  return (
+    ids.every(isCanonicalUuid) &&
+    (value.provider === "claude" || value.provider === "codex") &&
+    validDate(value.relocatedAt) &&
+    normalizeCanonicalUuid(value.fromSurfaceId) !== normalizeCanonicalUuid(value.toSurfaceId) &&
+    new Set([
+      normalizeCanonicalUuid(value.fromWorkspaceId),
+      normalizeCanonicalUuid(value.fromPaneId),
+      normalizeCanonicalUuid(value.fromSurfaceId)
+    ]).size === 3 &&
+    new Set([
+      normalizeCanonicalUuid(value.toWorkspaceId),
+      normalizeCanonicalUuid(value.toPaneId),
+      normalizeCanonicalUuid(value.toSurfaceId)
+    ]).size === 3
+  );
+}
+
+function normalizeRelocateBindingInput(input: RelocateBindingInput): RelocateBindingInput {
+  return {
+    ...input,
+    bindingId: normalizeCanonicalUuid(input.bindingId)!,
+    runId: normalizeCanonicalUuid(input.runId)!,
+    taskId: normalizeCanonicalUuid(input.taskId)!,
+    providerSessionId: normalizeCanonicalUuid(input.providerSessionId)!,
+    fromWorkspaceId: normalizeCanonicalUuid(input.fromWorkspaceId)!,
+    fromPaneId: normalizeCanonicalUuid(input.fromPaneId)!,
+    fromSurfaceId: normalizeCanonicalUuid(input.fromSurfaceId)!,
+    toWorkspaceId: normalizeCanonicalUuid(input.toWorkspaceId)!,
+    toPaneId: normalizeCanonicalUuid(input.toPaneId)!,
+    toSurfaceId: normalizeCanonicalUuid(input.toSurfaceId)!
+  };
+}
+
+function bindingMatchesRelocationSource(
+  binding: BindingRecord,
+  input: RelocateBindingInput
+): boolean {
+  return (
+    binding.runId === input.runId &&
+    binding.taskId === input.taskId &&
+    binding.provider === input.provider &&
+    binding.providerSessionId === input.providerSessionId &&
+    binding.workspaceId === input.fromWorkspaceId &&
+    binding.paneId === input.fromPaneId &&
+    binding.surfaceId === input.fromSurfaceId
+  );
+}
+
+function providerMappingMatchesRelocationSource(
+  mapping: ProviderSessionMapping,
+  input: RelocateBindingInput
+): boolean {
+  return (
+    mapping.workspaceId === input.fromWorkspaceId &&
+    mapping.paneId === input.fromPaneId &&
+    mapping.surfaceId === input.fromSurfaceId
+  );
 }
 
 function assertProviderSessionAvailable(

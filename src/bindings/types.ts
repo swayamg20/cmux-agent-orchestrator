@@ -40,6 +40,21 @@ export interface AttachBindingResult {
   isNewRun: boolean;
 }
 
+export interface RelocateBindingInput {
+  bindingId: string;
+  runId: string;
+  taskId: string;
+  provider: "claude" | "codex";
+  providerSessionId: string;
+  fromWorkspaceId: string;
+  fromPaneId: string;
+  fromSurfaceId: string;
+  toWorkspaceId: string;
+  toPaneId: string;
+  toSurfaceId: string;
+  relocatedAt: string;
+}
+
 export interface MachineBindings {
   bindings: BindingRecord[];
   runs: AgentRunRecord[];

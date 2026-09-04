@@ -426,6 +426,113 @@ describe("BindingRepository", () => {
     expect(repository.listRuns()).toEqual([]);
   });
 
+  it("atomically relocates an exact provider session without creating another run", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const original = await repository.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      attachedAt: "2026-09-02T00:00:00.000Z"
+    });
+    await repository.mapProviderSession({
+      workspaceId: original.binding.workspaceId,
+      paneId: original.binding.paneId,
+      surfaceId: original.binding.surfaceId,
+      provider: "codex",
+      providerSessionId: original.binding.providerSessionId!,
+      matchedAt: "2026-09-02T00:01:00.000Z"
+    });
+
+    const relocated = await repository.relocateProviderSession({
+      bindingId: original.binding.bindingId.toUpperCase(),
+      runId: original.run.runId.toUpperCase(),
+      taskId: original.binding.taskId.toUpperCase(),
+      provider: "codex",
+      providerSessionId: original.binding.providerSessionId!.toUpperCase(),
+      fromWorkspaceId: original.binding.workspaceId.toUpperCase(),
+      fromPaneId: original.binding.paneId.toUpperCase(),
+      fromSurfaceId: original.binding.surfaceId.toUpperCase(),
+      toWorkspaceId: "66666666-6666-4666-8666-666666666666",
+      toPaneId: "77777777-7777-4777-8777-777777777777",
+      toSurfaceId: "88888888-8888-4888-8888-888888888888",
+      relocatedAt: "2026-09-02T00:02:00.000Z"
+    });
+
+    expect(relocated).toMatchObject({
+      bindingId: original.binding.bindingId,
+      runId: original.run.runId,
+      taskId: original.binding.taskId,
+      workspaceId: "66666666-6666-4666-8666-666666666666",
+      paneId: "77777777-7777-4777-8777-777777777777",
+      surfaceId: "88888888-8888-4888-8888-888888888888",
+      attachedAt: "2026-09-02T00:02:00.000Z"
+    });
+    expect(repository.list()).toEqual([relocated]);
+    expect(repository.listRuns()).toMatchObject([
+      {
+        runId: original.run.runId,
+        firstAttachedAt: "2026-09-02T00:00:00.000Z",
+        lastAttachedAt: "2026-09-02T00:02:00.000Z"
+      }
+    ]);
+    expect(repository.listProviderSessions()).toMatchObject([
+      {
+        workspaceId: relocated.workspaceId,
+        paneId: relocated.paneId,
+        surfaceId: relocated.surfaceId,
+        matchedAt: "2026-09-02T00:02:00.000Z"
+      }
+    ]);
+  });
+
+  it("rejects relocation when the expected source binding has changed", async () => {
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const original = await repository.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "claude",
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      attachedAt: "2026-09-02T00:00:00.000Z"
+    });
+
+    await expect(
+      repository.relocateProviderSession({
+        bindingId: original.binding.bindingId,
+        runId: original.run.runId,
+        taskId: original.binding.taskId,
+        provider: "claude",
+        providerSessionId: original.binding.providerSessionId!,
+        fromWorkspaceId: original.binding.workspaceId,
+        fromPaneId: original.binding.paneId,
+        fromSurfaceId: "99999999-9999-4999-8999-999999999999",
+        toWorkspaceId: "66666666-6666-4666-8666-666666666666",
+        toPaneId: "77777777-7777-4777-8777-777777777777",
+        toSurfaceId: "88888888-8888-4888-8888-888888888888",
+        relocatedAt: "2026-09-02T00:02:00.000Z"
+      })
+    ).rejects.toThrow(/changed before it could be relocated/);
+    expect(repository.list()).toEqual([original.binding]);
+    expect(repository.listRuns()).toEqual([original.run]);
+  });
+
   it("updates and clears the attached run identity with the provider match", async () => {
     const plugin = {
       loadData: async () => undefined,
