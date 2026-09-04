@@ -953,7 +953,7 @@ export class AgentCockpitController {
       try {
         let current = this.resolveCurrentAutomaticCandidate(candidate);
         if (current === null || this.hasProviderRun(candidate)) continue;
-        const expectedBinding = this.bindings.findBySurface(current.surfaceId);
+        let expectedBinding = this.bindings.findBySurface(current.surfaceId);
         if (
           expectedBinding !== null &&
           expectedBinding.provider === candidate.provider &&
@@ -961,6 +961,29 @@ export class AgentCockpitController {
             candidate.providerSessionId
         ) {
           continue;
+        }
+
+        const currentSurfaceId = current.surfaceId;
+        const staleManualMapping = this.bindings.listProviderSessions().find(
+          (mapping) =>
+            canonicalUuidEquals(mapping.surfaceId, currentSurfaceId) &&
+            (mapping.provider !== candidate.provider ||
+              !canonicalUuidEquals(mapping.providerSessionId, candidate.providerSessionId))
+        );
+        if (staleManualMapping !== undefined) {
+          const discarded = await this.bindings.discardProviderSessionMappingIfUnchanged(
+            staleManualMapping,
+            () =>
+              this.automaticTrackingAllowed(generation) &&
+              this.resolveCurrentAutomaticCandidate(candidate) !== null &&
+              !this.hasProviderRun(candidate)
+          );
+          if (!discarded) continue;
+          changed = true;
+
+          current = this.resolveCurrentAutomaticCandidate(candidate);
+          if (current === null || this.hasProviderRun(candidate)) continue;
+          expectedBinding = this.bindings.findBySurface(current.surfaceId);
         }
 
         const ensured = await this.taskRepository.ensure(

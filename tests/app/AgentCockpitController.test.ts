@@ -574,7 +574,7 @@ describe("AgentCockpitController connection failures", () => {
       memoryTaskApp().app,
       plugin,
       async () => new CmuxClient(transport),
-      new ProviderMetadataService(),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
       resolver
     );
 
@@ -1293,6 +1293,97 @@ describe("AgentCockpitController connection failures", () => {
     ]);
     expect(controller.store.getState().runs).toHaveLength(2);
     expect(controller.store.getState().sessions[0]?.linkedTaskId).toBe(secondTaskId);
+    controller.dispose();
+  });
+
+  it("retires a stale manual mapping before tracking an exact replacement session", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const previousSessionId = "55555555-5555-4555-8555-555555555555";
+    const replacementSessionId = "66666666-6666-4666-8666-666666666666";
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444"
+    };
+    const seed = new BindingRepository(plugin);
+    await seed.load();
+    const previous = await seed.attach({
+      ...target,
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      provider: "codex",
+      providerSessionId: previousSessionId,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+    await seed.mapProviderSession({
+      ...target,
+      provider: "codex",
+      providerSessionId: previousSessionId,
+      matchedAt: "2026-09-04T00:01:00.000Z"
+    });
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        ...exactCodexResolverResult(currentSnapshot.observedAt),
+        mappings: [
+          {
+            ...exactCodexResolverResult(currentSnapshot.observedAt).mappings[0]!,
+            providerSessionId: replacementSessionId
+          }
+        ]
+      }),
+      dispose: () => undefined
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(1_700)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    const replacementTaskId = automaticTaskId("codex", replacementSessionId);
+    expect(controller.store.getState().bindings).toMatchObject([
+      {
+        taskId: replacementTaskId,
+        provider: "codex",
+        providerSessionId: replacementSessionId
+      }
+    ]);
+    expect(controller.store.getState().runs).toEqual(
+      expect.arrayContaining([
+        previous.run,
+        expect.objectContaining({
+          taskId: replacementTaskId,
+          provider: "codex",
+          providerSessionId: replacementSessionId
+        })
+      ])
+    );
+    expect(controller.store.getState().runs).toHaveLength(2);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: replacementTaskId, runCount: 1 }
+    ]);
+    expect(controller.store.getState().sessions[0]?.linkedTaskId).toBe(replacementTaskId);
+    expect(
+      (controller as unknown as { bindings: BindingRepository }).bindings.listProviderSessions()
+    ).toEqual([]);
+    expect(notices.slice(noticeStart).some((message) => message.includes("could not finish"))).toBe(false);
+
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().runs).toHaveLength(2);
     controller.dispose();
   });
 

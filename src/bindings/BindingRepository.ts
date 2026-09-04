@@ -561,6 +561,33 @@ export class BindingRepository {
     });
   }
 
+  /**
+   * Removes only the persisted surface-to-conversation choice. Historical bindings and
+   * run identities remain intact so an automatically proven replacement session cannot
+   * rewrite the previous run's durable history.
+   */
+  async discardProviderSessionMappingIfUnchanged(
+    expected: ProviderSessionMapping,
+    canMutate?: MutationGuard
+  ): Promise<boolean> {
+    if (!isProviderSessionMapping(expected)) {
+      throw new Error("Expected provider session mapping contains an invalid canonical identity or value.");
+    }
+    const normalizedExpected = normalizeProviderSessionMapping(expected);
+    return this.commitConditional((data) => {
+      if (canMutate && !canMutate()) return false;
+      const machine = this.machineFor(data);
+      const current = machine.providerSessions.find(
+        (mapping) => mapping.surfaceId === normalizedExpected.surfaceId
+      ) ?? null;
+      if (!sameProviderSessionMapping(current, normalizedExpected)) return false;
+      machine.providerSessions = machine.providerSessions.filter(
+        (mapping) => mapping.surfaceId !== normalizedExpected.surfaceId
+      );
+      return true;
+    });
+  }
+
   findBySurface(surfaceId: string): BindingRecord | null {
     const normalizedSurfaceId = normalizeCanonicalUuid(surfaceId);
     if (normalizedSurfaceId === null) return null;
