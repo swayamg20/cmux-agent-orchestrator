@@ -43,6 +43,46 @@ describe("AttentionEngine", () => {
     expect(result.some((item) => item.reasons.some((reason) => reason.kind === "review-ready"))).toBe(true);
   });
 
+  it("reports a missing task note without discarding its live session binding", () => {
+    const session: LiveSession = {
+      key: `${binding.workspaceId}:${binding.surfaceId}`,
+      workspaceId: binding.workspaceId,
+      paneId: binding.paneId,
+      surfaceId: binding.surfaceId,
+      workspaceTitle: "Workspace",
+      workspaceIndex: 0,
+      paneIndex: 0,
+      surfaceIndex: 0,
+      surfaceTitle: "Surface",
+      surfaceType: "terminal",
+      currentDirectory: "/repo",
+      provider: {
+        provider: "codex",
+        confidence: "high",
+        source: "task-binding",
+        explanation: "fixture",
+        sessionId: null
+      },
+      assessment: assessment("unknown"),
+      observedAt: 1_000,
+      notifications: [],
+      linkedTaskId: binding.taskId,
+      conversation: null,
+      preview: null
+    };
+
+    const result = new AttentionEngine().build([session], [], [binding], 1_000);
+
+    expect(result).toMatchObject([
+      {
+        session: { surfaceId: binding.surfaceId, linkedTaskId: binding.taskId },
+        task: null,
+        reasons: [{ kind: "linked-task-missing", confidence: "high" }]
+      }
+    ]);
+    expect(session.linkedTaskId).toBe(binding.taskId);
+  });
+
   it("does not report a bound surface missing because UUID casing differs", () => {
     const workspaceId = "a2222222-a222-4222-8222-a22222222222";
     const paneId = "b3333333-b333-4333-8333-b33333333333";

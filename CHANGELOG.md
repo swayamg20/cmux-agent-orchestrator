@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - Reconnect an exact provider conversation to its existing task when its previous cmux surface has disappeared, without creating another run.
 - Show the memory-only provider conversation title on its live Work card while keeping automatically written Markdown free of conversation and terminal titles.
 - Add a default-on setting to disable creation of new automatic tasks without changing existing tasks or running agents.
+- Surface a missing linked Markdown task as an actionable attention item without deleting the binding or recreating the note.
 
 ### Fixed
 

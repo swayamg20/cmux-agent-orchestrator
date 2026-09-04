@@ -76,6 +76,7 @@ export type AttentionReasonKind =
   | "needs-input"
   | "runtime-error"
   | "review-ready"
+  | "linked-task-missing"
   | "linked-surface-missing"
   | "stale";
 

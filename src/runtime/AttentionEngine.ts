@@ -78,10 +78,21 @@ export class AttentionEngine {
 
     for (const binding of bindings) {
       const bindingKey = exactTargetKey(binding);
-      const exists = sessionByTarget.has(bindingKey);
-      if (exists) continue;
-      const key = `missing:${bindingKey}`;
-      add(key, null, taskById.get(binding.taskId) ?? null, {
+      const session = sessionByTarget.get(bindingKey) ?? null;
+      const boundTask = taskById.get(binding.taskId) ?? null;
+      const key = session?.key ?? `missing:${bindingKey}`;
+      if (boundTask === null) {
+        add(key, session, null, {
+          kind: "linked-task-missing",
+          label: "Linked task note missing",
+          detail: "The saved binding remains, but its Markdown task is unavailable. Attach or create a replacement task explicitly.",
+          severity: 3,
+          confidence: "high",
+          firstObservedAt: this.seenAt(key, now)
+        });
+      }
+      if (session !== null) continue;
+      add(key, null, boundTask, {
         kind: "linked-surface-missing",
         label: "Linked surface disappeared",
         detail: "The cmux surface is absent. The task remains unchanged and provider exit is not proven.",
