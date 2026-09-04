@@ -4266,6 +4266,104 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("keeps refreshing while a reconfigured cmux client is still loading", async () => {
+    let clientCreations = 0;
+    let gateOldRefresh = false;
+    let releaseOldSnapshot!: () => void;
+    const oldSnapshotGate = new Promise<void>((resolve) => {
+      releaseOldSnapshot = resolve;
+    });
+    let releaseOldNotifications!: () => void;
+    const oldNotificationsGate = new Promise<void>((resolve) => {
+      releaseOldNotifications = resolve;
+    });
+    let markOldSnapshotStarted!: () => void;
+    const oldSnapshotStarted = new Promise<void>((resolve) => {
+      markOldSnapshotStarted = resolve;
+    });
+    let markOldNotificationsStarted!: () => void;
+    const oldNotificationsStarted = new Promise<void>((resolve) => {
+      markOldNotificationsStarted = resolve;
+    });
+    const oldTransport: CmuxTransport = {
+      ...connectedTransport(5_150),
+      snapshot: async () => {
+        if (!gateOldRefresh) return snapshot(5_150);
+        markOldSnapshotStarted();
+        await oldSnapshotGate;
+        return snapshot(5_151);
+      },
+      notifications: async () => {
+        if (!gateOldRefresh) return [];
+        markOldNotificationsStarted();
+        await oldNotificationsGate;
+        return [];
+      }
+    };
+    let releaseNewSnapshot!: () => void;
+    const newSnapshotGate = new Promise<void>((resolve) => {
+      releaseNewSnapshot = resolve;
+    });
+    let releaseNewNotifications!: () => void;
+    const newNotificationsGate = new Promise<void>((resolve) => {
+      releaseNewNotifications = resolve;
+    });
+    let markNewSnapshotStarted!: () => void;
+    const newSnapshotStarted = new Promise<void>((resolve) => {
+      markNewSnapshotStarted = resolve;
+    });
+    let markNewNotificationsStarted!: () => void;
+    const newNotificationsStarted = new Promise<void>((resolve) => {
+      markNewNotificationsStarted = resolve;
+    });
+    const newTransport: CmuxTransport = {
+      ...connectedTransport(5_152),
+      snapshot: async () => {
+        markNewSnapshotStarted();
+        await newSnapshotGate;
+        return snapshot(5_152);
+      },
+      notifications: async () => {
+        markNewNotificationsStarted();
+        await newNotificationsGate;
+        return [];
+      }
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(clientCreations++ === 0 ? oldTransport : newTransport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    gateOldRefresh = true;
+    const oldRefresh = controller.refreshNow();
+    await Promise.all([oldSnapshotStarted, oldNotificationsStarted]);
+
+    const settingsUpdate = controller.updateSettings({
+      ...controller.getSettings(),
+      cmuxBinaryPath: "/alternate/cmux"
+    });
+    await Promise.all([newSnapshotStarted, newNotificationsStarted]);
+    expect(controller.store.getState().refreshing).toBe(true);
+
+    releaseOldSnapshot();
+    releaseOldNotifications();
+    await oldRefresh;
+    expect(controller.store.getState().refreshing).toBe(true);
+
+    releaseNewSnapshot();
+    releaseNewNotifications();
+    await settingsUpdate;
+    expect(controller.store.getState().refreshing).toBe(false);
+    controller.dispose();
+  });
+
   it("does not persist a binding when the automatic task disappears before attachment", async () => {
     let saveAttempts = 0;
     const plugin = {

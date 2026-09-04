@@ -113,6 +113,7 @@ export class AgentCockpitController {
   private suppressedProviderSessionKeys = new Set<string>();
   private client: CmuxClient | null = null;
   private clientGeneration = 0;
+  private refreshStateGeneration = 0;
   private focusAction: FocusSessionAction | null = null;
   private taskRepository: TaskRepository | null = null;
   private settings: AgentCockpitSettings | null = null;
@@ -157,6 +158,7 @@ export class AgentCockpitController {
 
   async refreshNow(): Promise<void> {
     if (this.disposed) return;
+    const refreshStateGeneration = ++this.refreshStateGeneration;
     this.store.update({ refreshing: true });
     try {
       if (this.client === null) await this.connect();
@@ -175,7 +177,12 @@ export class AgentCockpitController {
     } catch (error) {
       this.handleError(error);
     } finally {
-      if (!this.disposed) this.store.update({ refreshing: false });
+      if (
+        !this.disposed &&
+        refreshStateGeneration === this.refreshStateGeneration
+      ) {
+        this.store.update({ refreshing: false });
+      }
     }
   }
 
@@ -768,6 +775,7 @@ export class AgentCockpitController {
     this.disposed = true;
     this.closeOpenModals();
     this.clientGeneration += 1;
+    this.refreshStateGeneration += 1;
     this.cancelAutomaticTaskTracking();
     this.refreshCoordinator.dispose();
     this.previewScheduler.dispose();
