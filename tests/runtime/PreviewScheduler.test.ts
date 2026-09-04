@@ -7,7 +7,7 @@ describe("PreviewScheduler", () => {
     let loads = 0;
     const load = async () => {
       loads += 1;
-      return { workspaceId: "w", surfaceId: "s", text: "preview", observedAt: 1, truncated: false };
+      return { workspaceId: "w", paneId: "p", surfaceId: "s", text: "preview", observedAt: 1, truncated: false };
     };
     const first = scheduler.schedule("surface", load);
     const second = scheduler.schedule("surface", load);
@@ -23,6 +23,7 @@ describe("PreviewScheduler", () => {
     });
     const recovered = scheduler.schedule("recovered", async () => ({
       workspaceId: "w",
+      paneId: "p",
       surfaceId: "s",
       text: "recovered preview",
       observedAt: 2,
@@ -42,7 +43,7 @@ describe("PreviewScheduler", () => {
     await expect(
       scheduler.schedule("late", async () => {
         loads += 1;
-        return { workspaceId: "w", surfaceId: "s", text: "late", observedAt: 3, truncated: false };
+        return { workspaceId: "w", paneId: "p", surfaceId: "s", text: "late", observedAt: 3, truncated: false };
       })
     ).rejects.toThrow("Preview scheduler was disposed.");
     expect(loads).toBe(0);

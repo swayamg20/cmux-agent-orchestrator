@@ -4,6 +4,7 @@ import { PreviewCache } from "../../src/runtime/PreviewCache";
 function preview(text: string) {
   return {
     workspaceId: "workspace",
+    paneId: "pane",
     surfaceId: "surface",
     text,
     observedAt: 1,

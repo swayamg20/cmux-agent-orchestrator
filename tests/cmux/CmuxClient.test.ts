@@ -167,6 +167,28 @@ describe("CmuxClient focus safety", () => {
   });
 });
 
+describe("CmuxClient preview safety", () => {
+  it("rejects terminal output attributed to a different pane", async () => {
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444"
+    };
+    const transport = fakeTransport([], []);
+    transport.readPreview = async () => ({
+      ...target,
+      paneId: "99999999-9999-4999-8999-999999999999",
+      text: "wrong pane output",
+      observedAt: 1,
+      truncated: false
+    });
+
+    await expect(
+      new CmuxClient(transport).readPreview(target, { lines: 60, maxBytes: 16 * 1024 })
+    ).rejects.toThrow(/different surface/);
+  });
+});
+
 function fakeTransport(
   snapshots: ReturnType<typeof decodeTree>[],
   focused: string[],

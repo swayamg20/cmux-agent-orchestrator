@@ -118,6 +118,7 @@ export class CliCmuxTransport implements CmuxTransport {
     const bounded = truncateUtf8(result.stdout, Math.max(1, request.maxBytes));
     return {
       workspaceId: target.workspaceId,
+      paneId: target.paneId,
       surfaceId: target.surfaceId,
       text: bounded.text,
       observedAt: this.now(),

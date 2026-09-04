@@ -53,8 +53,15 @@ export class CmuxClient {
     return this.transport.agents?.(signal) ?? Promise.resolve(null);
   }
 
-  readPreview(target: CmuxTarget, request: PreviewRequest): Promise<CmuxPreview> {
-    return this.transport.readPreview(target, request);
+  async readPreview(target: CmuxTarget, request: PreviewRequest): Promise<CmuxPreview> {
+    const preview = await this.transport.readPreview(target, request);
+    if (!sameTarget(preview, target)) {
+      throw new CmuxError(
+        "malformed-output",
+        "cmux returned terminal output for a different surface."
+      );
+    }
+    return preview;
   }
 
   focusedTarget(signal?: AbortSignal): Promise<CmuxTarget | null> {

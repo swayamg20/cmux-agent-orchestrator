@@ -38,6 +38,7 @@ describe("ProviderClassifier", () => {
         if (reads === 1) throw new Error("transient read-screen failure");
         return {
           workspaceId: session.workspaceId,
+          paneId: session.paneId,
           surfaceId: session.surfaceId,
           text: "• Ran npm test\n  └ Tests passed",
           observedAt: 2,
@@ -63,6 +64,7 @@ describe("ProviderClassifier", () => {
         reads += 1;
         return {
           workspaceId: session.workspaceId,
+          paneId: session.paneId,
           surfaceId: session.surfaceId,
           text: "plain shell output",
           observedAt: 3,
@@ -87,6 +89,7 @@ describe("ProviderClassifier", () => {
         reads += 1;
         return {
           workspaceId: session.workspaceId,
+          paneId: session.paneId,
           surfaceId: session.surfaceId,
           text,
           observedAt: reads,
@@ -130,6 +133,7 @@ describe("ProviderClassifier", () => {
 
     finishReads[0]!({
       workspaceId: session.workspaceId,
+      paneId: session.paneId,
       surfaceId: session.surfaceId,
       text: "• Ran npm test",
       observedAt: 4,
@@ -137,6 +141,7 @@ describe("ProviderClassifier", () => {
     });
     finishReads[1]!({
       workspaceId: session.workspaceId,
+      paneId: session.paneId,
       surfaceId: session.surfaceId,
       text: "plain shell output",
       observedAt: 5,

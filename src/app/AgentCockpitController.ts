@@ -238,6 +238,7 @@ export class AgentCockpitController {
       }
       if (
         !canonicalUuidEquals(preview.workspaceId, requested.workspaceId) ||
+        !canonicalUuidEquals(preview.paneId, requested.paneId) ||
         !canonicalUuidEquals(preview.surfaceId, requested.surfaceId)
       ) {
         throw new CmuxError("malformed-output", "cmux returned terminal output for a different surface.");

@@ -86,6 +86,7 @@ export interface CmuxAgentRecord {
 
 export interface CmuxPreview {
   workspaceId: string;
+  paneId: string;
   surfaceId: string;
   text: string;
   observedAt: number;
