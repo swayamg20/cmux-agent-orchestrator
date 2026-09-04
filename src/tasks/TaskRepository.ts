@@ -246,18 +246,35 @@ export class TaskRepository {
     });
   }
 
-  async ensureRunCountAtLeast(task: TaskRecord, minimum: number): Promise<number> {
+  async ensureRunCountAtLeast(task: TaskRecord, minimum: number): Promise<number>;
+  async ensureRunCountAtLeast(
+    task: TaskRecord,
+    minimum: number,
+    canMutate: MutationGuard
+  ): Promise<number | null>;
+  async ensureRunCountAtLeast(
+    task: TaskRecord,
+    minimum: number,
+    canMutate?: MutationGuard
+  ): Promise<number | null> {
     if (!Number.isSafeInteger(minimum) || minimum < 0 || minimum > 1_000_000) {
       throw new Error("Minimum run count must be an integer between 0 and 1000000.");
     }
     return this.enqueueMutation(async () => {
+      if (canMutate && !canMutate()) return null;
       const latest = this.findById(task.taskId);
       if (latest.runCount >= minimum) return latest.runCount;
 
       let nextCount = latest.runCount;
       let changed = false;
+      let cancelled = false;
       const updatedAt = new Date().toISOString();
+      if (canMutate && !canMutate()) return null;
       await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
+        if (canMutate && !canMutate()) {
+          cancelled = true;
+          return;
+        }
         if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
           throw new Error("Task identity changed before the update.");
         }
@@ -273,6 +290,7 @@ export class TaskRepository {
         frontmatter["run-count"] = nextCount;
         frontmatter["updated-at"] = updatedAt;
       });
+      if (cancelled) return null;
       if (changed) this.recentTasks.set(task.taskId, { ...latest, runCount: nextCount, updatedAt });
       return nextCount;
     });

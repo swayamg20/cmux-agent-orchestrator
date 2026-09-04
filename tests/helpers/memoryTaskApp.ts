@@ -5,6 +5,7 @@ export interface MemoryTaskAppOptions {
   failFrontmatterWritesAfterMutation?: number;
   failCreatesAfterMutation?: number;
   beforeCreate?: () => Promise<void>;
+  beforeFrontmatter?: () => Promise<void>;
   beforeLookup?: (path: string) => void;
   removeAfterCreate?: boolean;
 }
@@ -101,6 +102,7 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
         update: (frontmatter: Record<string, unknown>) => void
       ) => {
         frontmatterWriteAttempts += 1;
+        await options.beforeFrontmatter?.();
         if (frontmatterWriteAttempts <= (options.failFrontmatterWrites ?? 0)) {
           throw new Error("simulated task frontmatter write failure");
         }

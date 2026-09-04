@@ -1060,7 +1060,12 @@ export class AgentCockpitController {
       if (task === undefined || task.runCount >= 1) continue;
       const issueKey = `${providerSessionKey(run.provider, run.providerSessionId)}:run-count`;
       try {
-        await repository.ensureRunCountAtLeast(task, 1);
+        const repaired = await repository.ensureRunCountAtLeast(
+          task,
+          1,
+          () => this.automaticTrackingAllowed(generation)
+        );
+        if (repaired === null) break;
         changed = true;
         this.clearAutomaticTrackingIssues(issueKey);
       } catch (error) {

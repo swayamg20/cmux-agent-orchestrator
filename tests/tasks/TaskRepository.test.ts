@@ -188,6 +188,69 @@ describe("TaskRepository", () => {
     expect(memory.createdPaths).toEqual(["Agent Cockpit/Tasks/first-codex-run.md"]);
   });
 
+  it("cancels a queued guarded run-count repair before frontmatter changes", async () => {
+    let blockCreate = false;
+    let markCreateStarted!: () => void;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const memory = createMemoryTaskApp({
+      beforeCreate: async () => {
+        if (!blockCreate) return;
+        markCreateStarted();
+        await createGate;
+      }
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const task = await repository.create({ title: "Existing automatic task" });
+
+    blockCreate = true;
+    const blockingCreate = repository.create({ title: "Blocking task" });
+    await createStarted;
+    let allowed = true;
+    const repair = repository.ensureRunCountAtLeast(task, 1, () => allowed);
+    allowed = false;
+    releaseCreate();
+
+    await blockingCreate;
+    await expect(repair).resolves.toBeNull();
+    expect(memory.frontmatterWriteAttempts()).toBe(0);
+    expect(repository.findById(task.taskId).runCount).toBe(0);
+  });
+
+  it("rechecks guarded run-count authority inside the frontmatter mutation", async () => {
+    let markFrontmatterStarted!: () => void;
+    const frontmatterStarted = new Promise<void>((resolve) => {
+      markFrontmatterStarted = resolve;
+    });
+    let releaseFrontmatter!: () => void;
+    const frontmatterGate = new Promise<void>((resolve) => {
+      releaseFrontmatter = resolve;
+    });
+    const memory = createMemoryTaskApp({
+      beforeFrontmatter: async () => {
+        markFrontmatterStarted();
+        await frontmatterGate;
+      }
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const task = await repository.create({ title: "Guard callback task" });
+    let allowed = true;
+
+    const repair = repository.ensureRunCountAtLeast(task, 1, () => allowed);
+    await frontmatterStarted;
+    allowed = false;
+    releaseFrontmatter();
+
+    await expect(repair).resolves.toBeNull();
+    expect(memory.frontmatterWriteAttempts()).toBe(1);
+    expect(repository.findById(task.taskId).runCount).toBe(0);
+  });
+
   it("accepts a failed create only when exact Markdown read-back proves the task exists", async () => {
     const memory = createMemoryTaskApp({ failCreatesAfterMutation: 1 });
     const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
