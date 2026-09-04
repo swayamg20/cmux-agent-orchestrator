@@ -237,6 +237,7 @@ export class AgentCockpitController {
       }
       this.recomputeSessions();
     } catch (error) {
+      if (this.disposed) return;
       this.handleError(error, false);
       new Notice(readableError(error));
     }
@@ -248,12 +249,14 @@ export class AgentCockpitController {
       const focusAction = this.focusAction;
       if (focusAction === null) throw new Error("cmux connection is not initialized.");
       const result = await focusAction.execute(this.store.getState().connection, session);
+      if (this.disposed) return;
       new Notice(
         result.verified
           ? `Focused ${result.target.workspaceTitle} / ${result.target.surfaceTitle} in cmux.`
           : "cmux accepted the focus command, but the selected surface could not be verified within the bounded retry window."
       );
     } catch (error) {
+      if (this.disposed) return;
       this.handleError(error, false);
       new Notice(readableError(error));
     }
@@ -453,6 +456,7 @@ export class AgentCockpitController {
   }
 
   async copyMetadata(session: LiveSession): Promise<void> {
+    if (this.disposed) return;
     const metadata = {
       workspaceId: session.workspaceId,
       paneId: session.paneId,
@@ -467,13 +471,16 @@ export class AgentCockpitController {
     };
     try {
       await navigator.clipboard.writeText(JSON.stringify(metadata, null, 2));
+      if (this.disposed) return;
       new Notice("Copied bounded session metadata.");
     } catch (error) {
+      if (this.disposed) return;
       new Notice(`Could not copy session metadata: ${readableError(error)}`);
     }
   }
 
   setFilters(patch: Partial<SessionFilters>): void {
+    if (this.disposed) return;
     this.store.update((state) => ({ filters: { ...state.filters, ...patch } }));
   }
 
@@ -537,14 +544,18 @@ export class AgentCockpitController {
     this.client = null;
     this.focusAction = null;
     await this.refreshNow();
+    if (this.disposed) return;
     new Notice(this.store.getState().connection.message);
   }
 
   async copyCmuxSetupSteps(): Promise<void> {
+    if (this.disposed) return;
     try {
       await navigator.clipboard.writeText(CMUX_SETUP_CLIPBOARD_TEXT);
+      if (this.disposed) return;
       new Notice("Copied the cmux connection setup steps.");
     } catch (error) {
+      if (this.disposed) return;
       new Notice(`Could not copy setup steps: ${readableError(error)}`);
     }
   }

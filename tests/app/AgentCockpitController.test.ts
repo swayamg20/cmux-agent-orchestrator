@@ -4,7 +4,7 @@ import { AgentCockpitController } from "../../src/app/AgentCockpitController";
 import { BindingRepository } from "../../src/bindings/BindingRepository";
 import { CmuxClient } from "../../src/cmux/CmuxClient";
 import type { CmuxTransport } from "../../src/cmux/CmuxTransport";
-import { CmuxError, type CmuxSnapshot } from "../../src/cmux/types";
+import { CmuxError, type CmuxSnapshot, type CmuxTarget } from "../../src/cmux/types";
 import { ProviderMetadataService } from "../../src/providers/ProviderMetadataService";
 import type {
   ProviderIdentityResolution,
@@ -2288,6 +2288,141 @@ describe("AgentCockpitController connection failures", () => {
     expect(saveCount).toBe(1);
     expect(controller.store.getState().snapshot).toBeNull();
     expect(controller.store.getState().tasks).toEqual([]);
+  });
+
+  it("does not notify when an in-flight focus finishes after disposal", async () => {
+    let releaseFocus!: () => void;
+    const focusGate = new Promise<void>((resolve) => {
+      releaseFocus = resolve;
+    });
+    let markFocusStarted!: () => void;
+    const focusStarted = new Promise<void>((resolve) => {
+      markFocusStarted = resolve;
+    });
+    let focusedTarget: CmuxTarget | null = null;
+    const transport: CmuxTransport = {
+      ...connectedTransport(4_646),
+      focus: async (target) => {
+        markFocusStarted();
+        await focusGate;
+        focusedTarget = target;
+      },
+      focusedTarget: async () => focusedTarget
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+    const noticeStart = notices.length;
+    const focus = controller.focusSession(session);
+    await focusStarted;
+    controller.dispose();
+    releaseFocus();
+    await focus;
+
+    expect(controller.store.getState().snapshot).toBeNull();
+    expect(notices.slice(noticeStart)).toEqual([]);
+  });
+
+  it("does not report a preview failure that arrives after disposal", async () => {
+    let gatePreview = false;
+    let releasePreview!: () => void;
+    const previewGate = new Promise<void>((resolve) => {
+      releasePreview = resolve;
+    });
+    let markPreviewStarted!: () => void;
+    const previewStarted = new Promise<void>((resolve) => {
+      markPreviewStarted = resolve;
+    });
+    const transport: CmuxTransport = {
+      ...connectedTransport(4_646),
+      readPreview: async (target) => {
+        if (!gatePreview) {
+          return { ...target, text: "", observedAt: 4_646, truncated: false };
+        }
+        markPreviewStarted();
+        await previewGate;
+        throw new Error("late preview failure");
+      }
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    gatePreview = true;
+    const noticeStart = notices.length;
+    const preview = controller.loadPreview(controller.store.getState().sessions[0]!);
+    await previewStarted;
+    controller.dispose();
+    releasePreview();
+    await preview;
+
+    expect(controller.store.getState().error).toBeNull();
+    expect(notices.slice(noticeStart)).toEqual([]);
+  });
+
+  it("does not notify when a clipboard write finishes after disposal", async () => {
+    let releaseClipboard!: () => void;
+    const clipboardGate = new Promise<void>((resolve) => {
+      releaseClipboard = resolve;
+    });
+    let markClipboardStarted!: () => void;
+    const clipboardStarted = new Promise<void>((resolve) => {
+      markClipboardStarted = resolve;
+    });
+    vi.stubGlobal("navigator", {
+      clipboard: {
+        writeText: async () => {
+          markClipboardStarted();
+          await clipboardGate;
+        }
+      }
+    });
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_646))
+    );
+
+    try {
+      await controller.initialize();
+      await controller.waitForBackgroundWork();
+      const noticeStart = notices.length;
+      const copy = controller.copyMetadata(controller.store.getState().sessions[0]!);
+      await clipboardStarted;
+      controller.dispose();
+      releaseClipboard();
+      await copy;
+
+      expect(notices.slice(noticeStart)).toEqual([]);
+    } finally {
+      controller.dispose();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("does not republish an automatic task whose vault create outlives disposal", async () => {
