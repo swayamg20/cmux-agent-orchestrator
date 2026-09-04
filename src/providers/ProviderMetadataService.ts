@@ -25,6 +25,10 @@ export class ProviderMetadataService {
   private readonly requestRevisions = new Map<string, number>();
   private readonly exactSourceRevisions = new Map<string, number>();
   private readonly exactRequestResults = new Map<string, ExactRequestResult>();
+  private readonly sharedListRequests = new Map<
+    string,
+    Promise<ProviderSessionMetadata[]>
+  >();
   private readonly controllers = new Set<AbortController>();
   private requestSequence = 0;
   private retiredThrough = 0;
@@ -42,6 +46,27 @@ export class ProviderMetadataService {
   }
 
   async list(
+    provider: ProviderSessionKind,
+    cwd: string,
+    signal?: AbortSignal
+  ): Promise<ProviderSessionMetadata[]> {
+    if (signal !== undefined) return this.loadList(provider, cwd, signal);
+    const listKey = providerMetadataListKey(provider, cwd);
+    const existing = this.sharedListRequests.get(listKey);
+    if (existing !== undefined) return cloneMetadataList(await existing);
+
+    const request = this.loadList(provider, cwd);
+    this.sharedListRequests.set(listKey, request);
+    try {
+      return cloneMetadataList(await request);
+    } finally {
+      if (this.sharedListRequests.get(listKey) === request) {
+        this.sharedListRequests.delete(listKey);
+      }
+    }
+  }
+
+  private async loadList(
     provider: ProviderSessionKind,
     cwd: string,
     signal?: AbortSignal
@@ -255,6 +280,7 @@ export class ProviderMetadataService {
     this.controllers.clear();
     for (const result of this.exactRequestResults.values()) result.resolve(null);
     this.exactRequestResults.clear();
+    this.sharedListRequests.clear();
     for (const source of this.sources.values()) source.dispose();
     this.metadata.clear();
     this.requestRevisions.clear();
@@ -395,6 +421,10 @@ export function providerMetadataKey(provider: ProviderSessionKind, sessionId: st
 
 function providerMetadataListKey(provider: ProviderSessionKind, cwd: string): string {
   return `list:${JSON.stringify([provider, cwd])}`;
+}
+
+function cloneMetadataList(sessions: readonly ProviderSessionMetadata[]): ProviderSessionMetadata[] {
+  return sessions.map((session) => ({ ...session }));
 }
 
 function normalizeMetadata(

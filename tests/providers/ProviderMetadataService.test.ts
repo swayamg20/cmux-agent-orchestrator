@@ -243,6 +243,30 @@ describe("ProviderMetadataService", () => {
     service.dispose();
   });
 
+  it("shares one provider list across concurrent uncancelled callers", async () => {
+    const resolvers: Array<(value: ProviderSessionMetadata[]) => void> = [];
+    const list = vi.fn(async () => new Promise<ProviderSessionMetadata[]>((resolve) => {
+      resolvers.push(resolve);
+    }));
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list,
+      get: async () => null,
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+
+    const first = service.list("codex", metadata.cwd);
+    const second = service.list("codex", metadata.cwd);
+    await vi.waitFor(() => expect(list).toHaveBeenCalled());
+    for (const resolve of resolvers) resolve([metadata]);
+
+    await expect(first).resolves.toEqual([metadata]);
+    await expect(second).resolves.toEqual([metadata]);
+    expect(list).toHaveBeenCalledTimes(1);
+    service.dispose();
+  });
+
   it("does not let an older list response overwrite newer conversation metadata", async () => {
     const resolvers: Array<(value: ProviderSessionMetadata[]) => void> = [];
     const source: ProviderSessionSource = {
@@ -252,8 +276,8 @@ describe("ProviderMetadataService", () => {
       dispose: vi.fn()
     };
     const service = new ProviderMetadataService([source]);
-    const older = service.list("codex", metadata.cwd);
-    const newer = service.list("codex", metadata.cwd);
+    const older = service.list("codex", metadata.cwd, new AbortController().signal);
+    const newer = service.list("codex", metadata.cwd, new AbortController().signal);
 
     resolvers[1]!([{ ...metadata, title: "New title", updatedAt: 2_000 }]);
     await newer;
@@ -276,8 +300,8 @@ describe("ProviderMetadataService", () => {
       dispose: vi.fn()
     };
     const service = new ProviderMetadataService([source]);
-    const older = service.list("codex", metadata.cwd);
-    const newer = service.list("codex", metadata.cwd);
+    const older = service.list("codex", metadata.cwd, new AbortController().signal);
+    const newer = service.list("codex", metadata.cwd, new AbortController().signal);
 
     resolvers[1]!([]);
     await expect(newer).resolves.toEqual([]);
