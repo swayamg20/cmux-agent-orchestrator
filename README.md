@@ -193,9 +193,10 @@ A read-only local smoke test is opt-in:
 CMUX_AGENT_ORCHESTRATOR_LIVE_CMUX=1 npm test -- tests/smoke/cmux.live.test.ts
 CMUX_AGENT_ORCHESTRATOR_LIVE_PROVIDERS=1 npm test -- tests/smoke/provider-metadata.live.test.ts
 CMUX_AGENT_ORCHESTRATOR_LIVE_IDENTITY=1 npm test -- tests/smoke/automatic-identity.live.test.ts
+CMUX_AGENT_ORCHESTRATOR_LIVE_TRACKING=1 npm test -- tests/smoke/automatic-tracking.live.test.ts
 ```
 
-The cmux smoke probes capabilities, reads topology and notifications, validates canonical UUIDs, and reads three lines from one selected terminal. The provider smoke performs local read-only title discovery for the repository running the test. The identity smoke verifies canonical, one-to-one process/session/surface mappings against the current machine. None of these tests focuses a surface, sends input, resumes a conversation, or changes provider data.
+The cmux smoke probes capabilities, reads topology and notifications, validates canonical UUIDs, and reads three lines from one selected terminal. The provider smoke performs local read-only title discovery for the repository running the test. The identity smoke verifies canonical, one-to-one process/session/surface mappings against the current machine. The tracking smoke runs that identity pipeline through the controller while keeping all generated task Markdown and plugin data in memory; it supplies blank previews and fails if the controller attempts to focus cmux. None of these tests sends input, resumes a conversation, changes provider data, or writes to a real vault.
 
 ## Normal-launch connection setup
 
