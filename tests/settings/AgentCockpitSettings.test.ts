@@ -38,4 +38,8 @@ describe("cmux Agent Orchestrator settings", () => {
     expect(parseSettings(undefined).autoTrackAgentRuns).toBe(true);
     expect(parseSettings({ autoTrackAgentRuns: false }).autoTrackAgentRuns).toBe(false);
   });
+
+  it("preserves a valid custom stale-working threshold", () => {
+    expect(parseSettings({ staleAfterMs: 45 * 60_000 }).staleAfterMs).toBe(45 * 60_000);
+  });
 });

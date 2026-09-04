@@ -36,6 +36,7 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 - Markdown task creation and workflow states: Backlog, Active, Review, Parked, and Done.
 - Machine-scoped task, run-history, surface, and provider-conversation bindings in schema-v3 plugin data.
 - Orphan sessions and stale bindings.
+- Configurable stale-working attention for structured lifecycle evidence, without changing task workflow.
 - Clear cmux disconnected, blocked, malformed-output, timeout, and output-limit states.
 - One-time GUI onboarding for normal Finder, Dock, and Spotlight launches when cmux rejects external clients.
 
@@ -155,6 +156,7 @@ These adapters sit behind a `ProviderSessionSource` interface because both local
 - After identity resolution, default-on automatic tracking serially creates at most one neutral task and binding for each newly observed exact provider session. It can also reconnect an existing binding after the old full cmux target disappears and the same provider session is proven uniquely on a new target. It performs no repeating scan between startup and explicit Refresh.
 - Global Refresh never reads terminal previews. Concurrent refresh requests coalesce, stale generations are ignored, and a notification failure does not discard a healthy topology snapshot.
 - There is no repeating topology, notification, or preview timer.
+- Stale-working attention is evaluated only at startup, after explicit Refresh, or when settings are saved; it does not add a timer.
 - Automatic identity work and provider metadata reads run only at startup or after explicit Refresh; there is no repeating process scan. Resolution and mapped metadata groups use concurrency two.
 - Provider title metadata is also loaded when the user opens the conversation picker. Mapped reads are grouped by provider and CWD with at most two groups active.
 - Workspace CWD metadata is cached for 30 seconds across closely spaced manual refreshes.
@@ -174,6 +176,7 @@ Each session projects separate dimensions: surface presence, agent presence, exe
 - A changed on-demand preview records low-confidence recent activity such as reading, editing, or command output, but leaves execution phase `State unknown`.
 - Generic words such as `approval` or `confirm` in terminal prose never assert `Needs input`.
 - A missing linked surface creates an attention item but does not prove provider completion.
+- A session is marked potentially stale only when structured lifecycle evidence still reports Working and its newest proven activity exceeds the configured threshold. Idle, unknown, waiting, and failed sessions are never relabeled as stale, and no workflow state changes.
 - Provider session IDs remain absent unless modern cmux metadata, exact local process correlation, a manual match, or an existing exact task binding proves the association.
 - Source health is independent: topology, notifications, and provider lifecycle each report fresh, stale, or unavailable. On cmux 0.62.2, native lifecycle is honestly unavailable even when conversation identity is resolved through local evidence.
 

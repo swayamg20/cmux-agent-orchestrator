@@ -33,7 +33,11 @@ import {
   isCanonicalUuid,
   normalizeCanonicalUuid
 } from "../security/identifiers";
-import { parseSettings, type AgentCockpitSettings } from "../settings/AgentCockpitSettings";
+import {
+  DEFAULT_SETTINGS,
+  parseSettings,
+  type AgentCockpitSettings
+} from "../settings/AgentCockpitSettings";
 import { CockpitStore } from "../state/CockpitStore";
 import type {
   ConnectionState,
@@ -657,7 +661,13 @@ export class AgentCockpitController {
       previewFor: (key) => this.previewCache.peek(key),
       evidenceFor: (key) => this.evidence.list(key)
     });
-    const attention = this.attentionEngine.build(sessions, state.tasks, state.bindings, Date.now());
+    const attention = this.attentionEngine.build(
+      sessions,
+      state.tasks,
+      state.bindings,
+      Date.now(),
+      this.settings?.staleAfterMs ?? DEFAULT_SETTINGS.staleAfterMs
+    );
     this.store.update({ sessions, attention });
   }
 

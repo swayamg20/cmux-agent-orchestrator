@@ -60,6 +60,12 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
             render: (setting) => this.addPreviewLinesDropdown(setting, getDraft())
           },
           {
+            name: "Stale working threshold",
+            desc: "Show an attention signal when structured lifecycle evidence still reports working but no activity has been observed for this long.",
+            aliases: ["stale agent", "attention timeout", "working timeout"],
+            render: (setting) => this.addStaleThresholdDropdown(setting, getDraft())
+          },
+          {
             name: "Save settings",
             desc: "Validate and persist the connection and storage settings.",
             searchable: false,
@@ -107,6 +113,15 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
       new Setting(this.containerEl)
         .setName("Preview lines")
         .setDesc("Displayed preview size for startup, explicit refresh, and expanded sessions. Preview text is never persisted."),
+      draft
+    );
+
+    this.addStaleThresholdDropdown(
+      new Setting(this.containerEl)
+        .setName("Stale working threshold")
+        .setDesc(
+          "Show an attention signal when structured lifecycle evidence still reports working but no activity has been observed for this long."
+        ),
       draft
     );
 
@@ -160,6 +175,28 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
     );
   }
 
+  private addStaleThresholdDropdown(setting: Setting, draft: AgentCockpitSettings): void {
+    const options: Record<string, string> = {
+      "900000": "15 minutes",
+      "1800000": "30 minutes",
+      "3600000": "1 hour",
+      "7200000": "2 hours",
+      "14400000": "4 hours",
+      "28800000": "8 hours",
+      "86400000": "24 hours"
+    };
+    const current = String(draft.staleAfterMs);
+    if (!(current in options)) options[current] = `Current (${formatDuration(draft.staleAfterMs)})`;
+    setting.addDropdown((dropdown) =>
+      dropdown
+        .addOptions(options)
+        .setValue(current)
+        .onChange((value) => {
+          draft.staleAfterMs = Number(value);
+        })
+    );
+  }
+
   private addSaveButton(setting: Setting, draft: AgentCockpitSettings): void {
     setting.addButton((button) =>
       button
@@ -175,4 +212,11 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
         })
     );
   }
+}
+
+function formatDuration(durationMs: number): string {
+  const minutes = Math.round(durationMs / 60_000);
+  if (minutes < 60 || minutes % 60 !== 0) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = minutes / 60;
+  return `${hours} hour${hours === 1 ? "" : "s"}`;
 }

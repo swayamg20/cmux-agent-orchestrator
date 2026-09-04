@@ -47,6 +47,7 @@ Verify manually:
 - If the same exact provider conversation is deliberately resumed on one new cmux surface after its previous full target disappears, Refresh reconnects the existing task without creating another task or run. Skip this controlled test when preserving current session placement takes priority.
 - Creating a task and attaching a session persists through reload without changing the agent.
 - Moving a task changes workflow only.
+- With structured lifecycle evidence available, lowering the stale-working threshold and saving settings can surface an aged Working session in Attention without moving its task; Idle and State unknown sessions remain unflagged.
 - Focus in cmux targets a user-approved development surface and sends no text.
 - Disabling and re-enabling the plugin leaves all cmux sessions running.
 

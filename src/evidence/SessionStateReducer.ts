@@ -70,7 +70,10 @@ function applyLifecycle(assessment: SessionAssessment, evidence: LifecycleEviden
     assessment.executionPhase = "working";
   }
   if (evidence.signal === "turn-started" || evidence.signal === "activity-started" || evidence.signal === "activity-completed") {
-    assessment.lastActivityAt = evidence.occurredAt ?? evidence.observedAt;
+    assessment.lastActivityAt = newestTimestamp(
+      assessment.lastActivityAt,
+      evidence.occurredAt ?? evidence.observedAt
+    );
   }
 }
 
@@ -105,4 +108,8 @@ function lowerConfidence(confidence: Confidence): Confidence {
 
 function normalizeActivity(activity: ActivityKind): ActivityKind {
   return activity;
+}
+
+function newestTimestamp(current: number | null, candidate: number): number {
+  return current === null ? candidate : Math.max(current, candidate);
 }

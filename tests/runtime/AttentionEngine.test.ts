@@ -4,6 +4,8 @@ import type { BindingRecord } from "../../src/bindings/types";
 import type { LiveSession } from "../../src/state/types";
 import type { TaskRecord } from "../../src/tasks/TaskSchema";
 
+const STALE_AFTER_MS = 30 * 60_000;
+
 const task = (workflowStatus: TaskRecord["workflowStatus"] = "active"): TaskRecord => ({
   file: {} as TaskRecord["file"],
   taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -33,13 +35,13 @@ const binding: BindingRecord = {
 describe("AttentionEngine", () => {
   it("reports a missing bound surface without completing the task", () => {
     const work = task("active");
-    const result = new AttentionEngine().build([], [work], [binding], 1_000);
+    const result = new AttentionEngine().build([], [work], [binding], 1_000, STALE_AFTER_MS);
     expect(result[0]?.reasons[0]?.kind).toBe("linked-surface-missing");
     expect(work.workflowStatus).toBe("active");
   });
 
   it("includes durable review tasks even without a live session", () => {
-    const result = new AttentionEngine().build([], [task("review")], [], 1_000);
+    const result = new AttentionEngine().build([], [task("review")], [], 1_000, STALE_AFTER_MS);
     expect(result.some((item) => item.reasons.some((reason) => reason.kind === "review-ready"))).toBe(true);
   });
 
@@ -71,7 +73,7 @@ describe("AttentionEngine", () => {
       preview: null
     };
 
-    const result = new AttentionEngine().build([session], [], [binding], 1_000);
+    const result = new AttentionEngine().build([session], [], [binding], 1_000, STALE_AFTER_MS);
 
     expect(result).toMatchObject([
       {
@@ -124,7 +126,8 @@ describe("AttentionEngine", () => {
       [session],
       [task("active")],
       [uppercaseBinding],
-      1_000
+      1_000,
+      STALE_AFTER_MS
     );
 
     expect(result.some((item) =>
@@ -164,7 +167,8 @@ describe("AttentionEngine", () => {
       [session],
       [task("active")],
       [binding],
-      1_000
+      1_000,
+      STALE_AFTER_MS
     );
 
     expect(result.some((item) =>
@@ -207,12 +211,69 @@ describe("AttentionEngine", () => {
         notifications: []
       }
     ];
-    const result = new AttentionEngine().build(sessions, [], [], 1_000);
+    const result = new AttentionEngine().build(sessions, [], [], 1_000, STALE_AFTER_MS);
     expect(result.map((item) => item.key)).toEqual(["error", "generic"]);
+  });
+
+  it("flags only structured working sessions whose proven activity exceeds the threshold", () => {
+    const now = 2_000_000;
+    const stale = liveSession("stale", assessment("working", {
+      coverage: "structured",
+      confidence: "high",
+      lastActivityAt: now - STALE_AFTER_MS
+    }));
+    const recent = liveSession("recent", assessment("working", {
+      coverage: "structured",
+      confidence: "high",
+      lastActivityAt: now - STALE_AFTER_MS + 1
+    }));
+    const idle = liveSession("idle", assessment("idle", {
+      coverage: "structured",
+      lastActivityAt: now - STALE_AFTER_MS - 1
+    }));
+    const unknown = liveSession("unknown", assessment("unknown", {
+      lastActivityAt: now - STALE_AFTER_MS - 1
+    }));
+
+    const result = new AttentionEngine().build(
+      [stale, recent, idle, unknown],
+      [],
+      [],
+      now,
+      STALE_AFTER_MS
+    );
+
+    expect(result).toMatchObject([
+      {
+        key: "stale",
+        reasons: [
+          {
+            kind: "stale",
+            label: "Working state may be stale",
+            severity: 2,
+            confidence: "medium"
+          }
+        ]
+      }
+    ]);
+    expect(result[0]?.reasons[0]?.detail).toContain("30 minutes");
+  });
+
+  it("does not infer staleness from fallback evidence even when its activity is old", () => {
+    const now = 2_000_000;
+    const session = liveSession("fallback", assessment("working", {
+      coverage: "fallback",
+      lastActivityAt: now - STALE_AFTER_MS - 1
+    }));
+
+    expect(new AttentionEngine().build([session], [], [], now, STALE_AFTER_MS)).toEqual([]);
   });
 });
 
-function assessment(phase: LiveSession["assessment"]["executionPhase"]): LiveSession["assessment"] {
+function assessment(
+  phase: LiveSession["assessment"]["executionPhase"],
+  overrides: Partial<LiveSession["assessment"]> = {}
+): LiveSession["assessment"] {
   return {
     surfacePresence: "present",
     agentPresence: "unknown",
@@ -224,6 +285,36 @@ function assessment(phase: LiveSession["assessment"]["executionPhase"]): LiveSes
     explanation: phase === "failed" ? "error" : "unknown",
     updatedAt: 1_000,
     lastActivityAt: null,
-    primaryEvidenceId: null
+    primaryEvidenceId: null,
+    ...overrides
+  };
+}
+
+function liveSession(key: string, sessionAssessment: LiveSession["assessment"]): LiveSession {
+  return {
+    key,
+    workspaceId: "workspace",
+    paneId: "pane",
+    surfaceId: key,
+    workspaceTitle: "Workspace",
+    workspaceIndex: 0,
+    paneIndex: 0,
+    surfaceIndex: 0,
+    surfaceTitle: key,
+    surfaceType: "terminal",
+    currentDirectory: "/repo",
+    provider: {
+      provider: "codex",
+      confidence: "high",
+      source: "cmux-agent-registry",
+      explanation: "fixture",
+      sessionId: "session"
+    },
+    assessment: sessionAssessment,
+    observedAt: sessionAssessment.updatedAt,
+    notifications: [],
+    linkedTaskId: null,
+    conversation: null,
+    preview: null
   };
 }

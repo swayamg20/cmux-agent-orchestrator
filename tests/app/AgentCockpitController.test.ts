@@ -584,6 +584,84 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("recomputes conservative stale-working attention from the configured threshold", async () => {
+    let persisted: unknown = {
+      settings: {
+        autoTrackAgentRuns: false,
+        staleAfterMs: 5 * 60_000
+      }
+    };
+    const now = Date.now();
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const resolver: ProviderSessionResolver = {
+      resolve: async () => ({
+        checkedAt: now,
+        nativeLifecycleAvailable: true,
+        issues: [],
+        mappings: [
+          {
+            workspaceId: "22222222-2222-4222-8222-222222222222",
+            paneId: "33333333-3333-4333-8333-333333333333",
+            surfaceId: "44444444-4444-4444-8444-444444444444",
+            provider: "codex",
+            providerSessionId: "55555555-5555-4555-8555-555555555555",
+            matchSource: "cmux-agent-registry",
+            confidence: "high",
+            explanation: "Verified exact native identity.",
+            observedAt: now
+          }
+        ],
+        lifecycle: [
+          {
+            workspaceId: "22222222-2222-4222-8222-222222222222",
+            paneId: "33333333-3333-4333-8333-333333333333",
+            surfaceId: "44444444-4444-4444-8444-444444444444",
+            state: "working",
+            source: "hook",
+            provider: "codex",
+            providerSessionId: "55555555-5555-4555-8555-555555555555",
+            observedAt: now,
+            occurredAt: now - 10 * 60_000,
+            explanation: "cmux still reports working."
+          }
+        ]
+      }),
+      dispose: () => undefined
+    };
+    const { app } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(now)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().attention).toMatchObject([
+      {
+        reasons: [{ kind: "stale", confidence: "medium" }],
+        session: { assessment: { executionPhase: "working", coverage: "structured" } }
+      }
+    ]);
+
+    await controller.updateSettings({
+      ...controller.getSettings(),
+      staleAfterMs: 24 * 60 * 60_000
+    });
+
+    expect(controller.store.getState().attention).toEqual([]);
+    expect(controller.store.getState().tasks).toEqual([]);
+    controller.dispose();
+  });
+
   it("automatically creates one neutral active task for an exact session and never recreates it", async () => {
     let persisted: unknown;
     let observedAt = 1_000;

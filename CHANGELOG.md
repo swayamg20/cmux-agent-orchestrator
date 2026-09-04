@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - Show the memory-only provider conversation title on its live Work card while keeping automatically written Markdown free of conversation and terminal titles.
 - Add a default-on setting to disable creation of new automatic tasks without changing existing tasks or running agents.
 - Surface a missing linked Markdown task as an actionable attention item without deleting the binding or recreating the note.
+- Surface a conservative stale-working attention signal when structured lifecycle evidence remains Working beyond a configurable inactivity threshold.
 
 ### Fixed
 
@@ -23,6 +24,7 @@ All notable changes to this project will be documented in this file.
 - Refuse to save a task choice from a stale picker when the surface's task binding changed while the picker was open.
 - Refuse to overwrite a newer Kanban workflow decision from a stale task card.
 - Report a failed Detach action as an Obsidian notice without leaking an unhandled promise rejection into the console.
+- Preserve the newest proven activity timestamp when an older structured lifecycle event arrives after a terminal preview observation.
 
 ### Security
 

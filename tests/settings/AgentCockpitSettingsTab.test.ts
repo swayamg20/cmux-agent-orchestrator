@@ -30,6 +30,7 @@ describe("AgentCockpitSettingsTab", () => {
           { name: "Task folder" },
           { name: "Automatically track agent runs" },
           { name: "Preview lines" },
+          { name: "Stale working threshold" },
           { name: "Save settings", searchable: false }
         ]
       }

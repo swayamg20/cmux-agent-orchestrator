@@ -12,7 +12,8 @@ export class AttentionEngine {
     sessions: readonly LiveSession[],
     tasks: readonly TaskRecord[],
     bindings: readonly BindingRecord[],
-    now: number
+    now: number,
+    staleAfterMs: number
   ): AttentionItem[] {
     const items = new Map<string, AttentionItem>();
     const taskById = new Map(tasks.map((task) => [task.taskId, task]));
@@ -52,6 +53,17 @@ export class AttentionEngine {
           detail: session.assessment.explanation,
           severity: 4,
           confidence: session.assessment.confidence,
+          firstObservedAt: firstSeen
+        });
+      }
+
+      if (isStaleWorkingSession(session, now, staleAfterMs)) {
+        add(session.key, session, task, {
+          kind: "stale",
+          label: "Working state may be stale",
+          detail: `No activity has been observed for at least ${formatDuration(staleAfterMs)} while structured lifecycle evidence still reports Working. The task workflow was not changed.`,
+          severity: 2,
+          confidence: lowerConfidence(session.assessment.confidence),
           firstObservedAt: firstSeen
         });
       }
@@ -150,4 +162,28 @@ function exactTargetKey(target: {
 function excerpt(value: string): string {
   const oneLine = value.replace(/\s+/g, " ").trim();
   return oneLine.length > 180 ? `${oneLine.slice(0, 177)}...` : oneLine;
+}
+
+function isStaleWorkingSession(session: LiveSession, now: number, staleAfterMs: number): boolean {
+  const lastActivityAt = session.assessment.lastActivityAt;
+  return (
+    session.assessment.executionPhase === "working" &&
+    session.assessment.coverage === "structured" &&
+    lastActivityAt !== null &&
+    Number.isFinite(staleAfterMs) &&
+    staleAfterMs > 0 &&
+    now >= lastActivityAt &&
+    now - lastActivityAt >= staleAfterMs
+  );
+}
+
+function lowerConfidence(confidence: LiveSession["assessment"]["confidence"]): LiveSession["assessment"]["confidence"] {
+  return confidence === "high" ? "medium" : "low";
+}
+
+function formatDuration(durationMs: number): string {
+  const minutes = Math.round(durationMs / 60_000);
+  if (minutes < 60 || minutes % 60 !== 0) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = minutes / 60;
+  return `${hours} hour${hours === 1 ? "" : "s"}`;
 }
