@@ -36,7 +36,7 @@ describe("BindingRepository", () => {
     await repository.load();
 
     expect(repository.getSettings().taskFolder).toBe("Agent Cockpit/Tasks");
-    expect(saved).toMatchObject({ schemaVersion: 3 });
+    expect(saved).toMatchObject({ schemaVersion: 4 });
   });
 
   it("accepts a legacy import save failure only when exact read-back proves persistence", async () => {
@@ -58,7 +58,7 @@ describe("BindingRepository", () => {
     await expect(repository.load()).resolves.toBeUndefined();
 
     expect(repository.getSettings().taskFolder).toBe("Agent Cockpit/Tasks");
-    expect(persisted).toMatchObject({ schemaVersion: 3 });
+    expect(persisted).toMatchObject({ schemaVersion: 4 });
   });
 
   it("prefers current plugin data without consulting the legacy loader", async () => {
@@ -99,6 +99,107 @@ describe("BindingRepository", () => {
     await second.load();
     expect(second.list()).toHaveLength(1);
     expect(second.list()[0]?.provider).toBe("codex");
+  });
+
+  it("derives deduplicated durable run-count floors across machine namespaces", async () => {
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const providerSessionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const exactRun = {
+      runId: "11111111-1111-4111-8111-111111111111",
+      taskId,
+      provider: "codex",
+      providerSessionId,
+      relation: "initial",
+      parentRunId: null,
+      firstAttachedAt: "2026-09-04T00:00:00.000Z",
+      lastAttachedAt: "2026-09-04T00:00:00.000Z"
+    };
+    const plugin = {
+      loadData: async () => ({
+        schemaVersion: 3,
+        settings: {},
+        machines: {
+          "00000000000000000000": {
+            bindings: [],
+            runs: [exactRun],
+            providerSessions: []
+          },
+          "11111111111111111111": {
+            bindings: [],
+            runs: [
+              {
+                ...exactRun,
+                runId: "22222222-2222-4222-8222-222222222222"
+              },
+              {
+                ...exactRun,
+                runId: "33333333-3333-4333-8333-333333333333",
+                provider: "unknown",
+                providerSessionId: null,
+                relation: "unknown"
+              }
+            ],
+            providerSessions: []
+          }
+        }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+
+    await repository.load();
+
+    expect((
+      await repository.loadDurableRunCountFloorsForRepair(
+        repository.getSettings().taskFolder
+      )
+    )?.get(taskId)).toBe(2);
+  });
+
+  it("counts equal run-count targets merged from concurrent machines", async () => {
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const run = {
+      taskId,
+      provider: "unknown",
+      providerSessionId: null,
+      taskRunCountTarget: 6,
+      relation: "unknown",
+      parentRunId: null,
+      firstAttachedAt: "2026-09-04T00:00:00.000Z",
+      lastAttachedAt: "2026-09-04T00:00:00.000Z"
+    };
+    const plugin = {
+      loadData: async () => ({
+        schemaVersion: 4,
+        settings: {},
+        machines: {
+          "00000000000000000000": {
+            bindings: [],
+            runs: [
+              { ...run, runId: "11111111-1111-4111-8111-111111111111" }
+            ],
+            providerSessions: []
+          },
+          "11111111111111111111": {
+            bindings: [],
+            runs: [
+              { ...run, runId: "22222222-2222-4222-8222-222222222222" }
+            ],
+            providerSessions: []
+          }
+        }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+
+    await repository.load();
+
+    expect((
+      await repository.loadDurableRunCountFloorsForRepair(
+        repository.getSettings().taskFolder
+      )
+    )?.get(taskId)).toBe(7);
   });
 
   it("drops malformed persisted identities instead of resolving short refs", async () => {
@@ -524,7 +625,7 @@ describe("BindingRepository", () => {
       attachedAt: "2026-09-04T00:00:00.000Z"
     })).resolves.toMatchObject({ isNewRun: true });
 
-    expect(secondPersisted).toMatchObject({ schemaVersion: 3 });
+    expect(secondPersisted).toMatchObject({ schemaVersion: 4 });
   });
 
   it("rebases a conditional local attachment onto another repository's saved binding", async () => {
@@ -618,7 +719,7 @@ describe("BindingRepository", () => {
 
   it("refuses to downgrade a newer persisted schema during an unrelated save", async () => {
     const persisted = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       settings: {},
       machines: {},
       futureState: { enabled: true }
@@ -636,7 +737,7 @@ describe("BindingRepository", () => {
     ).rejects.toThrow(/newer schema|cannot be saved safely/);
 
     expect(saveData).not.toHaveBeenCalled();
-    expect(persisted).toMatchObject({ schemaVersion: 4, futureState: { enabled: true } });
+    expect(persisted).toMatchObject({ schemaVersion: 5, futureState: { enabled: true } });
   });
 
   it("refuses to strip unknown persisted fields during an unrelated save", async () => {
@@ -1455,7 +1556,7 @@ describe("BindingRepository", () => {
         providerSessions: unknown[];
       }>;
     };
-    expect(saved.schemaVersion).toBe(3);
+    expect(saved.schemaVersion).toBe(4);
     const savedBinding = saved.machines["00000000000000000000"]?.bindings[0];
     expect(savedBinding?.bindingId).toMatch(/^[0-9a-f-]{36}$/);
     expect(savedBinding?.runId).toMatch(/^[0-9a-f-]{36}$/);

@@ -137,6 +137,11 @@ export class AgentCockpitController {
     if (this.disposed) return;
     this.settings = this.bindings.getSettings();
     this.taskRepository = new TaskRepository(this.app, this.settings.taskFolder);
+    await this.repairPersistedRunCounts(
+      this.taskRepository,
+      this.settings.taskFolder
+    );
+    if (this.disposed) return;
     this.store.update({
       tasks: this.taskRepository.list(),
       bindings: this.bindings.list(),
@@ -510,10 +515,45 @@ export class AgentCockpitController {
     invalidations: readonly TaskInvalidationEvidence[] = [],
     renames: readonly TaskRenameEvidence[] = []
   ): Promise<void> {
-    if (this.disposed || this.taskRepository === null) return;
-    this.taskRepository.invalidateVaultEvents(invalidations, renames);
-    this.store.update({ tasks: this.taskRepository.list() });
+    const repository = this.taskRepository;
+    const taskFolder = this.settings?.taskFolder;
+    if (this.disposed || repository === null || taskFolder === undefined) return;
+    repository.invalidateVaultEvents(invalidations, renames);
+    await this.repairPersistedRunCounts(repository, taskFolder);
+    if (this.disposed) return;
+    this.store.update({ tasks: this.requireTaskRepository().list() });
     this.recomputeSessions();
+  }
+
+  private async repairPersistedRunCounts(
+    repository: TaskRepository,
+    taskFolder: string
+  ): Promise<void> {
+    const canRepair = (): boolean =>
+      !this.disposed &&
+      this.taskRepository === repository &&
+      this.settings?.taskFolder === taskFolder;
+    const runCounts = await this.bindings.loadDurableRunCountFloorsForRepair(taskFolder);
+    if (runCounts === null || !canRepair()) return;
+
+    for (const task of repository.list()) {
+      if (!canRepair()) return;
+      const recordedRuns = runCounts.get(task.taskId) ?? 0;
+      if (task.runCount >= recordedRuns) continue;
+      try {
+        const repaired = await repository.ensureRunCountAtLeast(
+          task,
+          recordedRuns,
+          canRepair
+        );
+        if (repaired === null) return;
+      } catch (error) {
+        if (!canRepair()) return;
+        new Notice(
+          `Run history was restored, but ${task.title}'s run count could not be reconciled: ${readableError(error)}`
+        );
+      }
+    }
   }
 
   async copyMetadata(session: LiveSession): Promise<void> {
@@ -1072,6 +1112,7 @@ export class AgentCockpitController {
             surfaceId: current.surfaceId,
             provider: candidate.provider,
             providerSessionId: candidate.providerSessionId,
+            taskRunCountBaseline: task.runCount,
             attachedAt
           },
           expectedBinding,
@@ -1082,9 +1123,9 @@ export class AgentCockpitController {
         );
         if (result === null) continue;
         changed = true;
-        if (result.isNewRun && this.automaticTrackingAllowed(generation)) {
+        if (this.automaticTrackingAllowed(generation)) {
           try {
-            await this.persistNewRunCount(task);
+            await this.persistAttachedRunCount(task, result.isNewRun);
           } catch (error) {
             this.reportAutomaticTrackingIssue(
               `${issueKey}:run-count`,
@@ -1656,6 +1697,7 @@ export class AgentCockpitController {
         surfaceId: current.surfaceId,
         provider: current.provider.provider,
         providerSessionId: current.provider.sessionId,
+        taskRunCountBaseline: currentTask.runCount,
         attachedAt
       },
       expectedBinding,
@@ -1673,29 +1715,46 @@ export class AgentCockpitController {
       );
     }
     this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
-    if (result.isNewRun) {
-      try {
-        await this.persistNewRunCount(currentTask);
-        await this.waitForSettingsUpdates();
-        if (this.disposed) return;
-        this.store.update({ tasks: this.requireTaskRepository().list() });
-      } catch (error) {
-        if (this.disposed) return;
-        new Notice(`Session attached, but run count was not updated: ${readableError(error)}`);
-      }
+    try {
+      await this.persistAttachedRunCount(currentTask, result.isNewRun);
+      await this.waitForSettingsUpdates();
+      if (this.disposed) return;
+      this.store.update({ tasks: this.requireTaskRepository().list() });
+    } catch (error) {
+      if (this.disposed) return;
+      new Notice(`Session attached, but run count was not updated: ${readableError(error)}`);
     }
     this.recomputeSessions();
   }
 
-  private async persistNewRunCount(task: TaskRecord): Promise<number> {
+  private async persistAttachedRunCount(
+    task: TaskRecord,
+    isNewRun: boolean
+  ): Promise<number> {
     const repository = this.requireTaskRepository();
+    const taskFolder = this.settings?.taskFolder;
+    if (taskFolder === undefined) throw new Error("Task settings are unavailable.");
     // The vault API may reject before or after applying a frontmatter edit.
-    // Reconcile to a minimum instead of repeating the increment, which keeps
-    // this recovery idempotent in both cases. The repository keeps both
-    // attempts pinned to the same exact task file and task folder.
-    const recordedRuns = this.bindings.listRuns(task.taskId).length;
-    const expected = Math.min(1_000_000, Math.max(task.runCount + 1, recordedRuns));
-    return repository.incrementRunCountWithRecovery(task, expected);
+    // Reconcile every successful attachment to its durable floor so a reused
+    // run can heal an earlier failed note update. Only a genuinely new run may
+    // contribute the task snapshot's next count. The repository keeps both
+    // write attempts pinned to the same exact task file and task folder.
+    const runCounts = await this.bindings.loadDurableRunCountFloorsForRepair(taskFolder);
+    if (this.disposed) return task.runCount;
+    if (runCounts === null) {
+      throw new Error("Run history changed on disk and could not be safely reconciled.");
+    }
+    const recordedRuns = runCounts.get(task.taskId) ?? 0;
+    const expected = isNewRun
+      ? Math.min(1_000_000, Math.max(task.runCount + 1, recordedRuns))
+      : recordedRuns;
+    if (expected <= task.runCount) return task.runCount;
+    const repaired = await repository.ensureRunCountAtLeastWithRecovery(
+      task,
+      expected,
+      () => !this.disposed
+    );
+    return repaired ?? task.runCount;
   }
 
   private handleError(error: unknown, connectionFailure = true): void {

@@ -17,6 +17,7 @@ export interface AgentRunRecord {
   taskId: string;
   provider: "claude" | "codex" | "shell" | "unknown";
   providerSessionId: string | null;
+  taskRunCountTarget?: number;
   relation: RunRelation;
   parentRunId: string | null;
   firstAttachedAt: string;
@@ -32,7 +33,9 @@ export interface ProviderSessionMapping {
   matchedAt: string;
 }
 
-export type NewBindingRecord = Omit<BindingRecord, "bindingId" | "runId">;
+export type NewBindingRecord = Omit<BindingRecord, "bindingId" | "runId"> & {
+  taskRunCountBaseline?: number;
+};
 
 export interface AttachBindingResult {
   binding: BindingRecord;

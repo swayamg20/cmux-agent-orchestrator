@@ -34,7 +34,7 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 - Bounded, memory-only terminal previews loaded only when a session is expanded or explicitly requested.
 - Exact Focus in cmux with fresh target resolution and bounded postcondition retries.
 - Markdown task creation and workflow states: Backlog, Active, Review, Parked, and Done.
-- Machine-scoped task, run-history, surface, and provider-conversation bindings in schema-v3 plugin data.
+- Machine-scoped task, run-history, surface, and provider-conversation bindings in schema-v4 plugin data.
 - Orphan sessions and stale bindings.
 - Configurable stale-working attention for structured lifecycle evidence, without changing task workflow.
 - Review attention when structured lifecycle or cmux notification evidence says an agent turn finished, without automatically moving its task.
@@ -102,7 +102,7 @@ updated-at:
 ---
 ```
 
-cmux UUIDs and provider observations do not go into task frontmatter. Automatically created notes use a deterministic task UUID derived from the provider kind and canonical provider session ID without embedding or displaying that original ID. Plugin `data.json` schema version 3 stores settings, surface bindings, durable run relationships, and exact cmux-surface-to-provider-session-ID mappings under a one-way hashed machine namespace. Existing schema-v1 and schema-v2 data migrate in memory and are written as v3 on the next plugin-data mutation. Conversation titles, provider previews, terminal previews, notification bodies, evidence ledgers, output fingerprints, and source-health snapshots remain memory-only.
+cmux UUIDs and provider observations do not go into task frontmatter. Automatically created notes use a deterministic task UUID derived from the provider kind and canonical provider session ID without embedding or displaying that original ID. Plugin `data.json` schema version 4 stores settings, surface bindings, durable run relationships, idempotent task run-count targets, and exact cmux-surface-to-provider-session-ID mappings under a one-way hashed machine namespace. Existing schema-v1 through schema-v3 data migrate in memory and are written as v4 on the next plugin-data mutation. Conversation titles, provider previews, terminal previews, notification bodies, evidence ledgers, output fingerprints, and source-health snapshots remain memory-only.
 
 A task may own several runs and several currently attached surfaces. Each binding has its own canonical binding ID and run ID. Reattaching the same surface/provider run reuses that run; a different provider is recorded as a handoff; uncertain same-provider relationships remain explicitly `unknown` rather than being invented as a resume or fork. If high-confidence exact evidence proves that cmux reused a surface for another provider conversation, the previous task is never inherited by the new run. Attention identifies the change, and a manual attachment may replace only the live surface binding while preserving the previous task and run history.
 

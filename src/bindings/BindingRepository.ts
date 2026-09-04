@@ -47,6 +47,7 @@ const RUN_KEYS = new Set([
   "taskId",
   "provider",
   "providerSessionId",
+  "taskRunCountTarget",
   "relation",
   "parentRunId",
   "firstAttachedAt",
@@ -86,7 +87,7 @@ const persistenceCoordinator = sharedGlobal[PERSISTENCE_COORDINATOR_SYMBOL] ??= 
 };
 
 interface PersistedPluginData {
-  schemaVersion: 3;
+  schemaVersion: 4;
   settings: AgentCockpitSettings;
   machines: Record<string, MachineBindings>;
 }
@@ -149,6 +150,15 @@ function validDate(value: unknown): value is string {
   return typeof value === "string" && value.length <= 64 && Number.isFinite(Date.parse(value));
 }
 
+function validTaskRunCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= 1_000_000
+  );
+}
+
 function isLegacyBinding(value: unknown): value is NewBindingRecord {
   if (typeof value !== "object" || value === null) return false;
   const raw = value as Record<string, unknown>;
@@ -159,6 +169,7 @@ function isLegacyBinding(value: unknown): value is NewBindingRecord {
     typeof raw.surfaceId === "string" && isCanonicalUuid(raw.surfaceId) &&
     validProvider(raw.provider) &&
     validProviderSessionId(raw.providerSessionId) &&
+    (raw.taskRunCountBaseline === undefined || validTaskRunCount(raw.taskRunCountBaseline)) &&
     validDate(raw.attachedAt)
   );
 }
@@ -184,6 +195,9 @@ function isRun(value: unknown): value is AgentRunRecord {
     typeof raw.taskId === "string" && isCanonicalUuid(raw.taskId) &&
     validProvider(raw.provider) &&
     validProviderSessionId(raw.providerSessionId) &&
+    (raw.taskRunCountTarget === undefined ||
+      raw.taskRunCountTarget === null ||
+      validTaskRunCount(raw.taskRunCountTarget)) &&
     validRelation(raw.relation) &&
     (raw.parentRunId === null || (typeof raw.parentRunId === "string" && isCanonicalUuid(raw.parentRunId))) &&
     validDate(raw.firstAttachedAt) &&
@@ -212,15 +226,25 @@ function normalizeNewBindingRecord(binding: NewBindingRecord): NewBindingRecord 
     surfaceId: normalizeCanonicalUuid(binding.surfaceId)!,
     provider: binding.provider,
     providerSessionId: normalizeProviderSessionId(binding.providerSessionId),
-    attachedAt: binding.attachedAt
+    attachedAt: binding.attachedAt,
+    ...(binding.taskRunCountBaseline === undefined
+      ? {}
+      : { taskRunCountBaseline: binding.taskRunCountBaseline })
   };
 }
 
 function normalizeBindingRecord(binding: BindingRecord): BindingRecord {
+  const normalized = normalizeNewBindingRecord(binding);
   return {
     bindingId: normalizeCanonicalUuid(binding.bindingId)!,
     runId: normalizeCanonicalUuid(binding.runId)!,
-    ...normalizeNewBindingRecord(binding)
+    taskId: normalized.taskId,
+    workspaceId: normalized.workspaceId,
+    paneId: normalized.paneId,
+    surfaceId: normalized.surfaceId,
+    provider: normalized.provider,
+    providerSessionId: normalized.providerSessionId,
+    attachedAt: normalized.attachedAt
   };
 }
 
@@ -230,6 +254,9 @@ function normalizeRunRecord(run: AgentRunRecord): AgentRunRecord {
     taskId: normalizeCanonicalUuid(run.taskId)!,
     provider: run.provider,
     providerSessionId: normalizeProviderSessionId(run.providerSessionId),
+    ...(validTaskRunCount(run.taskRunCountTarget)
+      ? { taskRunCountTarget: run.taskRunCountTarget }
+      : {}),
     relation: run.relation,
     parentRunId: run.parentRunId === null ? null : normalizeCanonicalUuid(run.parentRunId)!,
     firstAttachedAt: run.firstAttachedAt,
@@ -341,7 +368,7 @@ function decodePluginData(
     machines[id] = decodeMachine(rawMachines[id], id);
   }
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     settings: parseSettings(raw.settings),
     machines
   };
@@ -353,9 +380,9 @@ function assertPluginDataCanBeSaved(raw: Record<string, unknown>, currentMachine
     (typeof raw.schemaVersion !== "number" ||
       !Number.isInteger(raw.schemaVersion) ||
       raw.schemaVersion < 1 ||
-      raw.schemaVersion > 3)
+      raw.schemaVersion > 4)
   ) {
-    const qualifier = typeof raw.schemaVersion === "number" && raw.schemaVersion > 3
+    const qualifier = typeof raw.schemaVersion === "number" && raw.schemaVersion > 4
       ? "uses a newer schema"
       : "uses an unsupported schema";
     throw new Error(`${PRODUCT_NAME} data ${qualifier} and cannot be saved safely.`);
@@ -567,6 +594,7 @@ function runFingerprint(run: AgentRunRecord): string {
     run.taskId,
     run.provider,
     run.providerSessionId,
+    run.taskRunCountTarget,
     run.relation,
     run.parentRunId,
     run.firstAttachedAt,
@@ -709,6 +737,114 @@ function decodeProviderSessions(value: unknown): ProviderSessionMapping[] {
   return [...bySurface.values()];
 }
 
+function exactProviderRunIdentity(
+  taskId: string,
+  provider: BindingRecord["provider"],
+  providerSessionId: string | null
+): string | null {
+  const normalizedSessionId = normalizeCanonicalUuid(providerSessionId ?? "");
+  if (
+    (provider !== "claude" && provider !== "codex") ||
+    normalizedSessionId === null
+  ) {
+    return null;
+  }
+  return `${taskId}:${provider}:${normalizedSessionId}`;
+}
+
+function durableRunCountFloors(
+  machines: Readonly<Record<string, MachineBindings>>
+): Map<string, number> {
+  interface RunIdGroup {
+    taskId: string;
+    runId: string;
+    exactIdentities: Set<string>;
+    target?: number;
+  }
+
+  interface LogicalRun {
+    taskId: string;
+    target?: number;
+  }
+
+  const groupsByRunId = new Map<string, RunIdGroup>();
+  for (const machineId of Object.keys(machines).sort()) {
+    for (const run of machines[machineId]!.runs) {
+      const runIdKey = `${run.taskId}:${run.runId}`;
+      const group = groupsByRunId.get(runIdKey) ?? {
+        taskId: run.taskId,
+        runId: run.runId,
+        exactIdentities: new Set<string>()
+      };
+      const exactIdentity = exactProviderRunIdentity(
+        run.taskId,
+        run.provider,
+        run.providerSessionId
+      );
+      if (exactIdentity !== null) group.exactIdentities.add(exactIdentity);
+      if (run.taskRunCountTarget !== undefined) {
+        group.target = Math.max(group.target ?? 0, run.taskRunCountTarget);
+      }
+      groupsByRunId.set(runIdKey, group);
+    }
+  }
+
+  const logicalRuns = new Map<string, LogicalRun>();
+  for (const group of groupsByRunId.values()) {
+    const logicalKey = group.exactIdentities.size === 1
+      ? `exact:${[...group.exactIdentities][0]}`
+      : `run:${group.taskId}:${group.runId}`;
+    const existing = logicalRuns.get(logicalKey);
+    logicalRuns.set(logicalKey, {
+      taskId: group.taskId,
+      ...(
+        group.target === undefined && existing?.target === undefined
+          ? {}
+          : { target: Math.max(group.target ?? 0, existing?.target ?? 0) }
+      )
+    });
+  }
+
+  const runsByTask = new Map<string, LogicalRun[]>();
+  for (const run of logicalRuns.values()) {
+    const runs = runsByTask.get(run.taskId) ?? [];
+    runs.push(run);
+    runsByTask.set(run.taskId, runs);
+  }
+
+  const counts = new Map<string, number>();
+  for (const [taskId, runs] of runsByTask) {
+    let floor = runs.filter((run) => run.target === undefined).length;
+    const targets = runs
+      .flatMap((run) => run.target === undefined ? [] : [run.target])
+      .sort((left, right) => left - right);
+    for (const target of targets) {
+      floor = Math.min(1_000_000, Math.max(floor + 1, target));
+    }
+    counts.set(taskId, floor);
+  }
+  return counts;
+}
+
+function findExactRunAcrossMachines(
+  machines: Readonly<Record<string, MachineBindings>>,
+  input: NewBindingRecord
+): AgentRunRecord | null {
+  const identity = exactProviderRunIdentity(
+    input.taskId,
+    input.provider,
+    input.providerSessionId
+  );
+  if (identity === null) return null;
+  for (const machineId of Object.keys(machines).sort()) {
+    const match = machines[machineId]!.runs.find((run) =>
+      exactProviderRunIdentity(run.taskId, run.provider, run.providerSessionId) === identity
+    );
+    if (match !== undefined) return match;
+  }
+  return null;
+}
+
 export class BindingRepository {
   private readonly currentMachineId = machineId();
   private readonly persistenceScope: PersistenceScopeState;
@@ -770,6 +906,33 @@ export class BindingRepository {
       .filter((run) => normalizedTaskId === undefined || run.taskId === normalizedTaskId)
       .map((run) => ({ ...run }))
       .sort((left, right) => right.lastAttachedAt.localeCompare(left.lastAttachedAt));
+  }
+
+  loadDurableRunCountFloorsForRepair(
+    expectedTaskFolder: string
+  ): Promise<ReadonlyMap<string, number> | null> {
+    return enqueuePersistenceWork(this.persistenceScope, async () => {
+      let loaded: unknown;
+      try {
+        loaded = await this.plugin.loadData();
+      } catch {
+        return null;
+      }
+      if (isMissingPluginData(loaded)) {
+        return this.hasObservedCurrentData || this.persistenceScope.observedData
+          ? null
+          : new Map();
+      }
+      this.markCurrentDataObserved();
+      let current: PersistedPluginData;
+      try {
+        current = decodePluginData(loaded, this.currentMachineId, { strictForWrite: true });
+      } catch {
+        return null;
+      }
+      if (current.settings.taskFolder !== expectedTaskFolder) return null;
+      return durableRunCountFloors(current.machines);
+    });
   }
 
   listProviderSessions(): ProviderSessionMapping[] {
@@ -880,7 +1043,7 @@ export class BindingRepository {
     const normalizedInput = normalizeNewBindingRecord(input);
     let result: AttachBindingResult | null = null;
     await this.commit((data) => {
-      result = attachToMachine(this.machineFor(data), normalizedInput);
+      result = attachToMachine(data, this.machineFor(data), normalizedInput);
     });
     if (result === null) throw new Error(`${PRODUCT_NAME} could not persist the session attachment.`);
     return result;
@@ -907,7 +1070,7 @@ export class BindingRepository {
       if (!sameBinding(current, normalizedExpected)) {
         return false;
       }
-      result = attachToMachine(machine, normalizedInput);
+      result = attachToMachine(data, machine, normalizedInput);
       return true;
     });
     if (!committed) return null;
@@ -1284,6 +1447,7 @@ function assertProviderSessionAvailable(
 }
 
 function attachToMachine(
+  data: PersistedPluginData,
   machine: MachineBindings,
   input: NewBindingRecord
 ): AttachBindingResult {
@@ -1315,10 +1479,23 @@ function attachToMachine(
     reusableRun !== null &&
     reusableRun.provider === input.provider &&
     (input.providerSessionId === null || reusableRun.providerSessionId === input.providerSessionId);
-  const isNewRun = !isSameProviderSession;
-  if (isNewRun && machine.runs.length >= MAX_RUNS_PER_MACHINE) {
+  const createsRunRecord = !isSameProviderSession;
+  if (createsRunRecord && machine.runs.length >= MAX_RUNS_PER_MACHINE) {
     throw new Error(`This machine has reached the ${PRODUCT_NAME} run-history limit.`);
   }
+  const exactRunElsewhere = createsRunRecord
+    ? findExactRunAcrossMachines(data.machines, input)
+    : null;
+  const isNewRun = createsRunRecord && exactRunElsewhere === null;
+  const priorRunCountFloor = durableRunCountFloors(data.machines).get(input.taskId) ?? 0;
+  const taskRunCountTarget = isNewRun
+    ? Math.min(
+        1_000_000,
+        Math.max(input.taskRunCountBaseline ?? 0, priorRunCountFloor) + 1
+      )
+    : reusableRun?.taskRunCountTarget ??
+      exactRunElsewhere?.taskRunCountTarget ??
+      undefined;
   const latestTaskRun = machine.runs
     .filter((run) => run.taskId === input.taskId)
     .sort((left, right) => right.lastAttachedAt.localeCompare(left.lastAttachedAt))[0] ?? null;
@@ -1329,15 +1506,22 @@ function attachToMachine(
         taskId: input.taskId,
         provider: input.provider,
         providerSessionId: input.providerSessionId,
+        ...(taskRunCountTarget === undefined ? {} : { taskRunCountTarget }),
         relation: inferRelation(latestTaskRun, input),
         parentRunId: latestTaskRun?.runId ?? null,
         firstAttachedAt: input.attachedAt,
         lastAttachedAt: input.attachedAt
       };
   const binding: BindingRecord = {
-    ...input,
     bindingId: existing?.bindingId ?? randomUUID(),
-    runId: run.runId
+    runId: run.runId,
+    taskId: input.taskId,
+    workspaceId: input.workspaceId,
+    paneId: input.paneId,
+    surfaceId: input.surfaceId,
+    provider: input.provider,
+    providerSessionId: input.providerSessionId,
+    attachedAt: input.attachedAt
   };
   const replacing = machine.bindings.some(
     (candidate) => candidate.surfaceId === binding.surfaceId

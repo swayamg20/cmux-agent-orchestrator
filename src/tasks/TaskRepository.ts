@@ -397,19 +397,42 @@ export class TaskRepository {
     return this.enqueueMutation(() => this.incrementRunCountInFolder(task, taskFolder));
   }
 
-  async incrementRunCountWithRecovery(task: TaskRecord, minimum: number): Promise<number> {
+  async ensureRunCountAtLeastWithRecovery(
+    task: TaskRecord,
+    minimum: number
+  ): Promise<number>;
+  async ensureRunCountAtLeastWithRecovery(
+    task: TaskRecord,
+    minimum: number,
+    canMutate: MutationGuard
+  ): Promise<number | null>;
+  async ensureRunCountAtLeastWithRecovery(
+    task: TaskRecord,
+    minimum: number,
+    canMutate?: MutationGuard
+  ): Promise<number | null> {
     this.assertMinimumRunCount(minimum);
     const taskFolder = this.taskFolder;
     return this.enqueueMutation(async () => {
+      if (canMutate && !canMutate()) return null;
       try {
-        return await this.incrementRunCountInFolder(task, taskFolder);
+        const ensured = await this.ensureRunCountAtLeastInFolder(
+          task,
+          minimum,
+          taskFolder,
+          canMutate
+        );
+        if (ensured === null) return null;
+        return ensured;
       } catch {
+        if (canMutate && !canMutate()) return null;
         const recovered = await this.ensureRunCountAtLeastInFolder(
           task,
           minimum,
-          taskFolder
+          taskFolder,
+          canMutate
         );
-        if (recovered === null) throw new Error("Run-count recovery was cancelled.");
+        if (recovered === null) return null;
         return recovered;
       }
     });

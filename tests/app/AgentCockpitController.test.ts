@@ -3846,6 +3846,492 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("repairs a persisted run target when the same provider run is reattached", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted ?? ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const memory = memoryTaskApp({ failFrontmatterWrites: 2 });
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_336)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const task = await controller.createTask({ title: "Repair a reused run" });
+    await controller.attachTask(controller.store.getState().sessions[0]!, task);
+
+    expect(controller.store.getState().tasks).toMatchObject([{ runCount: 0 }]);
+    expect(memory.frontmatterWriteAttempts()).toBe(2);
+    expect(controller.store.getState().runs).toMatchObject([
+      { taskRunCountTarget: 1 }
+    ]);
+
+    await controller.detachTask(controller.store.getState().sessions[0]!);
+    await controller.attachTask(
+      controller.store.getState().sessions[0]!,
+      controller.store.getState().tasks[0]!
+    );
+
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(controller.store.getState().tasks).toMatchObject([{ runCount: 1 }]);
+    expect(memory.frontmatterWriteAttempts()).toBe(3);
+    controller.dispose();
+  });
+
+  it("repairs a committed manual run count after disposal interrupts attachment", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted ?? ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const { app } = memoryTaskApp();
+    const createController = (): AgentCockpitController =>
+      new AgentCockpitController(
+        app,
+        plugin,
+        async () => new CmuxClient(connectedTransport(5_340))
+      );
+    const first = createController();
+
+    await first.initialize();
+    const task = await first.createTask({ title: "Recover interrupted manual run" });
+    const internal = first as unknown as {
+      bindings: BindingRepository;
+      taskRepository: TaskRepository;
+    };
+    for (let count = 0; count < 5; count += 1) {
+      await internal.taskRepository.incrementRunCount(task);
+    }
+    await first.reloadTasks();
+    const currentTask = first.store.getState().tasks[0]!;
+    const session = first.store.getState().sessions[0]!;
+    const repository = internal.bindings;
+    const attachIfSurfaceUnchanged = repository.attachIfSurfaceUnchanged.bind(repository);
+    let markAttachCommitted!: () => void;
+    const attachCommitted = new Promise<void>((resolve) => {
+      markAttachCommitted = resolve;
+    });
+    let releaseAttach!: () => void;
+    const attachGate = new Promise<void>((resolve) => {
+      releaseAttach = resolve;
+    });
+    repository.attachIfSurfaceUnchanged = async (input, expected, canMutate) => {
+      const result = await attachIfSurfaceUnchanged(input, expected, canMutate);
+      markAttachCommitted();
+      await attachGate;
+      return result;
+    };
+
+    const attachment = first.attachTask(session, currentTask);
+    await attachCommitted;
+    first.dispose();
+    releaseAttach();
+    await attachment;
+
+    const replacement = createController();
+    await replacement.initialize();
+
+    expect(replacement.store.getState().runs).toHaveLength(1);
+    expect(replacement.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, runCount: 6 }
+    ]);
+    replacement.dispose();
+  });
+
+  it("does not repair task notes from a newer unsupported plugin-data schema", async () => {
+    const memory = memoryTaskApp();
+    const taskRepository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const task = await taskRepository.create({ title: "Do not trust future run data" });
+    const plugin = {
+      loadData: async () => ({
+        schemaVersion: 5,
+        settings: { autoTrackAgentRuns: false },
+        machines: {
+          "11111111111111111111": {
+            bindings: [],
+            runs: [
+              {
+                runId: "11111111-1111-4111-8111-111111111111",
+                taskId: task.taskId,
+                provider: "unknown",
+                providerSessionId: null,
+                taskRunCountTarget: 6,
+                relation: "unknown",
+                parentRunId: null,
+                firstAttachedAt: "2026-09-04T00:00:00.000Z",
+                lastAttachedAt: "2026-09-04T00:00:00.000Z"
+              }
+            ],
+            providerSessions: []
+          }
+        }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_344))
+    );
+
+    await controller.initialize();
+
+    expect(memory.frontmatterWriteAttempts()).toBe(0);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, runCount: 0 }
+    ]);
+    controller.dispose();
+  });
+
+  it("does not repair an abandoned task folder after synced settings change", async () => {
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const run = {
+      runId: "11111111-1111-4111-8111-111111111111",
+      taskId,
+      provider: "unknown",
+      providerSessionId: null,
+      taskRunCountTarget: 1,
+      relation: "unknown",
+      parentRunId: null,
+      firstAttachedAt: "2026-09-04T00:00:00.000Z",
+      lastAttachedAt: "2026-09-04T00:00:00.000Z"
+    };
+    let persisted: unknown = {
+      schemaVersion: 4,
+      settings: {
+        autoTrackAgentRuns: false,
+        taskFolder: "Folder A"
+      },
+      machines: {
+        "11111111111111111111": {
+          bindings: [],
+          runs: [run],
+          providerSessions: []
+        }
+      }
+    };
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const memory = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_344))
+    );
+
+    await controller.initialize();
+    const created = await new TaskRepository(memory.app, "Folder A").ensure({
+      taskId,
+      title: "Stay out of abandoned folder",
+      workflowStatus: "active",
+      priority: "normal",
+      repository: null,
+      branch: null,
+      worktree: null
+    });
+    expect(created).not.toBeNull();
+    persisted = {
+      schemaVersion: 4,
+      settings: {
+        autoTrackAgentRuns: false,
+        taskFolder: "Folder B"
+      },
+      machines: {
+        "11111111111111111111": {
+          bindings: [],
+          runs: [run],
+          providerSessions: []
+        }
+      }
+    };
+
+    await controller.reloadTasks();
+
+    expect(memory.frontmatterWriteAttempts()).toBe(0);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId, runCount: 0 }
+    ]);
+    controller.dispose();
+  });
+
+  it("revalidates current plugin data before a later task-note repair", async () => {
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const run = {
+      runId: "11111111-1111-4111-8111-111111111111",
+      taskId,
+      provider: "unknown",
+      providerSessionId: null,
+      taskRunCountTarget: 6,
+      relation: "unknown",
+      parentRunId: null,
+      firstAttachedAt: "2026-09-04T00:00:00.000Z",
+      lastAttachedAt: "2026-09-04T00:00:00.000Z"
+    };
+    let persisted: unknown = {
+      schemaVersion: 4,
+      settings: { autoTrackAgentRuns: false },
+      machines: {
+        "11111111111111111111": {
+          bindings: [],
+          runs: [run],
+          providerSessions: []
+        }
+      }
+    };
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const memory = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_344))
+    );
+
+    await controller.initialize();
+    persisted = {
+      schemaVersion: 5,
+      settings: { autoTrackAgentRuns: false },
+      machines: {
+        "11111111111111111111": {
+          bindings: [],
+          runs: [run],
+          providerSessions: []
+        }
+      }
+    };
+    const created = await new TaskRepository(memory.app, "Agent Cockpit/Tasks").ensure({
+      taskId,
+      title: "Do not trust newly synced future data",
+      workflowStatus: "active",
+      priority: "normal",
+      repository: null,
+      branch: null,
+      worktree: null
+    });
+    expect(created).not.toBeNull();
+
+    await controller.reloadTasks();
+
+    expect(memory.frontmatterWriteAttempts()).toBe(0);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId, runCount: 0 }
+    ]);
+    controller.dispose();
+  });
+
+  it("repairs an interrupted manual run count above runs retained from another machine", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => structuredClone(
+        persisted ?? ({ settings: { autoTrackAgentRuns: false } })
+      ),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const { app } = memoryTaskApp();
+    const createController = (observedAt: number): AgentCockpitController =>
+      new AgentCockpitController(
+        app,
+        plugin,
+        async () => new CmuxClient(connectedTransport(observedAt))
+      );
+    const first = createController(5_341);
+
+    await first.initialize();
+    const task = await first.createTask({ title: "Recover after a synced run" });
+    await first.attachTask(first.store.getState().sessions[0]!, task);
+    first.dispose();
+
+    const data = persisted as {
+      machines: Record<string, unknown>;
+    };
+    const originalMachineId = Object.keys(data.machines)[0]!;
+    data.machines["11111111111111111111"] = data.machines[originalMachineId];
+    delete data.machines[originalMachineId];
+
+    const second = createController(5_342);
+    await second.initialize();
+    const currentTask = second.store.getState().tasks[0]!;
+    const currentSession = second.store.getState().sessions[0]!;
+    const internal = second as unknown as { bindings: BindingRepository };
+    const repository = internal.bindings;
+    const attachIfSurfaceUnchanged = repository.attachIfSurfaceUnchanged.bind(repository);
+    let markAttachCommitted!: () => void;
+    const attachCommitted = new Promise<void>((resolve) => {
+      markAttachCommitted = resolve;
+    });
+    let releaseAttach!: () => void;
+    const attachGate = new Promise<void>((resolve) => {
+      releaseAttach = resolve;
+    });
+    repository.attachIfSurfaceUnchanged = async (input, expected, canMutate) => {
+      const result = await attachIfSurfaceUnchanged(input, expected, canMutate);
+      markAttachCommitted();
+      await attachGate;
+      return result;
+    };
+
+    const attachment = second.attachTask(currentSession, currentTask);
+    await attachCommitted;
+    second.dispose();
+    releaseAttach();
+    await attachment;
+
+    const replacement = createController(5_343);
+    await replacement.initialize();
+
+    expect(replacement.store.getState().runs).toHaveLength(1);
+    expect(replacement.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, runCount: 2 }
+    ]);
+    replacement.dispose();
+  });
+
+  it("does not double-count a manual run when task reload repairs it before attachment finishes", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted ?? ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const { app } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_345))
+    );
+
+    await controller.initialize();
+    const task = await controller.createTask({ title: "Keep one count for one run" });
+    const session = controller.store.getState().sessions[0]!;
+    const internal = controller as unknown as { bindings: BindingRepository };
+    const repository = internal.bindings;
+    const attachIfSurfaceUnchanged = repository.attachIfSurfaceUnchanged.bind(repository);
+    let markAttachCommitted!: () => void;
+    const attachCommitted = new Promise<void>((resolve) => {
+      markAttachCommitted = resolve;
+    });
+    let releaseAttach!: () => void;
+    const attachGate = new Promise<void>((resolve) => {
+      releaseAttach = resolve;
+    });
+    repository.attachIfSurfaceUnchanged = async (input, expected, canMutate) => {
+      const result = await attachIfSurfaceUnchanged(input, expected, canMutate);
+      markAttachCommitted();
+      await attachGate;
+      return result;
+    };
+
+    const attachment = controller.attachTask(session, task);
+    await attachCommitted;
+    await controller.reloadTasks();
+    releaseAttach();
+    await attachment;
+
+    expect(repository.listRuns()).toHaveLength(1);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, runCount: 1 }
+    ]);
+    controller.dispose();
+  });
+
+  it("assigns distinct durable count targets to concurrent new runs", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted ?? ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const { app } = memoryTaskApp();
+    const currentSnapshot = snapshot(5_346);
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces.push({
+      id: "66666666-6666-4666-8666-666666666666",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      index: 1,
+      indexInPane: 1,
+      title: "repository second run",
+      type: "terminal",
+      selected: false,
+      focused: false,
+      active: true
+    });
+    const baseTransport = connectedTransport(5_346);
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient({
+        ...baseTransport,
+        snapshot: async () => structuredClone(currentSnapshot)
+      })
+    );
+
+    await controller.initialize();
+    const task = await controller.createTask({ title: "Count concurrent runs" });
+    const internal = controller as unknown as {
+      bindings: BindingRepository;
+      taskRepository: TaskRepository;
+    };
+    for (let count = 0; count < 5; count += 1) {
+      await internal.taskRepository.incrementRunCount(task);
+    }
+    await controller.reloadTasks();
+    const currentTask = controller.store.getState().tasks[0]!;
+    const sessions = controller.store.getState().sessions;
+    const attachIfSurfaceUnchanged =
+      internal.bindings.attachIfSurfaceUnchanged.bind(internal.bindings);
+    let committed = 0;
+    let markBothCommitted!: () => void;
+    const bothCommitted = new Promise<void>((resolve) => {
+      markBothCommitted = resolve;
+    });
+    let releaseAttachments!: () => void;
+    const attachmentGate = new Promise<void>((resolve) => {
+      releaseAttachments = resolve;
+    });
+    internal.bindings.attachIfSurfaceUnchanged = async (input, expected, canMutate) => {
+      const result = await attachIfSurfaceUnchanged(input, expected, canMutate);
+      committed += 1;
+      if (committed === 2) markBothCommitted();
+      await attachmentGate;
+      return result;
+    };
+
+    const attachments = sessions.map((session) => controller.attachTask(session, currentTask));
+    await bothCommitted;
+    releaseAttachments();
+    await Promise.all(attachments);
+
+    expect(internal.bindings.listRuns()).toHaveLength(2);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, runCount: 7 }
+    ]);
+    expect(
+      internal.bindings.listRuns().map((run) => run.taskRunCountTarget).sort()
+    ).toEqual([6, 7]);
+    controller.dispose();
+  });
+
   it("repairs a manual run count in its original folder when settings change during the first attempt", async () => {
     let persisted: unknown;
     let markFrontmatterStarted!: () => void;
@@ -3904,6 +4390,53 @@ describe("AgentCockpitController connection failures", () => {
       expect.stringContaining("Session attached, but run count was not updated")
     );
     controller.dispose();
+  });
+
+  it("does not write a run count after disposal during repair-source validation", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: false } };
+    let gateRepairRead = false;
+    let markRepairReadStarted!: () => void;
+    const repairReadStarted = new Promise<void>((resolve) => {
+      markRepairReadStarted = resolve;
+    });
+    let releaseRepairRead!: () => void;
+    const repairReadGate = new Promise<void>((resolve) => {
+      releaseRepairRead = resolve;
+    });
+    const plugin = {
+      loadData: async () => {
+        const snapshot = structuredClone(persisted);
+        const runCount = Object.values(
+          (snapshot as { machines?: Record<string, { runs?: unknown[] }> }).machines ?? {}
+        ).reduce((count, machine) => count + (machine.runs?.length ?? 0), 0);
+        if (gateRepairRead && runCount > 0) {
+          gateRepairRead = false;
+          markRepairReadStarted();
+          await repairReadGate;
+        }
+        return snapshot;
+      },
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const memory = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_338))
+    );
+
+    await controller.initialize();
+    const task = await controller.createTask({ title: "Cancel disposed run repair" });
+    gateRepairRead = true;
+    const attachment = controller.attachTask(controller.store.getState().sessions[0]!, task);
+    await repairReadStarted;
+    controller.dispose();
+    releaseRepairRead();
+    await attachment;
+
+    expect(memory.frontmatterWriteAttempts()).toBe(0);
   });
 
   it("does not double-count when a run-count write rejects after applying the edit", async () => {
