@@ -607,6 +607,99 @@ describe("BindingRepository", () => {
     expect(repository.list()).toHaveLength(1);
   });
 
+  it("fails closed when data saved by another repository disappears", async () => {
+    let persisted: unknown;
+    let unavailable = false;
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => unavailable ? undefined : structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const first = new BindingRepository(plugin);
+    const second = new BindingRepository(plugin);
+    await first.load();
+    await second.load();
+    await first.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      paneId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      surfaceId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      provider: "codex",
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+    unavailable = true;
+
+    await expect(
+      second.attach({
+        taskId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        workspaceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        paneId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        surfaceId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        provider: "codex",
+        providerSessionId: null,
+        attachedAt: "2026-09-04T00:01:00.000Z"
+      })
+    ).rejects.toThrow(/data became unavailable/);
+
+    expect(saveCount).toBe(1);
+    expect(first.list()).toHaveLength(1);
+    expect(second.list()).toEqual([]);
+  });
+
+  it("fails closed after a failed save observes different persisted data", async () => {
+    let persisted: unknown;
+    let unavailable = false;
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => unavailable ? undefined : structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        if (saveCount === 1) {
+          persisted = { schemaVersion: 3, settings: {}, machines: {} };
+          throw new Error("simulated write failure");
+        }
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const first = new BindingRepository(plugin);
+    const second = new BindingRepository(plugin);
+    await first.load();
+    await second.load();
+
+    await expect(
+      first.attach({
+        taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        workspaceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        paneId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        surfaceId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        provider: "codex",
+        providerSessionId: null,
+        attachedAt: "2026-09-04T00:00:00.000Z"
+      })
+    ).rejects.toThrow("simulated write failure");
+    unavailable = true;
+
+    await expect(
+      second.attach({
+        taskId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        workspaceId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        paneId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        surfaceId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        provider: "codex",
+        providerSessionId: null,
+        attachedAt: "2026-09-04T00:01:00.000Z"
+      })
+    ).rejects.toThrow(/data became unavailable/);
+
+    expect(saveCount).toBe(1);
+    expect(first.list()).toEqual([]);
+    expect(second.list()).toEqual([]);
+  });
+
   it("rejects conflicting synced settings without overwriting them", async () => {
     let persisted: unknown = { schemaVersion: 3, settings: {}, machines: {} };
     let saveCount = 0;

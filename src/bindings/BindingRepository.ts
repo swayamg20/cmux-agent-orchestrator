@@ -65,6 +65,7 @@ const PROVIDER_SESSION_KEYS = new Set([
 // queue still prevents two repository instances from reading the same snapshot
 // and then overwriting one another inside one Obsidian process.
 const pluginSaveChains = new WeakMap<object, Promise<void>>();
+const pluginsWithObservedData = new WeakSet<object>();
 
 interface PersistedPluginData {
   schemaVersion: 3;
@@ -682,6 +683,7 @@ export class BindingRepository {
   async load(): Promise<void> {
     let loaded: unknown = await this.plugin.loadData();
     this.hasObservedCurrentData = hasPersistedPluginData(loaded);
+    if (this.hasObservedCurrentData) pluginsWithObservedData.add(this.plugin);
     let importedLegacyData = false;
     if (!hasPersistedPluginData(loaded)) {
       const legacyData = await this.loadLegacyData();
@@ -696,7 +698,7 @@ export class BindingRepository {
       await enqueuePluginSave(this.plugin, async () => {
         const current = (await this.plugin.loadData()) as unknown;
         if (hasPersistedPluginData(current)) {
-          this.hasObservedCurrentData = true;
+          this.markCurrentDataObserved();
           this.data = decodePluginData(current, this.currentMachineId, { strictForWrite: true });
           return;
         }
@@ -1041,12 +1043,12 @@ export class BindingRepository {
   private async loadLatest(base: PersistedPluginData): Promise<PersistedPluginData> {
     const loaded = (await this.plugin.loadData()) as unknown;
     if (!hasPersistedPluginData(loaded)) {
-      if (this.hasObservedCurrentData) {
+      if (this.hasObservedCurrentData || pluginsWithObservedData.has(this.plugin)) {
         throw new Error(`${PRODUCT_NAME} data became unavailable before it could be saved.`);
       }
       return structuredClone(base);
     }
-    this.hasObservedCurrentData = true;
+    this.markCurrentDataObserved();
     return decodePluginData(loaded, this.currentMachineId, { strictForWrite: true });
   }
 
@@ -1056,8 +1058,10 @@ export class BindingRepository {
     } catch (saveError) {
       try {
         const persisted = (await this.plugin.loadData()) as unknown;
+        if (hasPersistedPluginData(persisted)) {
+          this.markCurrentDataObserved();
+        }
         if (isDeepStrictEqual(persisted, draft)) {
-          this.hasObservedCurrentData = true;
           this.data = draft;
           return;
         }
@@ -1066,8 +1070,13 @@ export class BindingRepository {
       }
       throw saveError;
     }
-    this.hasObservedCurrentData = true;
+    this.markCurrentDataObserved();
     this.data = draft;
+  }
+
+  private markCurrentDataObserved(): void {
+    this.hasObservedCurrentData = true;
+    pluginsWithObservedData.add(this.plugin);
   }
 }
 
