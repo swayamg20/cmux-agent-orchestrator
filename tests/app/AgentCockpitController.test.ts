@@ -177,6 +177,29 @@ describe("AgentCockpitController modal lifecycle", () => {
 });
 
 describe("AgentCockpitController connection failures", () => {
+  it("publishes plugin-data initialization failures without exposing unloaded settings", async () => {
+    const plugin = {
+      loadData: async () => {
+        throw new Error("Plugin data is temporarily unavailable.");
+      },
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(memoryTaskApp().app, plugin);
+
+    await expect(controller.initialize()).rejects.toThrow(
+      "Plugin data is temporarily unavailable."
+    );
+    expect(controller.getLoadedSettings()).toBeNull();
+    expect(controller.store.getState()).toMatchObject({
+      connection: {
+        status: "error",
+        message: "Could not initialize cmux Agent Orchestrator: Plugin data is temporarily unavailable."
+      },
+      error: "Could not initialize cmux Agent Orchestrator: Plugin data is temporarily unavailable."
+    });
+    controller.dispose();
+  });
+
   it("does not expose a task folder until initialization has loaded settings", async () => {
     const plugin = {
       loadData: async () => ({

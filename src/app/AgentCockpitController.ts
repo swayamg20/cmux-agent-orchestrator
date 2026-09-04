@@ -134,26 +134,36 @@ export class AgentCockpitController {
     if (this.disposed) return;
     try {
       await this.bindings.load();
+      if (this.disposed) return;
+      this.settings = this.bindings.getSettings();
+      this.taskRepository = new TaskRepository(this.app, this.settings.taskFolder);
+      await this.repairPersistedRunCounts(
+        this.taskRepository,
+        this.settings.taskFolder
+      );
+      if (this.disposed) return;
+      this.store.update({
+        tasks: this.taskRepository.list(),
+        bindings: this.bindings.list(),
+        runs: this.bindings.listRuns()
+      });
+      await this.connect();
+      if (this.disposed) return;
+      if (this.client !== null) await this.refreshNow();
     } catch (error) {
       if (this.disposed) return;
+      const message = `Could not initialize ${PRODUCT_NAME}: ${readableError(error)}`;
+      this.store.update((state) => ({
+        connection: {
+          ...state.connection,
+          status: "error",
+          message,
+          checkedAt: Date.now()
+        },
+        error: message
+      }));
       throw error;
     }
-    if (this.disposed) return;
-    this.settings = this.bindings.getSettings();
-    this.taskRepository = new TaskRepository(this.app, this.settings.taskFolder);
-    await this.repairPersistedRunCounts(
-      this.taskRepository,
-      this.settings.taskFolder
-    );
-    if (this.disposed) return;
-    this.store.update({
-      tasks: this.taskRepository.list(),
-      bindings: this.bindings.list(),
-      runs: this.bindings.listRuns()
-    });
-    await this.connect();
-    if (this.disposed) return;
-    if (this.client !== null) await this.refreshNow();
   }
 
   async refreshNow(): Promise<void> {
@@ -688,6 +698,10 @@ export class AgentCockpitController {
 
   getSettings(): AgentCockpitSettings {
     return { ...this.requireSettings() };
+  }
+
+  getLoadedSettings(): AgentCockpitSettings | null {
+    return this.settings === null ? null : { ...this.settings };
   }
 
   getLoadedTaskFolder(): string | null {

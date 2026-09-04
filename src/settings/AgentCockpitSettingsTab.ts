@@ -24,8 +24,20 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
   }
 
   override getSettingDefinitions(): SettingDefinitionItem[] {
-    let draft: AgentCockpitSettings | null = null;
-    const getDraft = (): AgentCockpitSettings => (draft ??= this.controller.getSettings());
+    let draft: AgentCockpitSettings | null | undefined;
+    const getDraft = (): AgentCockpitSettings | null =>
+      (draft === undefined ? (draft = this.controller.getLoadedSettings()) : draft);
+    const renderWithDraft = (
+      setting: Setting,
+      render: (loaded: AgentCockpitSettings) => void
+    ): void => {
+      const loaded = getDraft();
+      if (loaded === null) {
+        this.renderSettingsUnavailable(setting);
+        return;
+      }
+      render(loaded);
+    };
     const connection = this.controller.store.getState().connection;
 
     return [
@@ -37,43 +49,64 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
             name: "cmux connection",
             desc: connection.message,
             aliases: ["connection status", "test connection"],
-            render: (setting) => this.addConnectionButton(setting)
+            render: (setting) => renderWithDraft(
+              setting,
+              () => this.addConnectionButton(setting)
+            )
           },
           {
             name: "cmux binary",
             desc: "Optional absolute path to an executable named cmux. This is a path, never a command string.",
             aliases: ["cmux path", "executable"],
-            render: (setting) => this.addBinaryInput(setting, getDraft())
+            render: (setting) => renderWithDraft(
+              setting,
+              (loaded) => this.addBinaryInput(setting, loaded)
+            )
           },
           {
             name: "Task folder",
             desc: "Vault-relative folder for durable Markdown task notes.",
             aliases: ["task notes", "storage folder"],
-            render: (setting) => this.addTaskFolderInput(setting, getDraft())
+            render: (setting) => renderWithDraft(
+              setting,
+              (loaded) => this.addTaskFolderInput(setting, loaded)
+            )
           },
           {
             name: "Automatically track agent runs",
             desc: "Create one active Markdown task for each newly discovered, exact Claude or Codex session. Ambiguous sessions remain available for manual tracking.",
             aliases: ["automatic tasks", "auto track", "work board"],
-            render: (setting) => this.addAutomaticTrackingToggle(setting, getDraft())
+            render: (setting) => renderWithDraft(
+              setting,
+              (loaded) => this.addAutomaticTrackingToggle(setting, loaded)
+            )
           },
           {
             name: "Preview lines",
             desc: PREVIEW_LINES_DESCRIPTION,
             aliases: ["terminal preview", "screen lines"],
-            render: (setting) => this.addPreviewLinesDropdown(setting, getDraft())
+            render: (setting) => renderWithDraft(
+              setting,
+              (loaded) => this.addPreviewLinesDropdown(setting, loaded)
+            )
           },
           {
             name: "Stale working threshold",
             desc: "Show an attention signal when structured lifecycle evidence still reports working but no activity has been observed for this long.",
             aliases: ["stale agent", "attention timeout", "working timeout"],
-            render: (setting) => this.addStaleThresholdDropdown(setting, getDraft())
+            render: (setting) => renderWithDraft(
+              setting,
+              (loaded) => this.addStaleThresholdDropdown(setting, loaded)
+            )
           },
           {
             name: "Save settings",
             desc: "Validate and persist the connection and storage settings.",
             searchable: false,
-            render: (setting) => this.addSaveButton(setting, getDraft())
+            render: (setting) => renderWithDraft(
+              setting,
+              (loaded) => this.addSaveButton(setting, loaded)
+            )
           }
         ]
       }
@@ -83,7 +116,13 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
   override display(): void {
     this.containerEl.empty();
     new Setting(this.containerEl).setName("Connection and storage").setHeading();
-    const draft: AgentCockpitSettings = this.controller.getSettings();
+    const draft = this.controller.getLoadedSettings();
+    if (draft === null) {
+      this.renderSettingsUnavailable(
+        new Setting(this.containerEl).setName("Settings unavailable")
+      );
+      return;
+    }
     const connection = this.controller.store.getState().connection;
 
     this.addConnectionButton(
@@ -130,6 +169,15 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
     );
 
     this.addSaveButton(new Setting(this.containerEl), draft);
+  }
+
+  private renderSettingsUnavailable(setting: Setting): void {
+    const error = this.controller.store.getState().error;
+    setting.setDesc(
+      error === null
+        ? `${PRODUCT_NAME} settings are still loading. Close and reopen settings in a moment.`
+        : `${error} Reload the plugin after resolving the error; no settings were changed.`
+    );
   }
 
   private addConnectionButton(setting: Setting): void {

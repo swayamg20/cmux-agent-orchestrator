@@ -1,4 +1,4 @@
-import { Notice, type App, type Plugin, type Setting } from "obsidian";
+import { Notice, Setting, type App, type Plugin } from "obsidian";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentCockpitController } from "../../src/app/AgentCockpitController";
 import { DEFAULT_SETTINGS, type AgentCockpitSettings } from "../../src/settings/AgentCockpitSettings";
@@ -59,6 +59,54 @@ describe("AgentCockpitSettingsTab", () => {
         ]
       }
     ]);
+  });
+
+  it("renders an initialization failure without reading or saving unavailable settings", () => {
+    const getSettings = vi.fn(() => {
+      throw new Error("Strict settings access must not run after initialization fails.");
+    });
+    const controller = {
+      getLoadedSettings: () => null,
+      getSettings,
+      store: {
+        getState: () => ({
+          connection: { message: "Could not initialize cmux Agent Orchestrator." },
+          error: "Could not initialize cmux Agent Orchestrator: Plugin data is unavailable."
+        })
+      }
+    } as unknown as AgentCockpitController;
+    const tab = new AgentCockpitSettingsTab({} as App, {} as Plugin, controller);
+    const instanceStart = (Setting as unknown as { instances: Setting[] }).instances.length;
+    (tab as unknown as { containerEl: { empty: () => void } }).containerEl = {
+      empty: vi.fn()
+    };
+
+    const renderClassicSettings = (tab as unknown as { display: () => void }).display.bind(tab);
+    expect(() => renderClassicSettings()).not.toThrow();
+
+    const displayed = (Setting as unknown as { instances: Setting[] }).instances.slice(instanceStart);
+    expect(displayed.at(-1)).toMatchObject({
+      name: "Settings unavailable",
+      description:
+        "Could not initialize cmux Agent Orchestrator: Plugin data is unavailable. Reload the plugin after resolving the error; no settings were changed."
+    });
+    expect(getSettings).not.toHaveBeenCalled();
+
+    const definitions = tab.getSettingDefinitions();
+    const items = (definitions[0] as { items: Array<{ render?: (setting: Setting) => void }> }).items;
+    for (const item of items) {
+      const setting = new Setting({} as HTMLElement);
+      expect(() => item.render?.(setting)).not.toThrow();
+      expect(setting).toMatchObject({
+        description:
+          "Could not initialize cmux Agent Orchestrator: Plugin data is unavailable. Reload the plugin after resolving the error; no settings were changed.",
+        buttons: [],
+        dropdowns: [],
+        texts: [],
+        toggles: []
+      });
+    }
+    expect(getSettings).not.toHaveBeenCalled();
   });
 
   it("does not publish a settings-save completion after controller disposal", async () => {
