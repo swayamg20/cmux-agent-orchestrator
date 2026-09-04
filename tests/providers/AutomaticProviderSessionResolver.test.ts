@@ -322,4 +322,40 @@ describe("AutomaticProviderSessionResolver", () => {
     resolver.dispose();
     metadata.dispose();
   });
+
+  it("keeps stronger local identity proof when detected cmux evidence agrees", async () => {
+    const metadata = new ProviderMetadataService([codexSource()]);
+    const processes = new FakeProcessSource([processRecord()]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+    const agents: CmuxAgentRecord[] = [
+      {
+        surfaceId,
+        state: "working",
+        source: "detected",
+        sessionId,
+        updatedAt: 1_900
+      }
+    ];
+
+    const result = await resolver.resolve(snapshot(), client(agents));
+
+    expect(result.mappings).toEqual([
+      expect.objectContaining({
+        provider: "codex",
+        providerSessionId: sessionId,
+        matchSource: "codex-writer-lock",
+        confidence: "high"
+      })
+    ]);
+    expect(result.lifecycle).toEqual([
+      expect.objectContaining({
+        state: "working",
+        source: "detected",
+        provider: "codex",
+        providerSessionId: sessionId
+      })
+    ]);
+    resolver.dispose();
+    metadata.dispose();
+  });
 });

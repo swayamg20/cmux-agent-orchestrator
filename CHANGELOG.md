@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file.
 - Discard all conflicting persisted provider-session mappings instead of trusting array order, while preserving the user's durable task notes.
 - Ignore saved identity claims whose complete canonical cmux tuple is absent so stale surfaces cannot shadow fresh exact evidence.
 - Canonicalize cmux, task, binding, run, and provider UUID casing across CLI, process, Markdown, and plugin-data boundaries so case-only representations cannot bypass uniqueness or produce false missing/focus results.
+- Preserve the strongest agreeing identity proof when newer cmux detection and exact local process evidence describe the same provider session.
 
 ## [0.2.0] - 2026-09-03
 

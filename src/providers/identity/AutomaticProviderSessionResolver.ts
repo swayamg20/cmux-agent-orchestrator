@@ -384,14 +384,23 @@ function normalizeMappings(
     const identity = `${mapping.provider}:${mapping.providerSessionId}`;
     if (
       ambiguousSurfaces.has(mapping.surfaceId) ||
-      ambiguousIdentities.has(identity) ||
-      bySurface.has(mapping.surfaceId)
+      ambiguousIdentities.has(identity)
     ) {
       continue;
     }
-    bySurface.set(mapping.surfaceId, mapping);
+    const existing = bySurface.get(mapping.surfaceId);
+    if (
+      existing === undefined ||
+      confidenceRank(mapping.confidence) > confidenceRank(existing.confidence)
+    ) {
+      bySurface.set(mapping.surfaceId, mapping);
+    }
   }
   return [...bySurface.values()];
+}
+
+function confidenceRank(confidence: Confidence): number {
+  return confidence === "high" ? 3 : confidence === "medium" ? 2 : 1;
 }
 
 function nativeLifecycleObservation(
