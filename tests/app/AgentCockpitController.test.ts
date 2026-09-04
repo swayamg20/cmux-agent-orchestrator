@@ -153,11 +153,16 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
-  it("reports an unavailable focus action without rejecting the UI callback", async () => {
+  it("reports unavailable session actions without rejecting UI callbacks", async () => {
     let clientCreations = 0;
     let focusCalls = 0;
+    let previewCalls = 0;
     const transport: CmuxTransport = {
       ...connectedTransport(1_050),
+      readPreview: async (target) => {
+        previewCalls += 1;
+        return { ...target, text: "", observedAt: 1_050, truncated: false };
+      },
       focus: async () => {
         focusCalls += 1;
       }
@@ -181,12 +186,17 @@ describe("AgentCockpitController connection failures", () => {
     );
 
     await controller.initialize();
+    await controller.waitForBackgroundWork();
     const session = controller.store.getState().sessions[0]!;
+    const previewCallsBeforeDisconnect = previewCalls;
     await controller.testConnection();
 
     await expect(controller.focusSession(session)).resolves.toBeUndefined();
+    await expect(controller.loadPreview(session)).resolves.toBeUndefined();
     expect(focusCalls).toBe(0);
+    expect(previewCalls).toBe(previewCallsBeforeDisconnect);
     expect(notices.slice(noticeStart)).toContain("cmux connection is not initialized.");
+    expect(notices.slice(noticeStart)).toContain("cmux Agent Orchestrator is not connected to cmux.");
     controller.dispose();
   });
 

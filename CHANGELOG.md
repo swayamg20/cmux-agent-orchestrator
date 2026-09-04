@@ -30,6 +30,7 @@ All notable changes to this project will be documented in this file.
 - Restore the workflow selector to its persisted value when a stale or failed card move is rejected.
 - Report a stale Focus click safely when the cmux connection is unavailable instead of leaking an unhandled UI rejection.
 - Preserve a newly created task and report one explicit partial-success notice if its session attachment cannot be persisted.
+- Report a stale Preview click safely when cmux is unavailable instead of leaking an unhandled UI rejection.
 
 ### Security
 

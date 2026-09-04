@@ -174,9 +174,10 @@ export class AgentCockpitController {
   }
 
   async loadPreview(session: LiveSession): Promise<void> {
-    const client = this.requireClient();
-    const settings = this.requireSettings();
+    if (this.disposed) return;
     try {
+      const client = this.requireClient();
+      const settings = this.requireSettings();
       const preview = await this.previewScheduler.schedule(session.key, () =>
         client.readPreview(session, {
           lines: settings.previewLines,
