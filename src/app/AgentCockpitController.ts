@@ -66,6 +66,7 @@ export class AgentCockpitController {
   private metadataWork: Promise<void> = Promise.resolve();
   private identityWork: Promise<void> = Promise.resolve();
   private automaticTrackingWork: Promise<void> = Promise.resolve();
+  private automaticTrackingGeneration = 0;
   private readonly reportedAutomaticTrackingIssues = new Set<string>();
   private identityAbortController: AbortController | null = null;
   private identityGeneration = 0;
@@ -381,7 +382,23 @@ export class AgentCockpitController {
   async updateSettings(next: AgentCockpitSettings): Promise<void> {
     const current = this.requireSettings();
     const parsed = parseSettings({ ...next, cmuxBinaryPath: validateBinarySetting(next.cmuxBinaryPath) });
-    await this.bindings.updateSettings(parsed);
+    const disablingAutomaticTracking = current.autoTrackAgentRuns && !parsed.autoTrackAgentRuns;
+    if (disablingAutomaticTracking) {
+      // Apply an opt-out immediately so identity and metadata work that finishes
+      // while settings are being saved cannot enqueue more task writes.
+      this.settings = { ...current, autoTrackAgentRuns: false };
+      this.cancelAutomaticTaskTracking();
+    }
+    try {
+      await this.bindings.updateSettings(parsed);
+    } catch (error) {
+      if (disablingAutomaticTracking) {
+        this.settings = current;
+        this.cancelAutomaticTaskTracking();
+        this.scheduleAutomaticTaskTracking();
+      }
+      throw error;
+    }
     this.settings = parsed;
     this.requireTaskRepository().setTaskFolder(parsed.taskFolder);
     if (current.cmuxBinaryPath !== parsed.cmuxBinaryPath) {
@@ -420,6 +437,7 @@ export class AgentCockpitController {
 
   dispose(): void {
     this.disposed = true;
+    this.cancelAutomaticTaskTracking();
     this.refreshCoordinator.dispose();
     this.previewScheduler.dispose();
     this.cancelIdentityResolution();
@@ -629,25 +647,24 @@ export class AgentCockpitController {
 
   private scheduleAutomaticTaskTracking(): void {
     if (this.disposed || this.settings?.autoTrackAgentRuns !== true) return;
+    const generation = this.automaticTrackingGeneration;
     this.automaticTrackingWork = this.automaticTrackingWork
       .catch(() => undefined)
-      .then(() => this.reconcileAutomaticTasks())
+      .then(() => this.reconcileAutomaticTasks(generation))
       .catch((error: unknown) => {
         if (this.disposed) return;
         this.reportAutomaticTrackingIssue("automatic-tracking", error);
       });
   }
 
-  private async reconcileAutomaticTasks(): Promise<void> {
-    if (
-      this.disposed ||
-      this.settings?.autoTrackAgentRuns !== true ||
-      this.taskRepository === null
-    ) {
+  private async reconcileAutomaticTasks(generation: number): Promise<void> {
+    if (!this.automaticTrackingAllowed(generation) || this.taskRepository === null) return;
+
+    let changed = await this.repairAutomaticRunCounts(generation);
+    if (!this.automaticTrackingAllowed(generation)) {
+      if (changed) this.publishAutomaticTrackingState();
       return;
     }
-
-    let changed = await this.repairAutomaticRunCounts();
     const candidates = selectAutomaticTrackCandidates(
       this.store.getState().sessions,
       this.bindings.listRuns()
@@ -659,7 +676,7 @@ export class AgentCockpitController {
 
     let tracked = 0;
     for (const candidate of candidates) {
-      if (this.disposed || this.settings?.autoTrackAgentRuns !== true) break;
+      if (!this.automaticTrackingAllowed(generation)) break;
       const issueKey = providerSessionKey(candidate.provider, candidate.providerSessionId);
       try {
         let current = this.resolveCurrentAutomaticCandidate(candidate);
@@ -675,6 +692,8 @@ export class AgentCockpitController {
           worktree: null
         });
         changed ||= ensured.created;
+
+        if (!this.automaticTrackingAllowed(generation)) break;
 
         // Vault writes are asynchronous. Resolve the exact target again before
         // persisting a machine-local cmux binding.
@@ -720,13 +739,14 @@ export class AgentCockpitController {
     }
   }
 
-  private async repairAutomaticRunCounts(): Promise<boolean> {
+  private async repairAutomaticRunCounts(generation: number): Promise<boolean> {
     const repository = this.taskRepository;
     if (repository === null) return false;
     const tasks = new Map(repository.list().map((task) => [task.taskId, task] as const));
     let changed = false;
 
     for (const run of this.bindings.listRuns()) {
+      if (!this.automaticTrackingAllowed(generation)) break;
       if (
         (run.provider !== "claude" && run.provider !== "codex") ||
         run.providerSessionId === null ||
@@ -750,6 +770,18 @@ export class AgentCockpitController {
       }
     }
     return changed;
+  }
+
+  private automaticTrackingAllowed(generation: number): boolean {
+    return (
+      !this.disposed &&
+      this.settings?.autoTrackAgentRuns === true &&
+      generation === this.automaticTrackingGeneration
+    );
+  }
+
+  private cancelAutomaticTaskTracking(): void {
+    this.automaticTrackingGeneration += 1;
   }
 
   private publishAutomaticTrackingState(): void {

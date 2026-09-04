@@ -9,7 +9,10 @@ import { ProviderMetadataService } from "../../src/providers/ProviderMetadataSer
 import type { ProviderSessionResolver } from "../../src/providers/identity/types";
 import type { ProviderSessionSource } from "../../src/providers/types";
 
-function memoryTaskApp(options: { failFrontmatterWrites?: number } = {}): {
+function memoryTaskApp(options: {
+  failFrontmatterWrites?: number;
+  beforeCreate?: () => Promise<void>;
+} = {}): {
   app: App;
   markdownWrites: string[];
 } {
@@ -34,6 +37,7 @@ function memoryTaskApp(options: { failFrontmatterWrites?: number } = {}): {
       getAbstractFileByPath: (path: string) => entries.get(path) ?? null,
       createFolder,
       create: async (path: string, markdown: string) => {
+        await options.beforeCreate?.();
         markdownWrites.push(markdown);
         const name = path.split("/").pop() ?? path;
         const created = Object.assign(new TFile(), {
@@ -886,6 +890,107 @@ describe("AgentCockpitController connection failures", () => {
     expect(controller.store.getState().tasks).toMatchObject([{ runCount: 1 }]);
     expect(controller.store.getState().bindings).toHaveLength(1);
     expect(controller.store.getState().runs).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("cancels stale automatic tracking work as soon as the user opts out", async () => {
+    let persisted: unknown;
+    let releaseCreate: (() => void) | undefined;
+    let markCreateStarted: (() => void) | undefined;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        checkedAt: currentSnapshot.observedAt + 1,
+        nativeLifecycleAvailable: false,
+        issues: [],
+        mappings: [
+          {
+            workspaceId: "22222222-2222-4222-8222-222222222222",
+            paneId: "33333333-3333-4333-8333-333333333333",
+            surfaceId: "44444444-4444-4444-8444-444444444444",
+            provider: "codex",
+            providerSessionId: "55555555-5555-4555-8555-555555555555",
+            matchSource: "codex-writer-lock",
+            confidence: "high",
+            explanation: "Verified exact writer identity.",
+            observedAt: currentSnapshot.observedAt + 1
+          }
+        ],
+        lifecycle: []
+      }),
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      probe: async () => ({
+        binaryPath: "/cmux",
+        versionText: "cmux 0.62.2",
+        capabilities: {
+          version: 2,
+          protocol: "cmux-socket",
+          accessMode: "password",
+          methods: new Set()
+        },
+        latencyMs: 1
+      }),
+      snapshot: async () => snapshot(4_500),
+      notifications: async () => [],
+      readPreview: async (target) => ({ ...target, text: "", observedAt: 4_500, truncated: false }),
+      focusedTarget: async () => null,
+      focus: async () => undefined,
+      dispose: () => undefined
+    };
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get: async () => null,
+      dispose: () => undefined
+    };
+    const { app, markdownWrites } = memoryTaskApp({
+      beforeCreate: async () => {
+        markCreateStarted?.();
+        await createGate;
+      }
+    });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([source]),
+      resolver
+    );
+
+    await controller.initialize();
+    await createStarted;
+    await controller.updateSettings({
+      ...controller.getSettings(),
+      autoTrackAgentRuns: false
+    });
+    releaseCreate?.();
+    await controller.waitForBackgroundWork();
+
+    // A vault.create call that has already started cannot be aborted safely,
+    // but stale work must stop before it attaches the live provider session.
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.getSettings().autoTrackAgentRuns).toBe(false);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
     controller.dispose();
   });
 
