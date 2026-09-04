@@ -23,10 +23,12 @@ export class ProviderMetadataService {
   private readonly sources: ReadonlyMap<ProviderSessionKind, ProviderSessionSource>;
   private readonly metadata = new Map<string, ProviderSessionMetadata>();
   private readonly requestRevisions = new Map<string, number>();
+  private readonly exactSourceRevisions = new Map<string, number>();
   private readonly exactRequestResults = new Map<string, ExactRequestResult>();
   private readonly controllers = new Set<AbortController>();
   private requestSequence = 0;
   private retiredThrough = 0;
+  private exactSourceRetiredThrough = 0;
   private disposed = false;
 
   constructor(
@@ -50,14 +52,16 @@ export class ProviderMetadataService {
         .map((session) => normalizeMetadata(session, provider, cwd))
         .filter((session): session is ProviderSessionMetadata => session !== null);
       if (this.disposed || request.controller.signal.aborted) return [];
+      const current: ProviderSessionMetadata[] = [];
       for (const session of sessions) {
         this.cache(session, request.revision);
         const key = providerMetadataKey(session.provider, session.sessionId);
         if (this.isLatestRequest(key, request.revision)) {
           this.beginExactRequestResult(key, request.revision).resolve(session);
+          current.push(session);
         }
       }
-      return sessions.map((session) => ({ ...session }));
+      return current.map((session) => ({ ...session }));
     } finally {
       request.close();
     }
@@ -75,6 +79,7 @@ export class ProviderMetadataService {
       if (canonicalSessionId === null) return null;
       const key = providerMetadataKey(provider, canonicalSessionId);
       this.markRequest(key, request.revision);
+      this.markExactSourceRequest(key, request.revision);
       const published = this.beginExactRequestResult(key, request.revision);
       try {
         const loaded = await this.requireSource(provider).get(
@@ -119,6 +124,43 @@ export class ProviderMetadataService {
         published.resolve(null);
         throw error;
       }
+    } finally {
+      request.close();
+    }
+  }
+
+  /**
+   * Reads the exact provider record without allowing bounded browse-list metadata to
+   * substitute for the source response. Intended for validation before durable writes.
+   */
+  async verifyExact(
+    provider: ProviderSessionKind,
+    sessionId: string,
+    cwd: string,
+    signal?: AbortSignal
+  ): Promise<ProviderSessionMetadata | null> {
+    const request = this.beginRequest(signal);
+    try {
+      const canonicalSessionId = normalizeCanonicalUuid(sessionId);
+      if (canonicalSessionId === null) return null;
+      const key = providerMetadataKey(provider, canonicalSessionId);
+      this.markRequest(key, request.revision);
+      this.markExactSourceRequest(key, request.revision);
+      const loaded = await this.requireSource(provider).get(
+        canonicalSessionId,
+        cwd,
+        request.controller.signal
+      );
+      if (this.disposed || request.controller.signal.aborted) return null;
+      const session = normalizeExactMetadata(loaded, provider, canonicalSessionId, cwd);
+      if (!this.isLatestExactSourceRequest(key, request.revision)) return null;
+
+      if (this.isLatestRequest(key, request.revision)) {
+        if (session) this.cache(session, request.revision);
+        else this.metadata.delete(key);
+        this.beginExactRequestResult(key, request.revision).resolve(session);
+      }
+      return session === null ? null : { ...session };
     } finally {
       request.close();
     }
@@ -194,6 +236,7 @@ export class ProviderMetadataService {
     const key = providerMetadataKey(provider, sessionId);
     const revision = ++this.requestSequence;
     this.markRequest(key, revision);
+    this.markExactSourceRequest(key, revision);
     this.beginExactRequestResult(key, revision).resolve(null);
     this.metadata.delete(key);
   }
@@ -207,6 +250,7 @@ export class ProviderMetadataService {
     for (const source of this.sources.values()) source.dispose();
     this.metadata.clear();
     this.requestRevisions.clear();
+    this.exactSourceRevisions.clear();
   }
 
   private beginRequest(externalSignal?: AbortSignal): {
@@ -258,6 +302,13 @@ export class ProviderMetadataService {
     );
   }
 
+  private isLatestExactSourceRequest(key: string, revision: number): boolean {
+    return (
+      revision > this.exactSourceRetiredThrough &&
+      (this.exactSourceRevisions.get(key) ?? revision) === revision
+    );
+  }
+
   private beginExactRequestResult(key: string, revision: number): ExactRequestResult {
     const previous = this.exactRequestResults.get(key);
     let settle!: (value: ProviderSessionMetadata | null) => void;
@@ -305,6 +356,27 @@ export class ProviderMetadataService {
     }
     if (revision > this.retiredThrough) return true;
     if (this.requestRevisions.get(key) === revision) this.requestRevisions.delete(key);
+    return false;
+  }
+
+  private markExactSourceRequest(key: string, revision: number): boolean {
+    if (revision <= this.exactSourceRetiredThrough) return false;
+    this.exactSourceRevisions.delete(key);
+    this.exactSourceRevisions.set(key, revision);
+    while (this.exactSourceRevisions.size > MAX_REQUEST_REVISIONS) {
+      const oldest = this.exactSourceRevisions.entries().next();
+      if (oldest.done) break;
+      const [oldestKey, oldestRevision] = oldest.value;
+      this.exactSourceRevisions.delete(oldestKey);
+      this.exactSourceRetiredThrough = Math.max(
+        this.exactSourceRetiredThrough,
+        oldestRevision
+      );
+    }
+    if (revision > this.exactSourceRetiredThrough) return true;
+    if (this.exactSourceRevisions.get(key) === revision) {
+      this.exactSourceRevisions.delete(key);
+    }
     return false;
   }
 }

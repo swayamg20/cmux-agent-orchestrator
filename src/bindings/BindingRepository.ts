@@ -788,7 +788,8 @@ export class BindingRepository {
 
   async mapProviderSessionIfUnchanged(
     mapping: ProviderSessionMapping,
-    expected: ProviderSessionMapping | null
+    expected: ProviderSessionMapping | null,
+    canMutate?: MutationGuard
   ): Promise<boolean> {
     if (!isProviderSessionMapping(mapping)) {
       throw new Error("Provider session mapping contains an invalid canonical identity or value.");
@@ -799,6 +800,7 @@ export class BindingRepository {
     const normalized = normalizeProviderSessionMapping(mapping);
     const normalizedExpected = expected === null ? null : normalizeProviderSessionMapping(expected);
     return this.commitConditional((data) => {
+      if (canMutate && !canMutate()) return false;
       const machine = this.machineFor(data);
       const current = machine.providerSessions.find(
         (candidate) => candidate.surfaceId === normalized.surfaceId

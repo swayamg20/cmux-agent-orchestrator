@@ -371,6 +371,60 @@ describe("ProviderMetadataService", () => {
     service.dispose();
   });
 
+  it("does not return an older listed conversation after a newer exact miss", async () => {
+    const unaffected = {
+      ...metadata,
+      sessionId: "66666666-6666-4666-8666-66666666666a",
+      title: "Unaffected conversation"
+    };
+    let resolveList!: (value: ProviderSessionMetadata[]) => void;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => new Promise<ProviderSessionMetadata[]>((resolve) => {
+        resolveList = resolve;
+      }),
+      get: async () => null,
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const older = service.list("codex", metadata.cwd);
+
+    await expect(service.get("codex", metadata.sessionId, metadata.cwd)).resolves.toBeNull();
+    resolveList([metadata, unaffected]);
+
+    await expect(older).resolves.toEqual([unaffected]);
+    expect(service.evidence.has(`codex:${metadata.sessionId}`)).toBe(false);
+    expect(service.evidence.get(`codex:${unaffected.sessionId}`)).toEqual(unaffected);
+    service.dispose();
+  });
+
+  it("does not let browse-list metadata satisfy an authoritative exact verification", async () => {
+    let resolveGet!: (value: ProviderSessionMetadata | null) => void;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [metadata],
+      get: async () => new Promise<ProviderSessionMetadata | null>((resolve) => {
+        resolveGet = resolve;
+      }),
+      dispose: vi.fn()
+    };
+    const service = new ProviderMetadataService([source]);
+    const verifyingService = service as unknown as {
+      verifyExact(
+        provider: "codex",
+        sessionId: string,
+        cwd: string
+      ): Promise<ProviderSessionMetadata | null>;
+    };
+    const verification = verifyingService.verifyExact("codex", metadata.sessionId, metadata.cwd);
+
+    await service.list("codex", metadata.cwd);
+    resolveGet(null);
+
+    await expect(verification).resolves.toBeNull();
+    service.dispose();
+  });
+
   it("keeps an explicit forget newer than an in-flight metadata read", async () => {
     let resolveGet!: (value: ProviderSessionMetadata | null) => void;
     const source: ProviderSessionSource = {

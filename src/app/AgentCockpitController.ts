@@ -1480,32 +1480,39 @@ export class AgentCockpitController {
     if (this.disposed) return;
     try {
       const expectedMapping = this.expectedProviderSessionMapping(original);
-      const current = this.resolveCurrentBindingSession(original);
-      if (
-        current.currentDirectory === null ||
-        current.currentDirectory !== conversation.cwd ||
-        current.provider.provider !== conversation.provider
-      ) {
-        throw new Error("The cmux surface no longer matches the selected provider conversation.");
+      let current = this.resolveCurrentBindingSession(original);
+      this.assertConversationMatchesSession(current, conversation);
+      const verified = await this.providerMetadata.verifyExact(
+        conversation.provider,
+        conversation.sessionId,
+        conversation.cwd
+      );
+      if (this.disposed) return;
+      if (verified === null) {
+        throw new Error(
+          "The selected provider conversation is no longer available for this repository. Refresh and try again."
+        );
       }
-      const exactLiveIdentity = current.provider.source === "provider-session-mapping"
-        ? null
-        : exactTrackableIdentity(current);
-      if (
-        exactLiveIdentity !== null &&
-        normalizeCanonicalUuid(conversation.sessionId) !== exactLiveIdentity.sessionId
-      ) {
-        throw new Error("The selected conversation conflicts with the exact live provider session.");
-      }
+      current = this.resolveCurrentBindingSession(original);
+      this.assertConversationMatchesSession(current, verified);
       const mapping = {
         workspaceId: current.workspaceId,
         paneId: current.paneId,
         surfaceId: current.surfaceId,
-        provider: conversation.provider,
-        providerSessionId: conversation.sessionId,
+        provider: verified.provider,
+        providerSessionId: verified.sessionId,
         matchedAt: new Date().toISOString()
       };
-      const matched = await this.bindings.mapProviderSessionIfUnchanged(mapping, expectedMapping);
+      const matched = await this.bindings.mapProviderSessionIfUnchanged(
+        mapping,
+        expectedMapping,
+        () => {
+          if (this.disposed) return false;
+          const guardedCurrent = this.resolveCurrentBindingSession(original);
+          this.assertConversationMatchesSession(guardedCurrent, verified);
+          return true;
+        }
+      );
       if (this.disposed) return;
       if (!matched) {
         throw new Error(
@@ -1515,11 +1522,33 @@ export class AgentCockpitController {
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
       this.recomputeSessions();
       this.scheduleAutomaticTaskTracking();
-      new Notice(`Matched this cmux surface to “${conversation.title}”.`);
+      new Notice(`Matched this cmux surface to “${verified.title}”.`);
     } catch (error) {
       if (this.disposed) return;
       new Notice(readableError(error));
       throw error;
+    }
+  }
+
+  private assertConversationMatchesSession(
+    current: LiveSession,
+    conversation: ProviderSessionMetadata
+  ): void {
+    if (
+      current.currentDirectory === null ||
+      current.currentDirectory !== conversation.cwd ||
+      current.provider.provider !== conversation.provider
+    ) {
+      throw new Error("The cmux surface no longer matches the selected provider conversation.");
+    }
+    const exactLiveIdentity = current.provider.source === "provider-session-mapping"
+      ? null
+      : exactTrackableIdentity(current);
+    if (
+      exactLiveIdentity !== null &&
+      normalizeCanonicalUuid(conversation.sessionId) !== exactLiveIdentity.sessionId
+    ) {
+      throw new Error("The selected conversation conflicts with the exact live provider session.");
     }
   }
 

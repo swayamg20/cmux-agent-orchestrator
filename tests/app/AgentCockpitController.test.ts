@@ -2,6 +2,7 @@ import { Modal, Notice, type App, type Plugin } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
 import { AgentCockpitController } from "../../src/app/AgentCockpitController";
 import { BindingRepository } from "../../src/bindings/BindingRepository";
+import type { ProviderSessionMapping } from "../../src/bindings/types";
 import { CmuxClient } from "../../src/cmux/CmuxClient";
 import type { CmuxTransport } from "../../src/cmux/CmuxTransport";
 import { CmuxError, type CmuxSnapshot, type CmuxTarget } from "../../src/cmux/types";
@@ -3053,11 +3054,25 @@ describe("AgentCockpitController connection failures", () => {
       }
     } as unknown as Plugin;
     const notices = (Notice as unknown as { messages: string[] }).messages;
+    const metadata: ProviderSessionMetadata = {
+      provider: "codex",
+      sessionId: "55555555-5555-4555-8555-555555555555",
+      title: "Match before unload",
+      titleSource: "explicit-name",
+      cwd: "/repository",
+      updatedAt: 4_649,
+      status: "idle"
+    };
     const controller = new AgentCockpitController(
       memoryTaskApp().app,
       plugin,
       async () => new CmuxClient(connectedTransport(4_649)),
-      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      new ProviderMetadataService([{
+        provider: "codex",
+        list: async () => [],
+        get: async () => metadata,
+        dispose: () => undefined
+      }]),
       exactCodexResolver()
     );
 
@@ -3071,15 +3086,7 @@ describe("AgentCockpitController connection failures", () => {
       ): Promise<void>;
     };
     const noticeStart = notices.length;
-    const matching = matchingController.matchConversation(session, {
-      provider: "codex",
-      sessionId: "55555555-5555-4555-8555-555555555555",
-      title: "Match before unload",
-      titleSource: "explicit-name",
-      cwd: "/repository",
-      updatedAt: 4_649,
-      status: "idle"
-    });
+    const matching = matchingController.matchConversation(session, metadata);
     await saveStarted;
     controller.dispose();
     releaseSave();
@@ -3906,6 +3913,141 @@ describe("AgentCockpitController connection failures", () => {
     expect(controllerBindings.listProviderSessions()).toMatchObject([
       { providerSessionId: "66666666-6666-4666-8666-666666666666" }
     ]);
+    controller.dispose();
+  });
+
+  it("revalidates a selected provider conversation before persisting its match", async () => {
+    let persisted: unknown;
+    const get = vi.fn(async () => null);
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => [],
+      get,
+      dispose: vi.fn()
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_392)),
+      new ProviderMetadataService([source]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    get.mockClear();
+    const exactSession = controller.store.getState().sessions[0]!;
+    const matchingController = controller as unknown as {
+      matchConversation(
+        original: typeof exactSession,
+        conversation: ProviderSessionMetadata
+      ): Promise<void>;
+      bindings: BindingRepository;
+    };
+
+    await expect(matchingController.matchConversation(exactSession, {
+      provider: "codex",
+      sessionId: "55555555-5555-4555-8555-555555555555",
+      title: "Conversation removed after listing",
+      titleSource: "explicit-name",
+      cwd: "/repository",
+      updatedAt: 5_392,
+      status: "idle"
+    })).rejects.toThrow(/no longer available/);
+
+    expect(get).toHaveBeenCalledWith(
+      "55555555-5555-4555-8555-555555555555",
+      "/repository",
+      expect.any(AbortSignal)
+    );
+    expect(persisted).toBeUndefined();
+    expect(matchingController.bindings.listProviderSessions()).toEqual([]);
+    controller.dispose();
+  });
+
+  it("does not persist a conversation match after its exact cmux surface disappears from a queued write", async () => {
+    let persisted: unknown;
+    let currentSnapshot = snapshot(5_393);
+    const metadata: ProviderSessionMetadata = {
+      provider: "codex",
+      sessionId: "55555555-5555-4555-8555-555555555555",
+      title: "Conversation on a disappearing surface",
+      titleSource: "explicit-name",
+      cwd: "/repository",
+      updatedAt: 5_393,
+      status: "idle"
+    };
+    const plugin = {
+      loadData: async () => persisted ?? ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const transport: CmuxTransport = {
+      ...connectedTransport(5_393),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([{
+        provider: "codex",
+        list: async () => [],
+        get: async () => metadata,
+        dispose: () => undefined
+      }]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const exactSession = controller.store.getState().sessions[0]!;
+    type GuardedMapper = (
+      mapping: ProviderSessionMapping,
+      expected: ProviderSessionMapping | null,
+      canMutate?: () => boolean
+    ) => Promise<boolean>;
+    const matchingController = controller as unknown as {
+      matchConversation(
+        original: typeof exactSession,
+        conversation: ProviderSessionMetadata
+      ): Promise<void>;
+      bindings: BindingRepository & { mapProviderSessionIfUnchanged: GuardedMapper };
+    };
+    const repository = matchingController.bindings;
+    const mapProviderSession = repository.mapProviderSessionIfUnchanged.bind(repository);
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    let markWriteQueued!: () => void;
+    const writeQueued = new Promise<void>((resolve) => {
+      markWriteQueued = resolve;
+    });
+    repository.mapProviderSessionIfUnchanged = async (mapping, expected, canMutate) => {
+      markWriteQueued();
+      await writeGate;
+      return mapProviderSession(mapping, expected, canMutate);
+    };
+    const matching = matchingController.matchConversation(exactSession, metadata);
+    await writeQueued;
+
+    currentSnapshot = snapshot(5_394);
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces = [];
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.selectedSurfaceId = null;
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+    releaseWrite();
+
+    await expect(matching).rejects.toThrow(/no longer exists/);
+    expect(repository.listProviderSessions()).toEqual([]);
     controller.dispose();
   });
 
