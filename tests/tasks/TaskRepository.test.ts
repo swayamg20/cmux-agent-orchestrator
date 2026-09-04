@@ -147,6 +147,52 @@ describe("TaskRepository", () => {
     expect(memory.createdPaths).toHaveLength(1);
   });
 
+  it("accepts a failed create only when exact Markdown read-back proves the task exists", async () => {
+    const memory = createMemoryTaskApp({ failCreatesAfterMutation: 1 });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+
+    const first = await repository.ensure(options);
+    const second = await repository.ensure(options);
+
+    expect(first).toMatchObject({ created: true, task: { taskId: options.taskId } });
+    expect(second).toMatchObject({ created: false, task: { taskId: options.taskId } });
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(memory.createdPaths).toHaveLength(1);
+  });
+
+  it("preserves the create error when the occupied path does not contain the intended task", async () => {
+    const entries = new Map<string, TFile | TFolder>();
+    const root = folder("Agent Cockpit/Tasks", []);
+    entries.set(root.path, root);
+    const app = {
+      vault: {
+        getAbstractFileByPath: (path: string) => entries.get(path) ?? null,
+        createFolder: async () => undefined,
+        create: async (path: string) => {
+          const occupied = file(path);
+          entries.set(path, occupied);
+          root.children.push(occupied);
+          throw new Error("simulated ambiguous create failure");
+        },
+        read: async () => "# Unrelated user note\n"
+      },
+      metadataCache: {
+        getFileCache: () => null
+      }
+    } as unknown as App;
+    const repository = new TaskRepository(app, root.path);
+
+    await expect(repository.create({ title: "Do not adopt this file" })).rejects.toThrow(
+      "simulated ambiguous create failure"
+    );
+    expect(repository.list()).toEqual([]);
+  });
+
   it("continues processing mutations after an earlier write fails", async () => {
     const memory = createMemoryTaskApp({ failFrontmatterWrites: 1 });
     const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");

@@ -141,7 +141,8 @@ export class TaskRepository {
     };
     const baseName = slugify(title);
     const path = this.availablePath(baseName, taskFolder);
-    const file = await this.app.vault.create(path, createTaskMarkdown(input));
+    const markdown = createTaskMarkdown(input);
+    const file = await this.createFileWithVerifiedPostcondition(path, markdown);
     const task: TaskRecord = {
       file,
       taskId: input.taskId,
@@ -157,6 +158,23 @@ export class TaskRepository {
     };
     if (taskFolder === this.taskFolder) this.recentTasks.set(task.taskId, task);
     return task;
+  }
+
+  private async createFileWithVerifiedPostcondition(path: string, markdown: string): Promise<TFile> {
+    try {
+      return await this.app.vault.create(path, markdown);
+    } catch (createError) {
+      const existing = this.app.vault.getAbstractFileByPath(path);
+      if (!(existing instanceof TFile)) throw createError;
+      let exactWriteProven = false;
+      try {
+        exactWriteProven = (await this.app.vault.read(existing)) === markdown;
+      } catch {
+        // Preserve the original create error when the exact write cannot be proven.
+      }
+      if (!exactWriteProven) throw createError;
+      return existing;
+    }
   }
 
   async updateWorkflow(task: TaskRecord, workflowStatus: WorkflowStatus): Promise<void> {

@@ -3,6 +3,7 @@ import { TFile, TFolder, type App } from "obsidian";
 export interface MemoryTaskAppOptions {
   failFrontmatterWrites?: number;
   failFrontmatterWritesAfterMutation?: number;
+  failCreatesAfterMutation?: number;
   beforeCreate?: () => Promise<void>;
   beforeLookup?: (path: string) => void;
   removeAfterCreate?: boolean;
@@ -23,8 +24,10 @@ export interface MemoryTaskApp {
 export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryTaskApp {
   const entries = new Map<string, TFile | TFolder>();
   const cachedFrontmatter = new Map<TFile, Record<string, unknown>>();
+  const markdownByFile = new Map<TFile, string>();
   const markdownWrites: string[] = [];
   const createdPaths: string[] = [];
+  let createAttempts = 0;
   let frontmatterWriteAttempts = 0;
   const line = (markdown: string, key: string): string => {
     const match = markdown.match(new RegExp(`^${key}: (.+)$`, "m"));
@@ -46,6 +49,7 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
       },
       createFolder,
       create: async (path: string, markdown: string) => {
+        createAttempts += 1;
         await options.beforeCreate?.();
         createdPaths.push(path);
         markdownWrites.push(markdown);
@@ -57,6 +61,7 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
           stat: { ctime: Date.now(), mtime: Date.now() }
         });
         entries.set(path, created);
+        markdownByFile.set(created, markdown);
         const parent = entries.get(path.split("/").slice(0, -1).join("/"));
         if (parent instanceof TFolder) parent.children.push(created);
         cachedFrontmatter.set(created, {
@@ -80,8 +85,12 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
             if (parent instanceof TFolder && index >= 0) parent.children.splice(index, 1);
           });
         }
+        if (createAttempts <= (options.failCreatesAfterMutation ?? 0)) {
+          throw new Error("simulated post-create vault failure");
+        }
         return created;
-      }
+      },
+      read: async (file: TFile) => markdownByFile.get(file) ?? ""
     },
     metadataCache: {
       getFileCache: (file: TFile) => ({ frontmatter: cachedFrontmatter.get(file) })
