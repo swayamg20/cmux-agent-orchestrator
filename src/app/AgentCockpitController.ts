@@ -56,6 +56,11 @@ import { RefreshCoordinator, type RefreshResult } from "./RefreshCoordinator";
 
 export type CmuxClientFactory = (explicitBinaryPath: string) => Promise<CmuxClient>;
 
+interface AutomaticTrackingPass {
+  messages: Set<string>;
+  failedIssueKeys: Set<string>;
+}
+
 export class AgentCockpitController {
   readonly store = new CockpitStore();
 
@@ -73,7 +78,7 @@ export class AgentCockpitController {
   private automaticTrackingWork: Promise<void> = Promise.resolve();
   private automaticTrackingGeneration = 0;
   private readonly reportedAutomaticTrackingIssues = new Map<string, string>();
-  private automaticTrackingMessagesThisPass: Set<string> | null = null;
+  private automaticTrackingPass: AutomaticTrackingPass | null = null;
   private identityAbortController: AbortController | null = null;
   private identityGeneration = 0;
   private automaticProviderMappings: AutomaticProviderSessionMapping[] = [];
@@ -468,7 +473,7 @@ export class AgentCockpitController {
     this.evidence.clear();
     this.providerClassifier.clear();
     this.reportedAutomaticTrackingIssues.clear();
-    this.automaticTrackingMessagesThisPass = null;
+    this.automaticTrackingPass = null;
     this.store.clear();
   }
 
@@ -670,13 +675,17 @@ export class AgentCockpitController {
     this.automaticTrackingWork = this.automaticTrackingWork
       .catch(() => undefined)
       .then(async () => {
-        const messages = new Set<string>();
-        this.automaticTrackingMessagesThisPass = messages;
+        const pass: AutomaticTrackingPass = {
+          messages: new Set<string>(),
+          failedIssueKeys: new Set<string>()
+        };
+        this.automaticTrackingPass = pass;
         try {
           await this.reconcileAutomaticTasks(generation);
+          this.clearInactiveAutomaticTrackingIssues(pass.failedIssueKeys);
         } finally {
-          if (this.automaticTrackingMessagesThisPass === messages) {
-            this.automaticTrackingMessagesThisPass = null;
+          if (this.automaticTrackingPass === pass) {
+            this.automaticTrackingPass = null;
           }
         }
       })
@@ -974,16 +983,27 @@ export class AgentCockpitController {
 
   private reportAutomaticTrackingIssue(key: string, error: unknown): void {
     const message = readableError(error);
+    const pass = this.automaticTrackingPass;
+    pass?.failedIssueKeys.add(key);
     const alreadyReportedForKey = this.reportedAutomaticTrackingIssues.get(key) === message;
     this.reportedAutomaticTrackingIssues.set(key, message);
-    const alreadyReportedThisPass = this.automaticTrackingMessagesThisPass?.has(message) === true;
-    this.automaticTrackingMessagesThisPass?.add(message);
+    const alreadyReportedThisPass = pass?.messages.has(message) === true;
+    pass?.messages.add(message);
     if (alreadyReportedForKey || alreadyReportedThisPass) return;
     new Notice(`Automatic task tracking could not finish: ${message}`);
   }
 
   private clearAutomaticTrackingIssues(key: string): void {
+    this.automaticTrackingPass?.failedIssueKeys.delete(key);
     this.reportedAutomaticTrackingIssues.delete(key);
+  }
+
+  private clearInactiveAutomaticTrackingIssues(failedIssueKeys: ReadonlySet<string>): void {
+    for (const key of this.reportedAutomaticTrackingIssues.keys()) {
+      if (key !== "automatic-tracking" && !failedIssueKeys.has(key)) {
+        this.reportedAutomaticTrackingIssues.delete(key);
+      }
+    }
   }
 
   private scheduleProviderIdentityResolution(snapshot: CmuxSnapshot): void {

@@ -1229,6 +1229,58 @@ describe("AgentCockpitController connection failures", () => {
     }
   });
 
+  it("reports a tracking failure again when the failed session disappears and returns", async () => {
+    let persisted: unknown;
+    let currentSnapshot = snapshot(4_400);
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const transport: CmuxTransport = {
+      ...connectedTransport(4_400),
+      snapshot: async () => currentSnapshot
+    };
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    notices.length = 0;
+    const { app } = memoryTaskApp({
+      beforeCreate: async () => {
+        throw new Error("simulated returning-session task failure");
+      }
+    });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+    const matchingNotices = (): string[] =>
+      notices.filter((message) =>
+        message.endsWith("simulated returning-session task failure")
+      );
+
+    try {
+      await controller.initialize();
+      await controller.waitForBackgroundWork();
+      expect(matchingNotices()).toHaveLength(1);
+
+      currentSnapshot = snapshot(4_500);
+      currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces = [];
+      await controller.refreshNow();
+      await controller.waitForBackgroundWork();
+
+      currentSnapshot = snapshot(4_600);
+      await controller.refreshNow();
+      await controller.waitForBackgroundWork();
+      expect(matchingNotices()).toHaveLength(2);
+    } finally {
+      controller.dispose();
+      notices.length = 0;
+    }
+  });
+
   it("cancels stale automatic tracking work as soon as the user opts out", async () => {
     let persisted: unknown;
     let releaseCreate: (() => void) | undefined;
