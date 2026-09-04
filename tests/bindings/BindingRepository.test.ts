@@ -569,6 +569,60 @@ describe("BindingRepository", () => {
     expect(repository.listRuns()).toHaveLength(1);
   });
 
+  it("cancels a queued conditional attachment when its authority expires", async () => {
+    let data: unknown;
+    let releaseFirstSave: (() => void) | undefined;
+    let markFirstSaveStarted: (() => void) | undefined;
+    const firstSaveStarted = new Promise<void>((resolve) => {
+      markFirstSaveStarted = resolve;
+    });
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        if (saveCount === 1) {
+          markFirstSaveStarted?.();
+          await firstSaveGate;
+        }
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+
+    const settingsSave = repository.updateSettings({
+      ...repository.getSettings(),
+      staleAfterMs: 60 * 60_000
+    });
+    await firstSaveStarted;
+    let allowed = true;
+    const automatic = repository.attachIfSurfaceUnchanged(
+      {
+        taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        workspaceId: "22222222-2222-4222-8222-222222222222",
+        paneId: "33333333-3333-4333-8333-333333333333",
+        surfaceId: "44444444-4444-4444-8444-444444444444",
+        provider: "codex",
+        providerSessionId: "55555555-5555-4555-8555-555555555555",
+        attachedAt: "2026-09-04T00:00:00.000Z"
+      },
+      null,
+      () => allowed
+    );
+    allowed = false;
+    releaseFirstSave?.();
+
+    await settingsSave;
+    await expect(automatic).resolves.toBeNull();
+    expect(saveCount).toBe(1);
+    expect(repository.list()).toEqual([]);
+    expect(repository.listRuns()).toEqual([]);
+  });
+
   it("does not let a stale conditional detach remove a queued replacement binding", async () => {
     let data: unknown;
     let releaseReplacementSave: (() => void) | undefined;
@@ -957,6 +1011,76 @@ describe("BindingRepository", () => {
         matchedAt: "2026-09-02T00:02:00.000Z"
       }
     ]);
+  });
+
+  it("cancels a queued relocation when its authority expires", async () => {
+    let data: unknown;
+    let blockNextSave = false;
+    let releaseBlockedSave: (() => void) | undefined;
+    let markBlockedSaveStarted: (() => void) | undefined;
+    const blockedSaveStarted = new Promise<void>((resolve) => {
+      markBlockedSaveStarted = resolve;
+    });
+    const blockedSaveGate = new Promise<void>((resolve) => {
+      releaseBlockedSave = resolve;
+    });
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        if (blockNextSave) {
+          blockNextSave = false;
+          markBlockedSaveStarted?.();
+          await blockedSaveGate;
+        }
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const original = await repository.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+
+    blockNextSave = true;
+    const settingsSave = repository.updateSettings({
+      ...repository.getSettings(),
+      staleAfterMs: 60 * 60_000
+    });
+    await blockedSaveStarted;
+    let allowed = true;
+    const relocation = repository.relocateProviderSession(
+      {
+        bindingId: original.binding.bindingId,
+        runId: original.run.runId,
+        taskId: original.binding.taskId,
+        provider: "codex",
+        providerSessionId: original.binding.providerSessionId!,
+        fromWorkspaceId: original.binding.workspaceId,
+        fromPaneId: original.binding.paneId,
+        fromSurfaceId: original.binding.surfaceId,
+        toWorkspaceId: "66666666-6666-4666-8666-666666666666",
+        toPaneId: "77777777-7777-4777-8777-777777777777",
+        toSurfaceId: "88888888-8888-4888-8888-888888888888",
+        relocatedAt: "2026-09-04T00:01:00.000Z"
+      },
+      () => allowed
+    );
+    allowed = false;
+    releaseBlockedSave?.();
+
+    await settingsSave;
+    await expect(relocation).resolves.toBeNull();
+    expect(saveCount).toBe(2);
+    expect(repository.list()).toEqual([original.binding]);
+    expect(repository.listRuns()).toEqual([original.run]);
   });
 
   it("rejects relocation when the expected source binding has changed", async () => {

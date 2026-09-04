@@ -29,6 +29,8 @@ interface PersistedPluginData {
   machines: Record<string, MachineBindings>;
 }
 
+type MutationGuard = () => boolean;
+
 function machineId(): string {
   let user = "unknown";
   try {
@@ -581,7 +583,8 @@ export class BindingRepository {
 
   async attachIfSurfaceUnchanged(
     input: NewBindingRecord,
-    expected: BindingRecord | null
+    expected: BindingRecord | null,
+    canMutate?: MutationGuard
   ): Promise<AttachBindingResult | null> {
     if (!isLegacyBinding(input)) throw new Error("Binding contains an invalid canonical identity or value.");
     const normalizedInput = normalizeNewBindingRecord(input);
@@ -591,6 +594,7 @@ export class BindingRepository {
     const normalizedExpected = expected === null ? null : normalizeBindingRecord(expected);
     let result: AttachBindingResult | null = null;
     const committed = await this.commitConditional((data) => {
+      if (canMutate && !canMutate()) return false;
       const machine = this.machineFor(data);
       const current = machine.bindings.find(
         (candidate) => candidate.surfaceId === normalizedInput.surfaceId
@@ -635,13 +639,22 @@ export class BindingRepository {
     });
   }
 
-  async relocateProviderSession(input: RelocateBindingInput): Promise<BindingRecord> {
+  async relocateProviderSession(input: RelocateBindingInput): Promise<BindingRecord>;
+  async relocateProviderSession(
+    input: RelocateBindingInput,
+    canMutate: MutationGuard
+  ): Promise<BindingRecord | null>;
+  async relocateProviderSession(
+    input: RelocateBindingInput,
+    canMutate?: MutationGuard
+  ): Promise<BindingRecord | null> {
     if (!isRelocateBindingInput(input)) {
       throw new Error("Binding relocation contains an invalid canonical identity or value.");
     }
     const normalized = normalizeRelocateBindingInput(input);
     let relocated: BindingRecord | null = null;
-    await this.commit((data) => {
+    const committed = await this.commitConditional((data) => {
+      if (canMutate && !canMutate()) return false;
       const machine = this.machineFor(data);
       const binding = machine.bindings.find(
         (candidate) => candidate.bindingId === normalized.bindingId
@@ -702,7 +715,9 @@ export class BindingRepository {
         sourceMapping.matchedAt = normalized.relocatedAt;
       }
       relocated = { ...binding };
+      return true;
     });
+    if (!committed) return null;
     if (relocated === null) throw new Error(`${PRODUCT_NAME} could not relocate the session attachment.`);
     return relocated;
   }

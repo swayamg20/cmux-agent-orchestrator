@@ -1947,6 +1947,92 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not commit an automatic binding that was queued before opt-out", async () => {
+    let persisted: unknown;
+    let releaseCreate: (() => void) | undefined;
+    let markCreateStarted: (() => void) | undefined;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    let releaseFirstSave: (() => void) | undefined;
+    let markFirstSaveStarted: (() => void) | undefined;
+    const firstSaveStarted = new Promise<void>((resolve) => {
+      markFirstSaveStarted = resolve;
+    });
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    let markPreAttachLookup: (() => void) | undefined;
+    const preAttachLookup = new Promise<void>((resolve) => {
+      markPreAttachLookup = resolve;
+    });
+    let preAttachMarked = false;
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        if (saveCount === 1) {
+          markFirstSaveStarted?.();
+          await firstSaveGate;
+        }
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    let memory!: ReturnType<typeof memoryTaskApp>;
+    memory = memoryTaskApp({
+      beforeCreate: async () => {
+        markCreateStarted?.();
+        await createGate;
+      },
+      beforeLookup: (path) => {
+        if (
+          !preAttachMarked &&
+          memory.markdownWrites.length === 1 &&
+          path === "Agent Cockpit/Tasks"
+        ) {
+          preAttachMarked = true;
+          markPreAttachLookup?.();
+        }
+      }
+    });
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_625)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await createStarted;
+    const unrelatedSettingsSave = controller.updateSettings({
+      ...controller.getSettings(),
+      staleAfterMs: 60 * 60_000
+    });
+    await firstSaveStarted;
+    releaseCreate?.();
+    await preAttachLookup;
+
+    const optOut = controller.updateSettings({
+      ...controller.getSettings(),
+      autoTrackAgentRuns: false
+    });
+    releaseFirstSave?.();
+    await Promise.all([unrelatedSettingsSave, optOut]);
+    await controller.waitForBackgroundWork();
+
+    expect(controller.getSettings().autoTrackAgentRuns).toBe(false);
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(saveCount).toBe(2);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    controller.dispose();
+  });
+
   it("does not bind stale automatic work after topology fails and resumes from a fresh snapshot", async () => {
     let persisted: unknown;
     let snapshotCalls = 0;

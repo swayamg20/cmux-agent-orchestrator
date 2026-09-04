@@ -147,6 +147,47 @@ describe("TaskRepository", () => {
     expect(memory.createdPaths).toHaveLength(1);
   });
 
+  it("cancels guarded deterministic creation before queued vault work starts", async () => {
+    let markCreateStarted!: () => void;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const memory = createMemoryTaskApp({
+      beforeCreate: async () => {
+        markCreateStarted();
+        await createGate;
+      }
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const firstPromise = repository.ensure({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "First Codex run",
+      repository: "/repository"
+    });
+    await createStarted;
+
+    let allowed = true;
+    const cancelledPromise = repository.ensure(
+      {
+        taskId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        title: "Cancelled Codex run",
+        repository: "/repository"
+      },
+      () => allowed
+    );
+    allowed = false;
+    releaseCreate();
+
+    await expect(firstPromise).resolves.toMatchObject({ created: true });
+    await expect(cancelledPromise).resolves.toBeNull();
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(memory.createdPaths).toEqual(["Agent Cockpit/Tasks/first-codex-run.md"]);
+  });
+
   it("accepts a failed create only when exact Markdown read-back proves the task exists", async () => {
     const memory = createMemoryTaskApp({ failCreatesAfterMutation: 1 });
     const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");

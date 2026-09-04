@@ -856,15 +856,25 @@ export class AgentCockpitController {
           continue;
         }
 
-        const ensured = await this.taskRepository.ensure({
-          taskId: candidate.taskId,
-          title: automaticTaskTitle(current, candidate.provider),
-          workflowStatus: "active",
-          priority: "normal",
-          repository: current.currentDirectory,
-          branch: null,
-          worktree: null
-        });
+        const ensured = await this.taskRepository.ensure(
+          {
+            taskId: candidate.taskId,
+            title: automaticTaskTitle(current, candidate.provider),
+            workflowStatus: "active",
+            priority: "normal",
+            repository: current.currentDirectory,
+            branch: null,
+            worktree: null
+          },
+          () =>
+            this.automaticTrackingAllowed(generation) &&
+            this.resolveCurrentAutomaticCandidate(candidate) !== null &&
+            !this.hasProviderRun(candidate)
+        );
+        if (ensured === null) {
+          if (!this.automaticTrackingAllowed(generation)) break;
+          continue;
+        }
         changed ||= ensured.created;
 
         if (!this.automaticTrackingAllowed(generation)) break;
@@ -887,7 +897,11 @@ export class AgentCockpitController {
             providerSessionId: candidate.providerSessionId,
             attachedAt
           },
-          expectedBinding
+          expectedBinding,
+          () =>
+            this.automaticTrackingAllowed(generation) &&
+            this.resolveCurrentAutomaticCandidate(candidate) !== null &&
+            !this.hasProviderRun(candidate)
         );
         if (result === null) continue;
         changed = true;
@@ -989,20 +1003,30 @@ export class AgentCockpitController {
         );
         if (current === null) continue;
         const relocatedAt = new Date().toISOString();
-        await this.bindings.relocateProviderSession({
-          bindingId: binding.bindingId,
-          runId: binding.runId,
-          taskId: binding.taskId,
-          provider,
-          providerSessionId,
-          fromWorkspaceId: binding.workspaceId,
-          fromPaneId: binding.paneId,
-          fromSurfaceId: binding.surfaceId,
-          toWorkspaceId: current.workspaceId,
-          toPaneId: current.paneId,
-          toSurfaceId: current.surfaceId,
-          relocatedAt
-        });
+        const result = await this.bindings.relocateProviderSession(
+          {
+            bindingId: binding.bindingId,
+            runId: binding.runId,
+            taskId: binding.taskId,
+            provider,
+            providerSessionId,
+            fromWorkspaceId: binding.workspaceId,
+            fromPaneId: binding.paneId,
+            fromSurfaceId: binding.surfaceId,
+            toWorkspaceId: current.workspaceId,
+            toPaneId: current.paneId,
+            toSurfaceId: current.surfaceId,
+            relocatedAt
+          },
+          () =>
+            this.automaticTrackingAllowed(generation) &&
+            this.resolveUniqueUnlinkedProviderSession(
+              current,
+              provider,
+              providerSessionId
+            ) !== null
+        );
+        if (result === null) continue;
         relocated += 1;
         this.clearAutomaticTrackingIssues(issueKey);
       } catch (error) {

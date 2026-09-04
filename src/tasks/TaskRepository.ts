@@ -29,6 +29,8 @@ export interface EnsureTaskResult {
   created: boolean;
 }
 
+type MutationGuard = () => boolean;
+
 export class TaskRepository {
   private mutationChain: Promise<void> = Promise.resolve();
   private readonly recentTasks = new Map<string, TaskRecord>();
@@ -109,25 +111,49 @@ export class TaskRepository {
     return this.enqueueMutation(() => this.createWithId(options, taskId));
   }
 
-  async ensure(options: EnsureTaskOptions): Promise<EnsureTaskResult> {
+  async ensure(options: EnsureTaskOptions): Promise<EnsureTaskResult>;
+  async ensure(
+    options: EnsureTaskOptions,
+    canMutate: MutationGuard
+  ): Promise<EnsureTaskResult | null>;
+  async ensure(
+    options: EnsureTaskOptions,
+    canMutate?: MutationGuard
+  ): Promise<EnsureTaskResult | null> {
     const taskId = normalizeCanonicalUuid(options.taskId);
     if (taskId === null) throw new Error("Task ID is not a canonical UUID.");
     return this.enqueueMutation(async () => {
+      if (canMutate && !canMutate()) return null;
       const matches = this.findMatchesById(taskId);
       if (matches.length > 1) throw new Error("The automatic task ID is duplicated in the vault.");
       if (matches[0]) return { task: matches[0], created: false };
-      return { task: await this.createWithId(options, taskId), created: true };
+      const task = canMutate
+        ? await this.createWithId(options, taskId, canMutate)
+        : await this.createWithId(options, taskId);
+      return task === null ? null : { task, created: true };
     });
   }
 
-  private async createWithId(options: CreateTaskOptions, taskId: string): Promise<TaskRecord> {
+  private async createWithId(options: CreateTaskOptions, taskId: string): Promise<TaskRecord>;
+  private async createWithId(
+    options: CreateTaskOptions,
+    taskId: string,
+    canMutate: MutationGuard
+  ): Promise<TaskRecord | null>;
+  private async createWithId(
+    options: CreateTaskOptions,
+    taskId: string,
+    canMutate?: MutationGuard
+  ): Promise<TaskRecord | null> {
     const title = options.title.replace(/[\r\n]+/g, " ").trim();
     if (!title) throw new Error("Task title is required.");
     if (title.length > 512) throw new Error("Task title must be 512 characters or fewer.");
     const normalizedTaskId = normalizeCanonicalUuid(taskId);
     if (normalizedTaskId === null) throw new Error("Task ID is not a canonical UUID.");
     const taskFolder = this.taskFolder;
+    if (canMutate && !canMutate()) return null;
     await this.ensureFolder(taskFolder);
+    if (canMutate && !canMutate()) return null;
     const now = new Date().toISOString();
     const input: NewTaskInput = {
       title,
