@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 - Refuse to detach a task from a stale session card when that cmux surface has since been attached to a different task.
 - Refuse to forget a provider conversation from a stale session card when that surface has since been matched to a different conversation.
 - Refuse to save a conversation choice from a stale picker when that surface's manual match changed while the picker was open.
+- Refuse to save a task choice from a stale picker when the surface's task binding changed while the picker was open.
 
 ### Security
 

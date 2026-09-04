@@ -1740,6 +1740,36 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not replace a newer task binding from a stale picker", async () => {
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_360))
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const firstTask = await controller.createTask({ title: "First task" });
+    const secondTask = await controller.createTask({ title: "Second task" });
+    const staleChoice = await controller.createTask({ title: "Stale task choice" });
+    await controller.attachTask(controller.store.getState().sessions[0]!, firstTask);
+    const staleSession = controller.store.getState().sessions[0]!;
+    await controller.attachTask(staleSession, secondTask);
+
+    await expect(controller.attachTask(staleSession, staleChoice)).rejects.toThrow(
+      /binding changed while the picker was open/
+    );
+    expect(controller.store.getState().bindings).toMatchObject([
+      { taskId: secondTask.taskId }
+    ]);
+    expect(controller.store.getState().sessions[0]?.linkedTaskId).toBe(secondTask.taskId);
+    controller.dispose();
+  });
+
   it("does not forget a newer conversation match from a stale session card", async () => {
     let persisted: unknown;
     const plugin = {

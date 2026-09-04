@@ -290,18 +290,25 @@ export class AgentCockpitController {
   async attachTask(session: LiveSession, task: TaskRecord): Promise<void> {
     try {
       const current = this.resolveCurrentBindingSession(session);
+      const expectedBinding = this.expectedTaskBinding(session, current);
       validateBindingIdentity(task.taskId, current);
       this.requireTaskRepository().findById(task.taskId);
       const attachedAt = new Date().toISOString();
-      const result = await this.bindings.attach({
-        taskId: task.taskId,
-        workspaceId: current.workspaceId,
-        paneId: current.paneId,
-        surfaceId: current.surfaceId,
-        provider: current.provider.provider,
-        providerSessionId: current.provider.sessionId,
-        attachedAt
-      });
+      const result = await this.bindings.attachIfSurfaceUnchanged(
+        {
+          taskId: task.taskId,
+          workspaceId: current.workspaceId,
+          paneId: current.paneId,
+          surfaceId: current.surfaceId,
+          provider: current.provider.provider,
+          providerSessionId: current.provider.sessionId,
+          attachedAt
+        },
+        expectedBinding
+      );
+      if (result === null) {
+        throw new Error("The task binding changed while the picker was open. Refresh and try again.");
+      }
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
       if (result.isNewRun) {
         try {
@@ -1267,6 +1274,29 @@ export class AgentCockpitController {
       throw new Error("The exact provider conversation changed before the task binding was updated.");
     }
     return current;
+  }
+
+  private expectedTaskBinding(
+    original: LiveSession,
+    current: LiveSession
+  ): BindingRecord | null {
+    const binding = this.bindings.findBySurface(current.surfaceId);
+    if (original.linkedTaskId === null) {
+      if (binding !== null) {
+        throw new Error("The task binding changed while the picker was open. Refresh and try again.");
+      }
+      return null;
+    }
+    if (
+      binding === null ||
+      !canonicalUuidEquals(binding.taskId, original.linkedTaskId) ||
+      !canonicalUuidEquals(binding.workspaceId, current.workspaceId) ||
+      !canonicalUuidEquals(binding.paneId, current.paneId) ||
+      !canonicalUuidEquals(binding.surfaceId, current.surfaceId)
+    ) {
+      throw new Error("The task binding changed while the picker was open. Refresh and try again.");
+    }
+    return binding;
   }
 
   private handleError(error: unknown, connectionFailure = true): void {
