@@ -2113,6 +2113,52 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not reload task state after a delayed settings save outlives disposal", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: false } };
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let markSaveStarted!: () => void;
+    const saveStarted = new Promise<void>((resolve) => {
+      markSaveStarted = resolve;
+    });
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        markSaveStarted();
+        await saveGate;
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const memory = memoryTaskApp();
+    const futureTasks = new TaskRepository(memory.app, "Future Agent Tasks");
+    const futureTask = await futureTasks.create({ title: "Must stay unloaded" });
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_645))
+    );
+
+    await controller.initialize();
+    expect(controller.store.getState().tasks).toEqual([]);
+
+    const update = controller.updateSettings({
+      ...controller.getSettings(),
+      taskFolder: "Future Agent Tasks"
+    });
+    await saveStarted;
+    controller.dispose();
+    releaseSave();
+    await update;
+
+    expect(controller.store.getState().snapshot).toBeNull();
+    expect(controller.store.getState().tasks).not.toContainEqual(
+      expect.objectContaining({ taskId: futureTask.taskId })
+    );
+    expect(controller.store.getState().tasks).toEqual([]);
+  });
+
   it("does not bind stale automatic work after topology fails and resumes from a fresh snapshot", async () => {
     let persisted: unknown;
     let snapshotCalls = 0;

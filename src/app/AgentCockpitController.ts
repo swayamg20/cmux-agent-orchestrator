@@ -412,7 +412,7 @@ export class AgentCockpitController {
   }
 
   async reloadTasks(changedPaths: readonly string[] = []): Promise<void> {
-    if (this.taskRepository === null) return;
+    if (this.disposed || this.taskRepository === null) return;
     this.taskRepository.invalidatePaths(changedPaths);
     this.store.update({ tasks: this.taskRepository.list() });
     this.recomputeSessions();
@@ -476,6 +476,7 @@ export class AgentCockpitController {
     const current = this.requireSettings();
     const cmuxBinaryChanged = current.cmuxBinaryPath !== parsed.cmuxBinaryPath;
     await this.bindings.updateSettings(parsed);
+    if (this.disposed) return;
     this.settings = parsed;
     this.requireTaskRepository().setTaskFolder(parsed.taskFolder);
     if (cmuxBinaryChanged) {
