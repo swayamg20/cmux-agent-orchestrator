@@ -103,6 +103,7 @@ export class AgentCockpitController {
   private automaticTrackingGeneration = 0;
   private readonly reportedAutomaticTrackingIssues = new Map<string, string>();
   private readonly openModals = new Set<Modal>();
+  private readonly conversationPickerLoads = new Set<string>();
   private automaticTrackingPass: AutomaticTrackingPass | null = null;
   private identityAbortController: AbortController | null = null;
   private identityGeneration = 0;
@@ -321,6 +322,15 @@ export class AgentCockpitController {
       new Notice("This cmux workspace does not expose an absolute working directory.");
       return;
     }
+    const loadKey = JSON.stringify([
+      session.workspaceId,
+      session.paneId,
+      session.surfaceId,
+      session.provider.provider,
+      session.currentDirectory
+    ]);
+    if (this.conversationPickerLoads.has(loadKey)) return;
+    this.conversationPickerLoads.add(loadKey);
     try {
       new Notice(
         `Loading local ${session.provider.provider === "claude" ? "Claude" : "Codex"} conversation titles...`,
@@ -357,6 +367,8 @@ export class AgentCockpitController {
     } catch (error) {
       if (this.disposed) return;
       new Notice(readableError(error));
+    } finally {
+      this.conversationPickerLoads.delete(loadKey);
     }
   }
 
@@ -718,6 +730,7 @@ export class AgentCockpitController {
     this.attentionEngine.clear();
     this.previewCache.clear();
     this.previewSurfaceSignatures.clear();
+    this.conversationPickerLoads.clear();
     this.evidence.clear();
     this.providerClassifier.clear();
     this.reportedAutomaticTrackingIssues.clear();
