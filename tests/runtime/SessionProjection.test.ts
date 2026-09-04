@@ -362,6 +362,70 @@ describe("projectLiveSessions provider conversations", () => {
     expect(session.linkedTaskId).toBeNull();
   });
 
+  it("lets fresh exact process identity override a stale saved conversation without weakening manual precedence", () => {
+    const nextProviderSessionId = "e6666666-e666-4666-8666-e6666666666b";
+    const binding = {
+      bindingId: "11111111-aaaa-4111-8111-111111111111",
+      runId: "22222222-aaaa-4222-8222-222222222222",
+      taskId: "33333333-aaaa-4333-8333-333333333333",
+      workspaceId,
+      paneId,
+      surfaceId,
+      provider: "codex" as const,
+      providerSessionId,
+      attachedAt: "2026-09-02T00:00:00.000Z"
+    };
+    const savedMapping = {
+      workspaceId,
+      paneId,
+      surfaceId,
+      provider: "codex" as const,
+      providerSessionId,
+      matchedAt: "2026-09-02T00:00:00.000Z"
+    };
+    const projectConflict = (confidence: "medium" | "high") => projectLiveSessions({
+      snapshot: snapshot(),
+      notifications: [],
+      bindings: [binding],
+      providerMappings: [savedMapping],
+      automaticProviderMappings: [
+        {
+          workspaceId,
+          paneId,
+          surfaceId,
+          provider: "codex",
+          providerSessionId: nextProviderSessionId,
+          matchSource: "codex-writer-lock",
+          confidence,
+          explanation: "Verified the current foreground root writer on the reused surface.",
+          observedAt: 1_000
+        }
+      ],
+      providerMetadata: new Map(),
+      detector: new AgentDetector(),
+      providerEvidence: new Map(),
+      previewFor: () => null,
+      evidenceFor: () => []
+    })[0]!;
+
+    const session = projectConflict("high");
+
+    expect(session.provider).toMatchObject({
+      provider: "codex",
+      source: "codex-writer-lock",
+      sessionId: nextProviderSessionId
+    });
+    expect(session.linkedTaskId).toBeNull();
+
+    const weakerSession = projectConflict("medium");
+    expect(weakerSession.provider).toMatchObject({
+      provider: "codex",
+      source: "provider-session-mapping",
+      sessionId: providerSessionId
+    });
+    expect(weakerSession.linkedTaskId).toBe(binding.taskId);
+  });
+
   it("does not project a task binding from a different pane onto the live surface", () => {
     const session = projectLiveSessions({
       snapshot: snapshot(),

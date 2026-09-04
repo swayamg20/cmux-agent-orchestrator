@@ -46,30 +46,6 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
   const providerMappingIndex = new Map<string, ExactProviderMapping>();
   const bindingProviderSurfaceIds = new Set<string>();
   const claimedProviderSessions = new Set<string>();
-  for (const mapping of input.providerMappings) {
-    if (!isCurrentSurface(mapping, liveSurfaces)) continue;
-    const surfaceId = normalizeCanonicalUuid(mapping.surfaceId);
-    const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
-    if (surfaceId === null || providerSessionId === null) continue;
-    const providerSessionKey = `${mapping.provider}:${providerSessionId}`;
-    if (
-      providerMappingIndex.has(surfaceId) ||
-      claimedProviderSessions.has(providerSessionKey)
-    ) {
-      continue;
-    }
-    providerMappingIndex.set(surfaceId, {
-      workspaceId: mapping.workspaceId,
-      paneId: mapping.paneId,
-      surfaceId: mapping.surfaceId,
-      provider: mapping.provider,
-      providerSessionId,
-      matchSource: "manual",
-      matchConfidence: "high",
-      explanation: "The user explicitly matched this exact cmux surface to a provider conversation."
-    });
-    claimedProviderSessions.add(providerSessionKey);
-  }
   for (const mapping of input.automaticProviderMappings ?? []) {
     if (!isCurrentSurface(mapping, liveSurfaces)) continue;
     const surfaceId = normalizeCanonicalUuid(mapping.surfaceId);
@@ -92,6 +68,35 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
       matchConfidence: mapping.confidence,
       explanation: mapping.explanation
     });
+    claimedProviderSessions.add(providerSessionKey);
+  }
+  for (const mapping of input.providerMappings) {
+    if (!isCurrentSurface(mapping, liveSurfaces)) continue;
+    const surfaceId = normalizeCanonicalUuid(mapping.surfaceId);
+    const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
+    if (surfaceId === null || providerSessionId === null) continue;
+    const providerSessionKey = `${mapping.provider}:${providerSessionId}`;
+    const automatic = providerMappingIndex.get(surfaceId);
+    if (automatic !== undefined) {
+      if (
+        automatic.provider === mapping.provider &&
+        automatic.providerSessionId === providerSessionId
+      ) {
+        providerMappingIndex.set(surfaceId, manualProviderMapping(mapping, providerSessionId));
+      } else if (
+        automatic.matchConfidence !== "high" &&
+        !claimedProviderSessions.has(providerSessionKey)
+      ) {
+        claimedProviderSessions.delete(
+          `${automatic.provider}:${automatic.providerSessionId}`
+        );
+        providerMappingIndex.set(surfaceId, manualProviderMapping(mapping, providerSessionId));
+        claimedProviderSessions.add(providerSessionKey);
+      }
+      continue;
+    }
+    if (claimedProviderSessions.has(providerSessionKey)) continue;
+    providerMappingIndex.set(surfaceId, manualProviderMapping(mapping, providerSessionId));
     claimedProviderSessions.add(providerSessionKey);
   }
   for (const binding of input.bindings) {
@@ -223,6 +228,22 @@ interface ExactProviderMapping {
   matchSource: ProviderMatchSource;
   matchConfidence: "low" | "medium" | "high";
   explanation: string;
+}
+
+function manualProviderMapping(
+  mapping: ProviderSessionMapping,
+  providerSessionId: string
+): ExactProviderMapping {
+  return {
+    workspaceId: mapping.workspaceId,
+    paneId: mapping.paneId,
+    surfaceId: mapping.surfaceId,
+    provider: mapping.provider,
+    providerSessionId,
+    matchSource: "manual",
+    matchConfidence: "high",
+    explanation: "The user explicitly matched this exact cmux surface to a provider conversation."
+  };
 }
 
 function bindingAtTarget(
