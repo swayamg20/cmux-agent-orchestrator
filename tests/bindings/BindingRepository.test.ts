@@ -217,6 +217,60 @@ describe("BindingRepository", () => {
     expect(repository.listRuns()).toHaveLength(1);
   });
 
+  it("does not let a stale conditional detach remove a queued replacement binding", async () => {
+    let data: unknown;
+    let releaseReplacementSave: (() => void) | undefined;
+    let markReplacementSaveStarted: (() => void) | undefined;
+    const replacementSaveStarted = new Promise<void>((resolve) => {
+      markReplacementSaveStarted = resolve;
+    });
+    const replacementSaveGate = new Promise<void>((resolve) => {
+      releaseReplacementSave = resolve;
+    });
+    let saveCount = 0;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        if (saveCount === 2) {
+          markReplacementSaveStarted?.();
+          await replacementSaveGate;
+        }
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex" as const,
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    };
+    const original = await repository.attach({
+      ...target,
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    });
+    const replacement = repository.attach({
+      ...target,
+      taskId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      attachedAt: "2026-09-04T00:00:01.000Z"
+    });
+    await replacementSaveStarted;
+    const staleDetach = repository.detachIfUnchanged(original.binding);
+    releaseReplacementSave?.();
+
+    await expect(replacement).resolves.toMatchObject({ isNewRun: true });
+    await expect(staleDetach).resolves.toBe(false);
+    expect(saveCount).toBe(2);
+    expect(repository.list()).toMatchObject([
+      { taskId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }
+    ]);
+    expect(repository.listRuns()).toHaveLength(2);
+  });
+
   it("migrates schema-v1 bindings to stable identities without losing the mapping", async () => {
     let data: unknown = {
       schemaVersion: 1,

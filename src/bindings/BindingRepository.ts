@@ -446,6 +446,24 @@ export class BindingRepository {
     });
   }
 
+  async detachIfUnchanged(expected: BindingRecord): Promise<boolean> {
+    if (!isBinding(expected)) {
+      throw new Error("Expected binding contains an invalid canonical identity or value.");
+    }
+    const normalizedExpected = normalizeBindingRecord(expected);
+    return this.commitConditional((data) => {
+      const machine = this.machineFor(data);
+      const current = machine.bindings.find(
+        (candidate) => candidate.surfaceId === normalizedExpected.surfaceId
+      ) ?? null;
+      if (!sameBinding(current, normalizedExpected)) return false;
+      machine.bindings = machine.bindings.filter(
+        (binding) => binding.surfaceId !== normalizedExpected.surfaceId
+      );
+      return true;
+    });
+  }
+
   async relocateProviderSession(input: RelocateBindingInput): Promise<BindingRecord> {
     if (!isRelocateBindingInput(input)) {
       throw new Error("Binding relocation contains an invalid canonical identity or value.");

@@ -1712,6 +1712,34 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not detach a newer task binding from a stale session card", async () => {
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const { app } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_350))
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const firstTask = await controller.createTask({ title: "First task" });
+    const secondTask = await controller.createTask({ title: "Second task" });
+    await controller.attachTask(controller.store.getState().sessions[0]!, firstTask);
+    const staleSession = controller.store.getState().sessions[0]!;
+    await controller.attachTask(staleSession, secondTask);
+
+    await expect(controller.detachTask(staleSession)).rejects.toThrow(/binding changed/);
+    expect(controller.store.getState().bindings).toMatchObject([
+      { taskId: secondTask.taskId }
+    ]);
+    expect(controller.store.getState().sessions[0]?.linkedTaskId).toBe(secondTask.taskId);
+    controller.dispose();
+  });
+
   it("rejects a stale manual attachment after the provider conversation changes", async () => {
     let observedAt = 5_400;
     let providerSessionId = "55555555-5555-4555-8555-55555555555a";

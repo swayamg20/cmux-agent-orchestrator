@@ -315,7 +315,20 @@ export class AgentCockpitController {
 
   async detachTask(session: LiveSession): Promise<void> {
     const current = this.resolveCurrentBindingSession(session);
-    await this.bindings.detach(current.surfaceId);
+    const expected = this.bindings.findBySurface(current.surfaceId);
+    if (
+      expected === null ||
+      session.linkedTaskId === null ||
+      !canonicalUuidEquals(expected.taskId, session.linkedTaskId) ||
+      !canonicalUuidEquals(expected.workspaceId, current.workspaceId) ||
+      !canonicalUuidEquals(expected.paneId, current.paneId) ||
+      !canonicalUuidEquals(expected.surfaceId, current.surfaceId)
+    ) {
+      throw new Error("The task binding changed before it could be detached. Refresh and try again.");
+    }
+    if (!(await this.bindings.detachIfUnchanged(expected))) {
+      throw new Error("The task binding changed before it could be detached. Refresh and try again.");
+    }
     this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
     this.recomputeSessions();
     new Notice("Detached the session. The task note and run history were not deleted.");
