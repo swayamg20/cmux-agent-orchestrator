@@ -16,6 +16,7 @@ export class PreviewScheduler {
   constructor(private readonly concurrency = 2) {}
 
   schedule(key: string, load: () => Promise<CmuxPreview>): Promise<CmuxPreview> {
+    if (this.disposed) return Promise.reject(new Error("Preview scheduler was disposed."));
     const existing = this.promises.get(key);
     if (existing) return existing;
     const promise = new Promise<CmuxPreview>((resolve, reject) => {
@@ -36,8 +37,8 @@ export class PreviewScheduler {
     while (!this.disposed && this.active < this.concurrency && this.queue.length > 0) {
       const item = this.queue.shift()!;
       this.active += 1;
-      void item
-        .load()
+      void Promise.resolve()
+        .then(item.load)
         .then(item.resolve, item.reject)
         .finally(() => {
           this.active -= 1;
