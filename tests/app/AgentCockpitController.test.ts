@@ -125,6 +125,30 @@ function emptyCodexMetadataSource(): ProviderSessionSource {
 }
 
 describe("AgentCockpitController connection failures", () => {
+  it("does not expose a task folder until initialization has loaded settings", async () => {
+    const plugin = {
+      loadData: async () => ({
+        settings: {
+          taskFolder: "Agent Work/Tasks",
+          autoTrackAgentRuns: false
+        }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => {
+        throw new CmuxError("cmux-not-running", "cmux is not running.");
+      }
+    );
+
+    expect(controller.getLoadedTaskFolder()).toBeNull();
+    await controller.initialize();
+    expect(controller.getLoadedTaskFolder()).toBe("Agent Work/Tasks");
+    controller.dispose();
+  });
+
   it("preserves an initial access-blocked error during later manual refresh attempts", async () => {
     const app = {
       vault: {

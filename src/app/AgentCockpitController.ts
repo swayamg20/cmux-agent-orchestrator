@@ -445,6 +445,10 @@ export class AgentCockpitController {
     return { ...this.requireSettings() };
   }
 
+  getLoadedTaskFolder(): string | null {
+    return this.settings?.taskFolder ?? null;
+  }
+
   async updateSettings(next: AgentCockpitSettings): Promise<void> {
     const current = this.requireSettings();
     const parsed = parseSettings({ ...next, cmuxBinaryPath: validateBinarySetting(next.cmuxBinaryPath) });

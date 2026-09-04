@@ -91,7 +91,8 @@ export default class AgentCockpitPlugin extends Plugin {
 
   private taskFolderAffected(path: string): boolean {
     const controller = this.controller;
-    return controller !== null && pathAffectsTaskFolder(path, controller.getSettings().taskFolder);
+    const taskFolder = controller?.getLoadedTaskFolder() ?? null;
+    return taskFolder !== null && pathAffectsTaskFolder(path, taskFolder);
   }
 
   private reloadTasksFromVaultEvent(...paths: string[]): void {
