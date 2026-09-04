@@ -5,7 +5,12 @@ import { BindingRepository } from "../../src/bindings/BindingRepository";
 import type { ProviderSessionMapping } from "../../src/bindings/types";
 import { CmuxClient } from "../../src/cmux/CmuxClient";
 import type { CmuxTransport } from "../../src/cmux/CmuxTransport";
-import { CmuxError, type CmuxSnapshot, type CmuxTarget } from "../../src/cmux/types";
+import {
+  CmuxError,
+  type CmuxNotification,
+  type CmuxSnapshot,
+  type CmuxTarget
+} from "../../src/cmux/types";
 import { ProviderMetadataService } from "../../src/providers/ProviderMetadataService";
 import type {
   ProviderIdentityResolution,
@@ -720,6 +725,92 @@ describe("AgentCockpitController connection failures", () => {
     await controller.waitForBackgroundWork();
 
     expect(controller.store.getState().sessions[0]?.provider.provider).toBe("unknown");
+    controller.dispose();
+  });
+
+  it("does not apply direct refresh results from an earlier cmux connection", async () => {
+    let clientCreations = 0;
+    let gateOldRefreshes = false;
+    let finishOldSnapshot!: (value: CmuxSnapshot) => void;
+    let finishOldNotifications!: (value: CmuxNotification[]) => void;
+    let markOldSnapshotStarted!: () => void;
+    let markOldNotificationsStarted!: () => void;
+    const oldSnapshotStarted = new Promise<void>((resolve) => {
+      markOldSnapshotStarted = resolve;
+    });
+    const oldNotificationsStarted = new Promise<void>((resolve) => {
+      markOldNotificationsStarted = resolve;
+    });
+    const namedSnapshot = (title: string, observedAt: number): CmuxSnapshot => {
+      const result = snapshot(observedAt);
+      result.windows[0]!.workspaces[0]!.title = title;
+      return result;
+    };
+    const notification = (id: string, title: string): CmuxNotification => ({
+      id,
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      title,
+      subtitle: "",
+      body: title,
+      isRead: false
+    });
+    const firstTransport: CmuxTransport = {
+      ...connectedTransport(1),
+      snapshot: async () => {
+        if (!gateOldRefreshes) return namedSnapshot("initial", 1);
+        markOldSnapshotStarted();
+        return new Promise<CmuxSnapshot>((resolve) => {
+          finishOldSnapshot = resolve;
+        });
+      },
+      notifications: async () => {
+        if (!gateOldRefreshes) return [];
+        markOldNotificationsStarted();
+        return new Promise<CmuxNotification[]>((resolve) => {
+          finishOldNotifications = resolve;
+        });
+      }
+    };
+    const currentNotification = notification("current", "Current connection notification");
+    const currentTransport: CmuxTransport = {
+      ...connectedTransport(2),
+      snapshot: async () => namedSnapshot("current connection", 2),
+      notifications: async () => [currentNotification]
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(clientCreations++ === 0 ? firstTransport : currentTransport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    gateOldRefreshes = true;
+    const oldRefreshes = Promise.all([
+      controller.refreshTopology(),
+      controller.refreshNotifications()
+    ]);
+    await Promise.all([oldSnapshotStarted, oldNotificationsStarted]);
+
+    await controller.testConnection();
+    expect(controller.store.getState().snapshot?.windows[0]?.workspaces[0]?.title).toBe(
+      "current connection"
+    );
+    expect(controller.store.getState().notifications).toEqual([currentNotification]);
+
+    finishOldSnapshot(namedSnapshot("stale connection", 3));
+    finishOldNotifications([notification("stale", "Stale connection notification")]);
+    await oldRefreshes;
+
+    expect(controller.store.getState().snapshot?.windows[0]?.workspaces[0]?.title).toBe(
+      "current connection"
+    );
+    expect(controller.store.getState().notifications).toEqual([currentNotification]);
     controller.dispose();
   });
 

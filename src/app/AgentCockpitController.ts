@@ -182,15 +182,29 @@ export class AgentCockpitController {
   async refreshTopology(signal?: AbortSignal): Promise<void> {
     const client = this.client;
     if (client === null || this.disposed) return;
+    const clientGeneration = this.clientGeneration;
     try {
       const snapshot = await client.snapshot(signal);
-      if (this.disposed) return;
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        client !== this.client
+      ) {
+        return;
+      }
       this.applyTopology(snapshot);
       this.scheduleProviderClassification();
       this.scheduleProviderMetadataRefresh();
       this.scheduleProviderIdentityResolution(snapshot);
     } catch (error) {
-      if (this.disposed || isAbort(error)) return;
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        client !== this.client ||
+        isAbort(error)
+      ) {
+        return;
+      }
       this.applyTopologyFailure(error);
     }
   }
@@ -198,12 +212,26 @@ export class AgentCockpitController {
   async refreshNotifications(signal?: AbortSignal): Promise<void> {
     const client = this.client;
     if (client === null || this.disposed) return;
+    const clientGeneration = this.clientGeneration;
     try {
       const notifications = await client.notifications(signal);
-      if (this.disposed) return;
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        client !== this.client
+      ) {
+        return;
+      }
       this.applyNotifications(notifications);
     } catch (error) {
-      if (this.disposed || isAbort(error)) return;
+      if (
+        this.disposed ||
+        clientGeneration !== this.clientGeneration ||
+        client !== this.client ||
+        isAbort(error)
+      ) {
+        return;
+      }
       this.applyNotificationFailure(error);
     }
   }
