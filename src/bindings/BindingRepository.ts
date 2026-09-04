@@ -150,8 +150,8 @@ function normalizeProviderSessionMapping(
 function decodeMachine(value: unknown, id: string): MachineBindings {
   const raw = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
   const rawBindings = Array.isArray(raw.bindings) ? raw.bindings : [];
-  const bindingsBySurface = new Map<string, BindingRecord>();
-  const migratedRuns = new Map<string, AgentRunRecord>();
+  const bindingCandidates: BindingRecord[] = [];
+  const migratedRunsById = new Map<string, AgentRunRecord>();
   for (const candidate of rawBindings.slice(0, MAX_BINDINGS_PER_MACHINE)) {
     let binding: BindingRecord | null = null;
     if (isBinding(candidate)) {
@@ -165,7 +165,7 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
         bindingId: stableUuid(`binding\0${id}\0${normalized.workspaceId}\0${normalized.surfaceId}\0${normalized.attachedAt}`),
         runId
       };
-      migratedRuns.set(runId, {
+      migratedRunsById.set(runId, {
         runId,
         taskId: normalized.taskId,
         provider: normalized.provider,
@@ -176,29 +176,124 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
         lastAttachedAt: normalized.attachedAt
       });
     }
-    if (binding) bindingsBySurface.set(binding.surfaceId, binding);
-    if (bindingsBySurface.size >= MAX_BINDINGS_PER_MACHINE) break;
+    if (binding) bindingCandidates.push(binding);
+    if (bindingCandidates.length >= MAX_BINDINGS_PER_MACHINE) break;
   }
+  const decodedBindings = unambiguousBindings(bindingCandidates);
 
-  const runsById = new Map<string, AgentRunRecord>();
+  const runCandidates: AgentRunRecord[] = [];
   if (Array.isArray(raw.runs)) {
     for (const candidate of raw.runs.slice(0, MAX_RUNS_PER_MACHINE)) {
       if (isRun(candidate)) {
-        const run = normalizeRunRecord(candidate);
-        runsById.set(run.runId, run);
+        runCandidates.push(normalizeRunRecord(candidate));
       }
-      if (runsById.size >= MAX_RUNS_PER_MACHINE) break;
+      if (runCandidates.length >= MAX_RUNS_PER_MACHINE) break;
     }
   }
-  for (const [runId, run] of migratedRuns) {
-    if (!runsById.has(runId)) runsById.set(runId, run);
+  const retainedBindingRunIds = new Set(decodedBindings.map((binding) => binding.runId));
+  for (const [runId, run] of migratedRunsById) {
+    if (runCandidates.length >= MAX_RUNS_PER_MACHINE) break;
+    if (retainedBindingRunIds.has(runId)) runCandidates.push(run);
   }
+  const runs = unambiguousRuns(runCandidates);
+  const runsById = new Map(runs.map((run) => [run.runId, run] as const));
+  const bindings = decodedBindings.filter((binding) => {
+    const run = runsById.get(binding.runId);
+    return run !== undefined && bindingMatchesRun(binding, run);
+  });
   const providerSessions = decodeProviderSessions(raw.providerSessions);
   return {
-    bindings: [...bindingsBySurface.values()],
-    runs: [...runsById.values()],
+    bindings,
+    runs,
     providerSessions
   };
+}
+
+function unambiguousBindings(candidates: BindingRecord[]): BindingRecord[] {
+  return retainUnambiguousRecords(
+    candidates,
+    bindingFingerprint,
+    (binding) => {
+      const identities = [
+        `surface:${binding.surfaceId}`,
+        `binding:${binding.bindingId}`,
+        `run:${binding.runId}`
+      ];
+      if (
+        (binding.provider === "claude" || binding.provider === "codex") &&
+        binding.providerSessionId !== null
+      ) {
+        identities.push(`provider:${binding.provider}:${binding.providerSessionId}`);
+      }
+      return identities;
+    }
+  );
+}
+
+function unambiguousRuns(candidates: AgentRunRecord[]): AgentRunRecord[] {
+  return retainUnambiguousRecords(
+    candidates,
+    runFingerprint,
+    (run) => [`run:${run.runId}`]
+  );
+}
+
+function retainUnambiguousRecords<T>(
+  candidates: T[],
+  fingerprintFor: (candidate: T) => string,
+  identitiesFor: (candidate: T) => string[]
+): T[] {
+  const unique = new Map<string, T>();
+  const claims = new Map<string, Set<string>>();
+  for (const candidate of candidates) {
+    const fingerprint = fingerprintFor(candidate);
+    unique.set(fingerprint, candidate);
+    for (const identity of identitiesFor(candidate)) {
+      const fingerprints = claims.get(identity) ?? new Set<string>();
+      fingerprints.add(fingerprint);
+      claims.set(identity, fingerprints);
+    }
+  }
+  return [...unique].flatMap(([fingerprint, candidate]) =>
+    identitiesFor(candidate).every((identity) => claims.get(identity)?.size === 1)
+      ? [candidate]
+      : []
+  );
+}
+
+function bindingFingerprint(binding: BindingRecord): string {
+  return JSON.stringify([
+    binding.bindingId,
+    binding.runId,
+    binding.taskId,
+    binding.workspaceId,
+    binding.paneId,
+    binding.surfaceId,
+    binding.provider,
+    binding.providerSessionId,
+    binding.attachedAt
+  ]);
+}
+
+function runFingerprint(run: AgentRunRecord): string {
+  return JSON.stringify([
+    run.runId,
+    run.taskId,
+    run.provider,
+    run.providerSessionId,
+    run.relation,
+    run.parentRunId,
+    run.firstAttachedAt,
+    run.lastAttachedAt
+  ]);
+}
+
+function bindingMatchesRun(binding: BindingRecord, run: AgentRunRecord): boolean {
+  return (
+    binding.taskId === run.taskId &&
+    binding.provider === run.provider &&
+    binding.providerSessionId === run.providerSessionId
+  );
 }
 
 function decodeProviderSessions(value: unknown): ProviderSessionMapping[] {
