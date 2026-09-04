@@ -448,12 +448,15 @@ function assertRecordArrayWithinLimit<T>(
   validate: (candidate: unknown) => candidate is T
 ): T[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > maximum || !value.every(validate)) {
+  const records: unknown[] | null = Array.isArray(value)
+    ? Array.from(value as unknown[])
+    : null;
+  if (records === null || records.length > maximum || !records.every(validate)) {
     throw new Error(
       `${PRODUCT_NAME} machine namespace ${machineId} has invalid or excessive ${label} and cannot be saved safely.`
     );
   }
-  return value;
+  return records;
 }
 
 function unambiguousBindings(candidates: BindingRecord[]): BindingRecord[] {

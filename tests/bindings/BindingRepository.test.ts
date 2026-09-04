@@ -575,6 +575,37 @@ describe("BindingRepository", () => {
     expect(saveData).not.toHaveBeenCalled();
   });
 
+  it("refuses to normalize a sparse persisted run array during an unrelated save", async () => {
+    let persisted: unknown;
+    const saveData = vi.fn(async () => undefined);
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    const currentMachineId = (
+      repository as unknown as { currentMachineId: string }
+    ).currentMachineId;
+    persisted = {
+      schemaVersion: 3,
+      settings: {},
+      machines: {
+        [currentMachineId]: {
+          bindings: [],
+          runs: new Array<unknown>(1),
+          providerSessions: []
+        }
+      }
+    };
+    await repository.load();
+
+    await expect(
+      repository.updateSettings({ ...repository.getSettings(), previewLines: 40 })
+    ).rejects.toThrow(/invalid.*runs|cannot be saved safely/);
+
+    expect(saveData).not.toHaveBeenCalled();
+  });
+
   it("fails closed when data disappears after the first successful save", async () => {
     let persisted: unknown;
     let unavailable = false;
