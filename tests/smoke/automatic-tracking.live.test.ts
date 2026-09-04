@@ -63,7 +63,7 @@ class NoControlCmuxTransport implements CmuxTransport {
 }
 
 live("automatic work tracking against installed cmux", () => {
-  it("reconciles exact live provider identities into an isolated in-memory board", async () => {
+  it("reconciles exact live identities once across an in-memory controller reload", async () => {
     const { app, markdownWrites } = createMemoryTaskApp();
     let persisted: unknown = {
       schemaVersion: 3,
@@ -76,31 +76,38 @@ live("automatic work tracking against installed cmux", () => {
         persisted = structuredClone(next);
       }
     } as unknown as Plugin;
-    const metadata = new ProviderMetadataService();
-    const resolver = new AutomaticProviderSessionResolver(metadata);
-    const transport = new NoControlCmuxTransport(new CliCmuxTransport(CMUX_BINARY));
-    const controller = new AgentCockpitController(
-      app,
-      plugin,
-      async () => new CmuxClient(transport),
-      metadata,
-      resolver
-    );
+    const createController = () => {
+      const metadata = new ProviderMetadataService();
+      const resolver = new AutomaticProviderSessionResolver(metadata);
+      const transport = new NoControlCmuxTransport(new CliCmuxTransport(CMUX_BINARY));
+      const controller = new AgentCockpitController(
+        app,
+        plugin,
+        async () => new CmuxClient(transport),
+        metadata,
+        resolver
+      );
+      return { controller, metadata, transport };
+    };
+
+    const first = createController();
+    let firstTaskIds: string[] = [];
 
     try {
-      await controller.initialize();
-      await controller.waitForBackgroundWork();
+      await first.controller.initialize();
+      await first.controller.waitForBackgroundWork();
 
-      const state = controller.store.getState();
+      const state = first.controller.store.getState();
       const tasks = [...state.tasks];
       const bindings = [...state.bindings];
       const runs = [...state.runs];
+      firstTaskIds = tasks.map((task) => task.taskId);
       expect(state.connection.status).toBe("connected");
       expect(tasks.length).toBeGreaterThan(0);
       expect(bindings).toHaveLength(tasks.length);
       expect(runs).toHaveLength(tasks.length);
       expect(markdownWrites).toHaveLength(tasks.length);
-      expect(transport.focusAttempts).toBe(0);
+      expect(first.transport.focusAttempts).toBe(0);
 
       const tasksById = new Map(tasks.map((task) => [task.taskId, task] as const));
       const sessionsBySurface = new Map(
@@ -128,13 +135,32 @@ live("automatic work tracking against installed cmux", () => {
       }
 
       const taskTitles = new Set(tasks.map((task) => task.title));
-      for (const providerSession of metadata.evidence.values()) {
+      for (const providerSession of first.metadata.evidence.values()) {
         if (!taskTitles.has(providerSession.title)) {
           expect(markdown).not.toContain(`title: ${JSON.stringify(providerSession.title)}`);
         }
       }
     } finally {
-      controller.dispose();
+      first.controller.dispose();
+    }
+
+    const second = createController();
+    try {
+      await second.controller.initialize();
+      await second.controller.waitForBackgroundWork();
+
+      const state = second.controller.store.getState();
+      expect(state.connection.status).toBe("connected");
+      expect(second.transport.focusAttempts).toBe(0);
+      for (const taskId of firstTaskIds) {
+        expect(state.tasks.filter((task) => task.taskId === taskId)).toHaveLength(1);
+        expect(state.runs.filter((run) => run.taskId === taskId)).toHaveLength(1);
+        expect(
+          markdownWrites.filter((markdown) => markdown.includes(`task-id: ${JSON.stringify(taskId)}`))
+        ).toHaveLength(1);
+      }
+    } finally {
+      second.controller.dispose();
     }
   }, 120_000);
 });
