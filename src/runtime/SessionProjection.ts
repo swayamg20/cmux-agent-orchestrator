@@ -124,7 +124,12 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
             titleDetection.provider === "unknown"
               ? input.providerEvidence.get(key) ?? titleDetection
               : titleDetection;
-          const binding = bindingIndex.get(key) ?? null;
+          const binding = bindingAtTarget(
+            bindingIndex.get(key) ?? null,
+            workspace.id,
+            pane.id,
+            surface.id
+          );
           const canonicalSurfaceId = normalizeCanonicalUuid(surface.id) ?? surface.id;
           const exactMapping = exactProviderMapping(
             providerMappingIndex.get(canonicalSurfaceId) ?? null,
@@ -136,6 +141,7 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
             ? exactBindingMapping(binding, workspace.id, pane.id, surface.id)
             : null;
           const mapping = exactMapping ?? bindingMapping;
+          const currentBinding = bindingForProviderIdentity(binding, mapping);
           const provider = mapping
             ? mappedProvider(mapping)
             : detectedProvider;
@@ -159,7 +165,7 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
             assessment: reduceSessionEvidence(input.evidenceFor(key), input.snapshot.observedAt),
             observedAt: input.snapshot.observedAt,
             notifications: notificationIndex.get(key) ?? [],
-            linkedTaskId: binding?.taskId ?? null,
+            linkedTaskId: currentBinding?.taskId ?? null,
             conversation,
             preview
           });
@@ -217,6 +223,39 @@ interface ExactProviderMapping {
   matchSource: ProviderMatchSource;
   matchConfidence: "low" | "medium" | "high";
   explanation: string;
+}
+
+function bindingAtTarget(
+  binding: BindingRecord | null,
+  workspaceId: string,
+  paneId: string,
+  surfaceId: string
+): BindingRecord | null {
+  return binding !== null &&
+    canonicalUuidEquals(binding.workspaceId, workspaceId) &&
+    canonicalUuidEquals(binding.paneId, paneId) &&
+    canonicalUuidEquals(binding.surfaceId, surfaceId)
+    ? binding
+    : null;
+}
+
+function bindingForProviderIdentity(
+  binding: BindingRecord | null,
+  mapping: ExactProviderMapping | null
+): BindingRecord | null {
+  if (binding === null || mapping === null || mapping.matchConfidence !== "high") {
+    return binding;
+  }
+  const bindingSessionId = normalizeCanonicalUuid(binding.providerSessionId ?? "");
+  if (
+    (binding.provider !== "claude" && binding.provider !== "codex") ||
+    bindingSessionId === null
+  ) {
+    return binding;
+  }
+  return binding.provider === mapping.provider && bindingSessionId === mapping.providerSessionId
+    ? binding
+    : null;
 }
 
 function exactProviderMapping(

@@ -92,6 +92,46 @@ describe("AttentionEngine", () => {
     )).toBe(false);
   });
 
+  it("reports a binding missing when the surface UUID exists under a different pane", () => {
+    const session: LiveSession = {
+      key: `${binding.workspaceId}:${binding.surfaceId}`,
+      workspaceId: binding.workspaceId,
+      paneId: "55555555-5555-4555-8555-555555555555",
+      surfaceId: binding.surfaceId,
+      workspaceTitle: "Workspace",
+      workspaceIndex: 0,
+      paneIndex: 1,
+      surfaceIndex: 0,
+      surfaceTitle: "Surface",
+      surfaceType: "terminal",
+      currentDirectory: "/repo",
+      provider: {
+        provider: "codex",
+        confidence: "medium",
+        source: "screen-preview",
+        explanation: "fixture",
+        sessionId: null
+      },
+      assessment: assessment("unknown"),
+      observedAt: 1_000,
+      notifications: [],
+      linkedTaskId: null,
+      conversation: null,
+      preview: null
+    };
+
+    const result = new AttentionEngine().build(
+      [session],
+      [task("active")],
+      [binding],
+      1_000
+    );
+
+    expect(result.some((item) =>
+      item.reasons.some((reason) => reason.kind === "linked-surface-missing")
+    )).toBe(true);
+  });
+
   it("sorts runtime errors above generic unread notifications", () => {
     const base: Omit<LiveSession, "key" | "surfaceId" | "assessment" | "notifications"> = {
       workspaceId: "workspace",

@@ -1,5 +1,5 @@
 import type { BindingRecord } from "../bindings/types";
-import { surfaceKey } from "../cmux/types";
+import { normalizeCanonicalUuid } from "../security/identifiers";
 import type { AttentionItem, AttentionReason, LiveSession } from "../state/types";
 import type { TaskRecord } from "../tasks/TaskSchema";
 
@@ -17,7 +17,7 @@ export class AttentionEngine {
     const items = new Map<string, AttentionItem>();
     const taskById = new Map(tasks.map((task) => [task.taskId, task]));
     const sessionByTarget = new Map(
-      sessions.map((session) => [surfaceKey(session), session] as const)
+      sessions.map((session) => [exactTargetKey(session), session] as const)
     );
     const firstSessionByTask = new Map<string, LiveSession>();
     for (const session of sessions) {
@@ -77,7 +77,7 @@ export class AttentionEngine {
     }
 
     for (const binding of bindings) {
-      const bindingKey = surfaceKey(binding);
+      const bindingKey = exactTargetKey(binding);
       const exists = sessionByTarget.has(bindingKey);
       if (exists) continue;
       const key = `missing:${bindingKey}`;
@@ -124,6 +124,16 @@ export class AttentionEngine {
     this.firstObserved.set(key, first);
     return first;
   }
+}
+
+function exactTargetKey(target: {
+  workspaceId: string;
+  paneId: string;
+  surfaceId: string;
+}): string {
+  return [target.workspaceId, target.paneId, target.surfaceId]
+    .map((id) => normalizeCanonicalUuid(id) ?? id)
+    .join(":");
 }
 
 function excerpt(value: string): string {

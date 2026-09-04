@@ -14,6 +14,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Keep retrying recoverable automatic-tracking writes without repeating the same failure notice on every reconciliation, while reporting the error again if it recurs after recovery.
+- Prevent a new exact provider session that reuses an existing cmux surface from inheriting the previous session's task binding; retain the earlier task and run history while creating a separate automatic task for the new session.
 
 ### Security
 
@@ -25,6 +26,7 @@ All notable changes to this project will be documented in this file.
 - Canonicalize cmux, task, binding, run, and provider UUID casing across CLI, process, Markdown, and plugin-data boundaries so case-only representations cannot bypass uniqueness or produce false missing/focus results.
 - Preserve the strongest agreeing identity proof when newer cmux detection and exact local process evidence describe the same provider session.
 - Relocate a stale binding only when its complete old cmux target is absent and one unique high-confidence live surface proves the same canonical provider session.
+- Require workspace, pane, and surface UUID agreement before projecting a task binding or considering its cmux target present.
 
 ## [0.2.0] - 2026-09-03
 

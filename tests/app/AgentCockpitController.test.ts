@@ -11,6 +11,7 @@ import type {
   ProviderSessionResolver
 } from "../../src/providers/identity/types";
 import type { ProviderSessionSource } from "../../src/providers/types";
+import { automaticTaskId } from "../../src/tracking/AutomaticTaskTracking";
 import { createMemoryTaskApp as memoryTaskApp } from "../helpers/memoryTaskApp";
 
 function snapshot(observedAt: number): CmuxSnapshot {
@@ -723,6 +724,71 @@ describe("AgentCockpitController connection failures", () => {
     expect(controller.store.getState().bindings).toEqual([]);
     expect(controller.store.getState().runs).toHaveLength(1);
     expect(markdownWrites).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("starts a new automatic task when a different exact session reuses the same surface", async () => {
+    let persisted: unknown;
+    let observedAt = 1_500;
+    let providerSessionId = "55555555-5555-4555-8555-555555555555";
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        ...exactCodexResolverResult(currentSnapshot.observedAt),
+        mappings: [
+          {
+            ...exactCodexResolverResult(currentSnapshot.observedAt).mappings[0]!,
+            providerSessionId
+          }
+        ]
+      }),
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(observedAt),
+      snapshot: async () => snapshot(++observedAt)
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const firstTaskId = automaticTaskId("codex", providerSessionId);
+    expect(controller.store.getState().sessions[0]?.linkedTaskId).toBe(firstTaskId);
+
+    providerSessionId = "66666666-6666-4666-8666-666666666666";
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    const secondTaskId = automaticTaskId("codex", providerSessionId);
+    expect(markdownWrites).toHaveLength(2);
+    expect(controller.store.getState().tasks).toHaveLength(2);
+    expect(controller.store.getState().tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: firstTaskId, runCount: 1 }),
+        expect.objectContaining({ taskId: secondTaskId, runCount: 1 })
+      ])
+    );
+    expect(controller.store.getState().bindings).toMatchObject([
+      {
+        taskId: secondTaskId,
+        provider: "codex",
+        providerSessionId
+      }
+    ]);
+    expect(controller.store.getState().runs).toHaveLength(2);
+    expect(controller.store.getState().sessions[0]?.linkedTaskId).toBe(secondTaskId);
     controller.dispose();
   });
 

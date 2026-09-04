@@ -314,4 +314,79 @@ describe("projectLiveSessions provider conversations", () => {
       matchSource: "codex-writer-lock"
     });
   });
+
+  it("does not carry a task binding onto a different exact provider session on the same surface", () => {
+    const nextProviderSessionId = "e6666666-e666-4666-8666-e6666666666b";
+    const session = projectLiveSessions({
+      snapshot: snapshot(),
+      notifications: [],
+      bindings: [
+        {
+          bindingId: "11111111-aaaa-4111-8111-111111111111",
+          runId: "22222222-aaaa-4222-8222-222222222222",
+          taskId: "33333333-aaaa-4333-8333-333333333333",
+          workspaceId,
+          paneId,
+          surfaceId,
+          provider: "codex",
+          providerSessionId,
+          attachedAt: "2026-09-02T00:00:00.000Z"
+        }
+      ],
+      providerMappings: [],
+      automaticProviderMappings: [
+        {
+          workspaceId,
+          paneId,
+          surfaceId,
+          provider: "codex",
+          providerSessionId: nextProviderSessionId,
+          matchSource: "codex-writer-lock",
+          confidence: "high",
+          explanation: "Verified a new foreground root writer on the reused surface.",
+          observedAt: 1_000
+        }
+      ],
+      providerMetadata: new Map(),
+      detector: new AgentDetector(),
+      providerEvidence: new Map(),
+      previewFor: () => null,
+      evidenceFor: () => []
+    })[0]!;
+
+    expect(session.provider).toMatchObject({
+      provider: "codex",
+      source: "codex-writer-lock",
+      sessionId: nextProviderSessionId
+    });
+    expect(session.linkedTaskId).toBeNull();
+  });
+
+  it("does not project a task binding from a different pane onto the live surface", () => {
+    const session = projectLiveSessions({
+      snapshot: snapshot(),
+      notifications: [],
+      bindings: [
+        {
+          bindingId: "11111111-aaaa-4111-8111-111111111111",
+          runId: "22222222-aaaa-4222-8222-222222222222",
+          taskId: "33333333-aaaa-4333-8333-333333333333",
+          workspaceId,
+          paneId: "f7777777-f777-4777-8777-f77777777777",
+          surfaceId,
+          provider: "codex",
+          providerSessionId,
+          attachedAt: "2026-09-02T00:00:00.000Z"
+        }
+      ],
+      providerMappings: [],
+      providerMetadata: new Map(),
+      detector: new AgentDetector(),
+      providerEvidence: new Map(),
+      previewFor: () => null,
+      evidenceFor: () => []
+    })[0]!;
+
+    expect(session.linkedTaskId).toBeNull();
+  });
 });
