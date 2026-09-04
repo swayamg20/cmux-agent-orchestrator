@@ -331,6 +331,15 @@ export class AgentCockpitController {
         session.currentDirectory
       );
       if (this.disposed) return;
+      const current = this.resolveCurrentBindingSession(session);
+      if (
+        current.provider.provider !== session.provider.provider ||
+        current.currentDirectory !== session.currentDirectory
+      ) {
+        throw new Error(
+          "The cmux surface changed while provider conversations were loading. Refresh and try again."
+        );
+      }
       if (conversations.length === 0) {
         new Notice(`No ${session.provider.provider === "claude" ? "Claude" : "Codex"} conversations were found for this repository.`);
         return;

@@ -5159,6 +5159,73 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not open a conversation picker after its cmux surface disappears", async () => {
+    let currentSnapshot = snapshot(5_391);
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces[0]!.title = "Codex";
+    let resolveList!: (value: ProviderSessionMetadata[]) => void;
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => new Promise<ProviderSessionMetadata[]>((resolve) => {
+        resolveList = resolve;
+      }),
+      get: async () => null,
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(5_391),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const resolver: ProviderSessionResolver = {
+      resolve: async (current) => ({
+        checkedAt: current.observedAt + 1,
+        nativeLifecycleAvailable: false,
+        issues: [],
+        mappings: [],
+        lifecycle: []
+      }),
+      dispose: () => undefined
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([source]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+    expect(session.provider.provider).toBe("codex");
+    const modals = (Modal as unknown as { instances: unknown[] }).instances;
+    const modalCount = modals.length;
+    const loading = controller.showConversationPicker(session);
+    await vi.waitFor(() => expect(resolveList).toBeTypeOf("function"));
+
+    currentSnapshot = snapshot(5_392);
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces = [];
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.selectedSurfaceId = null;
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+    resolveList([{
+      provider: "codex",
+      sessionId: "55555555-5555-4555-8555-555555555555",
+      title: "Stale listed conversation",
+      titleSource: "explicit-name",
+      cwd: "/repository",
+      updatedAt: 5_391,
+      status: "idle"
+    }]);
+    await loading;
+
+    expect(modals).toHaveLength(modalCount);
+    controller.dispose();
+  });
+
   it("revalidates a selected provider conversation before persisting its match", async () => {
     let persisted: unknown;
     const get = vi.fn(async () => null);
