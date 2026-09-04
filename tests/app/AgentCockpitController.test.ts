@@ -729,6 +729,7 @@ describe("AgentCockpitController connection failures", () => {
   it("reconnects an exact provider conversation to its existing task after its surface changes", async () => {
     let persisted: unknown;
     let currentSnapshot = snapshot(2_000);
+    let resolvedSurfaceId: string | null = null;
     const plugin = {
       loadData: async () => persisted,
       saveData: async (next: unknown) => {
@@ -739,7 +740,9 @@ describe("AgentCockpitController connection failures", () => {
       resolve: async (nextSnapshot) => {
         const workspace = nextSnapshot.windows[0]!.workspaces[0]!;
         const pane = workspace.panes[0]!;
-        const surface = pane.surfaces[0]!;
+        const surface = resolvedSurfaceId === null
+          ? pane.surfaces[0]!
+          : pane.surfaces.find((candidate) => candidate.id === resolvedSurfaceId)!;
         return {
           checkedAt: nextSnapshot.observedAt + 1,
           nativeLifecycleAvailable: false,
@@ -826,6 +829,64 @@ describe("AgentCockpitController connection failures", () => {
     expect(notices.slice(noticeStart)).toContain(
       "Reconnected 1 exact agent run to existing Work task."
     );
+
+    const resumedSurfaceId = "99999999-9999-4999-8999-999999999999";
+    pane.surfaces.push({
+      id: resumedSurfaceId,
+      paneId: pane.id,
+      index: 1,
+      indexInPane: 1,
+      title: "repository resumed",
+      type: "terminal",
+      selected: true,
+      focused: true,
+      active: true
+    });
+    surface.selected = false;
+    surface.focused = false;
+    pane.selectedSurfaceId = resumedSurfaceId;
+    resolvedSurfaceId = resumedSurfaceId;
+    currentSnapshot.observedAt = 2_200;
+
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().bindings).toMatchObject([
+      {
+        bindingId: originalBinding.bindingId,
+        runId: originalBinding.runId,
+        surfaceId: surface.id
+      }
+    ]);
+    expect(controller.store.getState().tasks).toHaveLength(1);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(
+      notices
+        .slice(noticeStart)
+        .filter((message) => message === "Reconnected 1 exact agent run to existing Work task.")
+    ).toHaveLength(1);
+
+    pane.surfaces = pane.surfaces.filter((candidate) => candidate.id === resumedSurfaceId);
+    currentSnapshot.observedAt = 2_300;
+
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().bindings).toMatchObject([
+      {
+        bindingId: originalBinding.bindingId,
+        runId: originalBinding.runId,
+        surfaceId: resumedSurfaceId
+      }
+    ]);
+    expect(controller.store.getState().tasks).toHaveLength(1);
+    expect(controller.store.getState().tasks[0]?.runCount).toBe(1);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(
+      notices
+        .slice(noticeStart)
+        .filter((message) => message === "Reconnected 1 exact agent run to existing Work task.")
+    ).toHaveLength(2);
     controller.dispose();
   });
 
