@@ -218,9 +218,11 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
 
     const writerIds = await this.processes.readCodexWriterSessionIds(candidate.process.pid, signal);
     if (writerIds.length > MAX_CODEX_WRITER_LOCKS) return null;
-    const rootThreads: ProviderSessionMetadata[] = [];
+    const writerThreads = new Map<string, ProviderSessionMetadata>();
     for (const sessionId of writerIds) {
       if (signal?.aborted || this.disposed) return null;
+      const normalizedWriterId = normalizeCanonicalUuid(sessionId);
+      if (normalizedWriterId === null || writerThreads.has(normalizedWriterId)) return null;
       let thread: ProviderSessionMetadata | null;
       try {
         thread = await this.metadata.get("codex", sessionId, cwd, signal);
@@ -228,15 +230,10 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
         return null;
       }
       if (thread === null || !canonicalUuidEquals(thread.sessionId, sessionId)) return null;
-      const isRoot = thread.parentSessionId === null && thread.sourceKind !== "subAgent";
-      const isSubagent =
-        thread.sourceKind === "subAgent" ||
-        normalizeCanonicalUuid(thread.parentSessionId ?? "") !== null;
-      if (!isRoot && !isSubagent) return null;
-      if (isRoot) rootThreads.push(thread);
+      writerThreads.set(normalizedWriterId, thread);
     }
-    if (rootThreads.length !== 1) return null;
-    const thread = rootThreads[0]!;
+    const thread = singleConnectedCodexRoot(writerThreads);
+    if (thread === null) return null;
     return {
       process: candidate.process,
       mapping: {
@@ -246,7 +243,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
         matchSource: "codex-writer-lock",
         confidence: "high",
         explanation:
-          "Matched the foreground Codex process to this exact cmux surface and verified its single open root-thread writer lock through Codex app-server metadata.",
+          "Matched the foreground Codex process to this exact cmux surface and verified that every open writer lock belongs to its single rooted Codex thread tree.",
         observedAt: checkedAt
       },
       lifecycle: null
@@ -333,6 +330,44 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
       return { records: [], available: false };
     }
   }
+}
+
+function singleConnectedCodexRoot(
+  threads: ReadonlyMap<string, ProviderSessionMetadata>
+): ProviderSessionMetadata | null {
+  const roots = [...threads.entries()].filter(
+    ([, thread]) => thread.parentSessionId === null && thread.sourceKind !== "subAgent"
+  );
+  if (roots.length !== 1) return null;
+  const [rootId, root] = roots[0]!;
+  const parentByThread = new Map<string, string>();
+
+  for (const [threadId, thread] of threads) {
+    if (threadId === rootId) continue;
+    const parentId = normalizeCanonicalUuid(thread.parentSessionId ?? "");
+    if (
+      thread.sourceKind !== "subAgent" ||
+      parentId === null ||
+      !threads.has(parentId)
+    ) {
+      return null;
+    }
+    parentByThread.set(threadId, parentId);
+  }
+
+  for (const threadId of parentByThread.keys()) {
+    const visited = new Set<string>();
+    let currentId = threadId;
+    while (currentId !== rootId) {
+      if (visited.has(currentId)) return null;
+      visited.add(currentId);
+      const parentId = parentByThread.get(currentId);
+      if (parentId === undefined) return null;
+      currentId = parentId;
+    }
+  }
+
+  return root;
 }
 
 function indexSurfaces(snapshot: CmuxSnapshot): Map<string, IndexedSurface> {

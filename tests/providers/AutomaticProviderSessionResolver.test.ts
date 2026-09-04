@@ -17,6 +17,7 @@ const surfaceId = "c4444444-c444-4444-8444-c44444444444";
 const secondSurfaceId = "e6666666-e666-4666-8666-e66666666666";
 const sessionId = "d5555555-d555-4555-8555-d5555555555a";
 const secondSessionId = "f7777777-f777-4777-8777-f77777777777";
+const thirdSessionId = "08888888-8888-4888-8888-888888888888";
 
 function snapshot(): CmuxSnapshot {
   return {
@@ -156,6 +157,41 @@ function codexSource(): ProviderSessionSource {
   };
 }
 
+function codexWriterGraphSource(
+  threads: Readonly<
+    Record<
+      string,
+      {
+        parentSessionId?: string | null;
+        sourceKind?: string | null;
+      }
+    >
+  >
+): ProviderSessionSource {
+  return {
+    provider: "codex",
+    list: async () => [],
+    get: async (requestedId, cwd) => {
+      const thread = threads[requestedId];
+      if (!thread) return null;
+      return {
+        provider: "codex",
+        sessionId: requestedId,
+        title: `Thread ${requestedId.slice(0, 8)}`,
+        titleSource: "explicit-name",
+        cwd,
+        updatedAt: 900,
+        status: "idle",
+        ...(thread.parentSessionId !== undefined
+          ? { parentSessionId: thread.parentSessionId }
+          : {}),
+        ...(thread.sourceKind !== undefined ? { sourceKind: thread.sourceKind } : {})
+      };
+    },
+    dispose: () => undefined
+  };
+}
+
 function client(agents: CmuxAgentRecord[] | null = null): CmuxClient {
   const transport: CmuxTransport = {
     probe: async () => {
@@ -288,6 +324,82 @@ describe("AutomaticProviderSessionResolver", () => {
     expect(result.mappings).toEqual([
       expect.objectContaining({ providerSessionId: sessionId, confidence: "high" })
     ]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("fails closed when a Codex subagent lock points outside the accounted writer set", async () => {
+    const metadata = new ProviderMetadataService([
+      codexWriterGraphSource({
+        [sessionId]: { parentSessionId: null, sourceKind: "cli" },
+        [secondSessionId]: { parentSessionId: thirdSessionId, sourceKind: "subAgent" }
+      })
+    ]);
+    const processes = new FakeProcessSource([processRecord()]);
+    processes.readLocks.mockResolvedValue([sessionId, secondSessionId]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(result.mappings).toEqual([]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("fails closed when a Codex subagent lock omits its parent identity", async () => {
+    const metadata = new ProviderMetadataService([
+      codexWriterGraphSource({
+        [sessionId]: { parentSessionId: null, sourceKind: "cli" },
+        [secondSessionId]: { sourceKind: "subAgent" }
+      })
+    ]);
+    const processes = new FakeProcessSource([processRecord()]);
+    processes.readLocks.mockResolvedValue([sessionId, secondSessionId]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(result.mappings).toEqual([]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("accepts nested Codex subagent ancestry that reaches the single writer root", async () => {
+    const metadata = new ProviderMetadataService([
+      codexWriterGraphSource({
+        [sessionId]: { parentSessionId: null, sourceKind: "cli" },
+        [secondSessionId]: { parentSessionId: sessionId, sourceKind: "subAgent" },
+        [thirdSessionId]: { parentSessionId: secondSessionId, sourceKind: "subAgent" }
+      })
+    ]);
+    const processes = new FakeProcessSource([processRecord()]);
+    processes.readLocks.mockResolvedValue([sessionId, secondSessionId, thirdSessionId]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(result.mappings).toEqual([
+      expect.objectContaining({ providerSessionId: sessionId, confidence: "high" })
+    ]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
+  it("fails closed when Codex subagent ancestry cycles away from the writer root", async () => {
+    const metadata = new ProviderMetadataService([
+      codexWriterGraphSource({
+        [sessionId]: { parentSessionId: null, sourceKind: "cli" },
+        [secondSessionId]: { parentSessionId: thirdSessionId, sourceKind: "subAgent" },
+        [thirdSessionId]: { parentSessionId: secondSessionId, sourceKind: "subAgent" }
+      })
+    ]);
+    const processes = new FakeProcessSource([processRecord()]);
+    processes.readLocks.mockResolvedValue([sessionId, secondSessionId, thirdSessionId]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+
+    const result = await resolver.resolve(snapshot(), client());
+
+    expect(result.mappings).toEqual([]);
     resolver.dispose();
     metadata.dispose();
   });
