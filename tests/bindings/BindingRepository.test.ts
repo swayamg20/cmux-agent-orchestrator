@@ -293,6 +293,69 @@ describe("BindingRepository", () => {
     expect(repository.listProviderSessions()).toEqual([]);
   });
 
+  it("rejects attaching a provider conversation already claimed by another surface", async () => {
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const providerSessionId = "55555555-5555-4555-8555-55555555555a";
+    const first = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex" as const,
+      providerSessionId,
+      attachedAt: "2026-09-02T00:00:00.000Z"
+    };
+    await repository.attach(first);
+
+    await expect(
+      repository.attach({
+        ...first,
+        taskId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        surfaceId: "66666666-6666-4666-8666-666666666666",
+        providerSessionId: providerSessionId.toUpperCase()
+      })
+    ).rejects.toThrow(/already matched/);
+    expect(repository.list()).toMatchObject([{ surfaceId: first.surfaceId }]);
+    expect(repository.listRuns()).toHaveLength(1);
+  });
+
+  it("rejects attachment when a saved conversation mapping claims another surface", async () => {
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+    const providerSessionId = "55555555-5555-4555-8555-55555555555a";
+    await repository.mapProviderSession({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "claude",
+      providerSessionId,
+      matchedAt: "2026-09-02T00:00:00.000Z"
+    });
+
+    await expect(
+      repository.attach({
+        taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        workspaceId: "22222222-2222-4222-8222-222222222222",
+        paneId: "33333333-3333-4333-8333-333333333333",
+        surfaceId: "66666666-6666-4666-8666-666666666666",
+        provider: "claude",
+        providerSessionId: providerSessionId.toUpperCase(),
+        attachedAt: "2026-09-02T00:01:00.000Z"
+      })
+    ).rejects.toThrow(/already matched/);
+    expect(repository.list()).toEqual([]);
+    expect(repository.listRuns()).toEqual([]);
+  });
+
   it("updates and clears the attached run identity with the provider match", async () => {
     const plugin = {
       loadData: async () => undefined,

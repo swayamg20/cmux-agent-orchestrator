@@ -345,6 +345,7 @@ export class BindingRepository {
     let result: AttachBindingResult | null = null;
     await this.commit((data) => {
       const machine = this.machineFor(data);
+      assertProviderSessionAvailable(machine, normalizedInput);
       const existing = machine.bindings.find((candidate) => candidate.surfaceId === normalizedInput.surfaceId) ?? null;
       const reusableRun = existing && existing.taskId === normalizedInput.taskId
         ? machine.runs.find((run) => run.runId === existing.runId) ?? null
@@ -447,4 +448,44 @@ function stableUuid(seed: string): string {
 
 function normalizeProviderSessionId(value: string | null): string | null {
   return value === null ? null : normalizeCanonicalUuid(value) ?? value;
+}
+
+function assertProviderSessionAvailable(
+  machine: MachineBindings,
+  input: NewBindingRecord
+): void {
+  if (
+    (input.provider !== "claude" && input.provider !== "codex") ||
+    input.providerSessionId === null ||
+    !isCanonicalUuid(input.providerSessionId)
+  ) {
+    return;
+  }
+
+  const conflictingMapping = machine.providerSessions.find(
+    (candidate) =>
+      candidate.provider === input.provider &&
+      candidate.providerSessionId === input.providerSessionId &&
+      candidate.surfaceId !== input.surfaceId
+  );
+  const conflictingBinding = machine.bindings.find(
+    (candidate) =>
+      candidate.provider === input.provider &&
+      candidate.providerSessionId === input.providerSessionId &&
+      candidate.surfaceId !== input.surfaceId
+  );
+  const mappingForSurface = machine.providerSessions.find(
+    (candidate) => candidate.surfaceId === input.surfaceId
+  );
+  const mappingChanged =
+    mappingForSurface !== undefined &&
+    (mappingForSurface.provider !== input.provider ||
+      mappingForSurface.providerSessionId !== input.providerSessionId);
+
+  if (conflictingMapping || conflictingBinding) {
+    throw new Error("That provider conversation is already matched to another cmux surface.");
+  }
+  if (mappingChanged) {
+    throw new Error("The saved provider conversation for this cmux surface changed before attachment.");
+  }
 }
