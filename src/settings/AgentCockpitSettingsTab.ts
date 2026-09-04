@@ -135,11 +135,15 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
   private addConnectionButton(setting: Setting): void {
     setting.addButton((button) =>
       button.setButtonText("Test connection").onClick(() => {
+        if (this.controller.isDisposed()) return;
         button.setDisabled(true);
         void runUiAction(
           () => this.controller.testConnection(),
-          "Could not test the cmux connection."
-        ).finally(() => button.setDisabled(false));
+          "Could not test the cmux connection.",
+          () => !this.controller.isDisposed()
+        ).finally(() => {
+          if (!this.controller.isDisposed()) button.setDisabled(false);
+        });
       })
     );
   }
@@ -210,12 +214,21 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
         .setCta()
         .setButtonText("Save settings")
         .onClick(() => {
+          if (this.controller.isDisposed()) return;
           button.setDisabled(true);
           void this.controller
             .updateSettings(draft)
-            .then(() => new Notice(`${PRODUCT_NAME} settings saved.`))
-            .catch((error: unknown) => new Notice(error instanceof Error ? error.message : "Could not save settings."))
-            .finally(() => button.setDisabled(false));
+            .then(() => {
+              if (!this.controller.isDisposed()) new Notice(`${PRODUCT_NAME} settings saved.`);
+            })
+            .catch((error: unknown) => {
+              if (!this.controller.isDisposed()) {
+                new Notice(error instanceof Error ? error.message : "Could not save settings.");
+              }
+            })
+            .finally(() => {
+              if (!this.controller.isDisposed()) button.setDisabled(false);
+            });
         })
     );
   }

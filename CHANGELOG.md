@@ -30,6 +30,7 @@ All notable changes to this project will be documented in this file.
 - Suppress late focus, preview, connection-test, and clipboard UI effects after plugin unload.
 - Suppress plugin-level initialization and queued task-reload errors that arrive after plugin unload.
 - Stop an in-flight view activation from revealing a prepared tab or reporting a late workspace error after plugin unload.
+- Suppress late Settings save and connection-test notices and detached-button updates after plugin unload.
 - Hide every duplicated Markdown task identity from the Work board and discard stale write-through identity when indexed frontmatter proves that the same file changed IDs.
 - Recover an ambiguously failed task-note creation only when exact Markdown read-back proves that the intended file was written.
 - Recover an ambiguously failed legacy-data migration only when exact plugin-data read-back proves that the normalized import persisted.

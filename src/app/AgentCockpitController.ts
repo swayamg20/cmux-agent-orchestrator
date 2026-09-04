@@ -484,6 +484,10 @@ export class AgentCockpitController {
     this.store.update((state) => ({ filters: { ...state.filters, ...patch } }));
   }
 
+  isDisposed(): boolean {
+    return this.disposed;
+  }
+
   getSettings(): AgentCockpitSettings {
     return { ...this.requireSettings() };
   }

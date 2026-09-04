@@ -6,11 +6,13 @@ import { Notice } from "obsidian";
  */
 export async function runUiAction(
   action: () => Promise<void>,
-  fallbackMessage: string
+  fallbackMessage: string,
+  shouldReportError: () => boolean = () => true
 ): Promise<void> {
   try {
     await action();
   } catch (error) {
+    if (!shouldReportError()) return;
     new Notice(
       error instanceof Error && error.message.trim()
         ? error.message

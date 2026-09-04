@@ -39,4 +39,14 @@ describe("runUiAction", () => {
       "Could not refresh the view."
     ]);
   });
+
+  it("suppresses an error when the owning UI has been disposed", async () => {
+    await runUiAction(
+      () => Promise.reject(new Error("Late UI failure.")),
+      "Could not refresh the view.",
+      () => false
+    );
+
+    expect((Notice as unknown as { messages: string[] }).messages).toEqual([]);
+  });
 });
