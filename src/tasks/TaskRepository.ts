@@ -4,6 +4,7 @@ import { canonicalUuidEquals, normalizeCanonicalUuid } from "../security/identif
 import { createTaskMarkdown, type NewTaskInput } from "./TaskTemplate";
 import {
   assertWorkflowTransition,
+  isWorkflowStatus,
   parseTaskRecord,
   type TaskPriority,
   type TaskRecord,
@@ -144,6 +145,9 @@ export class TaskRepository {
       if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
         throw new Error("Task identity changed before the update.");
       }
+      if (workflowStatusFromFrontmatter(frontmatter["workflow-status"]) !== task.workflowStatus) {
+        throw new Error("Task workflow changed before the update. Refresh and try again.");
+      }
       frontmatter["workflow-status"] = workflowStatus;
       frontmatter["updated-at"] = updatedAt;
     });
@@ -262,6 +266,10 @@ export class TaskRepository {
 
 function frontmatterTaskIdMatches(value: unknown, taskId: string): boolean {
   return typeof value === "string" && canonicalUuidEquals(value, taskId);
+}
+
+function workflowStatusFromFrontmatter(value: unknown): WorkflowStatus {
+  return isWorkflowStatus(value) ? value : "backlog";
 }
 
 export function slugify(value: string): string {

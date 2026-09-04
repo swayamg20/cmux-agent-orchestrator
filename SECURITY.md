@@ -26,6 +26,8 @@ Provider conversation metadata never creates identity by repository alone. Autom
 
 Canonical UUIDs are normalized to lowercase at cmux, provider-process, Markdown, and plugin-data boundaries. Equality and uniqueness checks therefore treat uppercase and lowercase spellings as the same identity.
 
+Workflow movement compares the task UUID and current frontmatter workflow state immediately before writing. A stale Kanban card cannot overwrite a newer human workflow decision, and no workflow transition invokes cmux or a provider process.
+
 Automatic Work tracking does not copy provider conversation titles, cmux titles, terminal text, previews, notifications, or lifecycle evidence into Markdown. A retained run record prevents a manually detached session from being silently recreated. Disabling the setting stops new automatic task creation; it does not delete existing notes, bindings, or run history.
 
 When cmux blocks a normally launched Obsidian process, cmux Agent Orchestrator provides GUI setup instructions and a connection retry. It never edits cmux configuration, enables Full open access, or restarts cmux.

@@ -174,4 +174,41 @@ describe("TaskRepository", () => {
     expect(ensured).toMatchObject({ created: false, task: { taskId } });
     expect(frontmatter["workflow-status"]).toBe("review");
   });
+
+  it("does not overwrite a newer workflow decision from a stale task card", async () => {
+    const taskFile = file("Agent Cockpit/Tasks/task.md");
+    const root = folder("Agent Cockpit/Tasks", [taskFile]);
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const frontmatter: Record<string, unknown> = {
+      "agent-cockpit": "task",
+      "schema-version": 1,
+      "task-id": taskId,
+      title: "Concurrent workflow task",
+      "workflow-status": "active"
+    };
+    const app = {
+      vault: {
+        getAbstractFileByPath: (path: string) =>
+          path === root.path ? root : path === taskFile.path ? taskFile : null
+      },
+      metadataCache: {
+        getFileCache: () => ({ frontmatter })
+      },
+      fileManager: {
+        processFrontMatter: async (
+          _file: TFile,
+          update: (value: Record<string, unknown>) => void
+        ) => update(frontmatter)
+      }
+    } as unknown as App;
+    const repository = new TaskRepository(app, root.path);
+    const staleTask = repository.findById(taskId);
+
+    await repository.updateWorkflow(staleTask, "review");
+    await expect(repository.updateWorkflow(staleTask, "done")).rejects.toThrow(
+      /workflow changed before the update/
+    );
+
+    expect(frontmatter["workflow-status"]).toBe("review");
+  });
 });
