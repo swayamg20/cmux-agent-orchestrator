@@ -183,21 +183,37 @@ export class AgentCockpitController {
     try {
       const client = this.requireClient();
       const settings = this.requireSettings();
-      const preview = await this.previewScheduler.schedule(session.key, () =>
-        client.readPreview(session, {
+      const requested = this.resolveCurrentSession(session);
+      const signature = previewSurfaceSignature(requested);
+      if (previewSurfaceSignature(session) !== signature) {
+        throw new Error("The cmux surface changed before its preview could be loaded. Refresh and try again.");
+      }
+      const preview = await this.previewScheduler.schedule(`preview:${requested.key}:${signature}`, () =>
+        client.readPreview(requested, {
           lines: settings.previewLines,
           maxBytes: settings.previewMaxBytes
         })
       );
       if (this.disposed) return;
-      this.previewCache.set(session.key, preview);
-      this.evidence.recordPreview(session.key, preview);
-      const detection = this.providerClassifier.detect(session, preview.text);
+      if (
+        !canonicalUuidEquals(preview.workspaceId, requested.workspaceId) ||
+        !canonicalUuidEquals(preview.surfaceId, requested.surfaceId)
+      ) {
+        throw new CmuxError("malformed-output", "cmux returned terminal output for a different surface.");
+      }
+      const current = this.findCurrentSession(requested);
+      if (current === null || previewSurfaceSignature(current) !== signature) {
+        new Notice("The cmux surface changed while its preview was loading. The stale preview was discarded.");
+        return;
+      }
+      this.previewCache.set(current.key, preview);
+      this.evidence.recordPreview(current.key, preview);
+      const detection = this.providerClassifier.detect(current, preview.text);
       if (
         detection !== null &&
         (detection.provider === "claude" || detection.provider === "codex")
       ) {
-        this.evidence.recordProvider(session.key, detection, preview.observedAt);
+        this.evidence.recordProvider(current.key, detection, preview.observedAt);
       }
       this.recomputeSessions();
     } catch (error) {
@@ -671,6 +687,8 @@ export class AgentCockpitController {
       providerSurfaceIdentities(snapshot)
     );
     this.evidence.clearProviders(invalidatedProviders);
+    this.evidence.clearPreviews(invalidatedProviders);
+    for (const key of invalidatedProviders) this.previewCache.delete(key);
     const liveKeys = this.evidence.sync(snapshot, notifications, notificationObservedAt);
     this.previewCache.retain(liveKeys);
     return liveKeys;
@@ -1230,16 +1248,20 @@ export class AgentCockpitController {
   }
 
   private resolveCurrentSession(original: LiveSession): LiveSession {
-    const current = this.store
+    const current = this.findCurrentSession(original);
+    if (!current) throw new Error("The exact cmux surface no longer exists. Refresh and try again.");
+    return current;
+  }
+
+  private findCurrentSession(original: LiveSession): LiveSession | null {
+    return this.store
       .getState()
       .sessions.find(
         (candidate) =>
           canonicalUuidEquals(candidate.workspaceId, original.workspaceId) &&
           canonicalUuidEquals(candidate.paneId, original.paneId) &&
           canonicalUuidEquals(candidate.surfaceId, original.surfaceId)
-      );
-    if (!current) throw new Error("The exact cmux surface no longer exists. Refresh and try again.");
-    return current;
+      ) ?? null;
   }
 
   private expectedProviderSessionMapping(original: LiveSession): ProviderSessionMapping | null {
@@ -1404,6 +1426,17 @@ function providerSurfaceIdentities(snapshot: CmuxSnapshot): ProviderSurfaceIdent
       )
     )
   );
+}
+
+function previewSurfaceSignature(session: LiveSession): string {
+  const exactIdentity = exactTrackableIdentity(session);
+  return JSON.stringify([
+    session.surfaceTitle,
+    session.surfaceType,
+    session.currentDirectory,
+    exactIdentity?.provider ?? null,
+    exactIdentity?.sessionId ?? null
+  ]);
 }
 
 function automaticRunCountError(error: unknown): Error {

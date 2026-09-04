@@ -88,6 +88,13 @@ export class CmuxEvidenceService {
     for (const key of keys) this.ledger.replaceSource(key, "provider-detection", []);
   }
 
+  clearPreviews(keys: ReadonlySet<string>): void {
+    for (const key of keys) {
+      this.ledger.replaceSource(key, "terminal-preview", []);
+      this.screenFingerprints.delete(key);
+    }
+  }
+
   recordLifecycle(
     liveKeys: ReadonlySet<string>,
     observations: readonly AutomaticLifecycleObservation[]

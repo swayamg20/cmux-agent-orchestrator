@@ -32,4 +32,16 @@ describe("PreviewCache", () => {
     expect(cache.peek("a")).toBeNull();
     expect(cache.peek("b")).not.toBeNull();
   });
+
+  it("removes one preview and keeps its byte accounting exact", () => {
+    const cache = new PreviewCache();
+    cache.set("a", preview("alpha"));
+    cache.set("b", preview("beta"));
+
+    expect(cache.delete("a")).toBe(true);
+    expect(cache.delete("a")).toBe(false);
+    expect(cache.peek("a")).toBeNull();
+    expect(cache.peek("b")?.text).toBe("beta");
+    expect(cache.byteSize).toBe(Buffer.byteLength("beta", "utf8"));
+  });
 });

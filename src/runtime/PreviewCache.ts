@@ -41,6 +41,14 @@ export class PreviewCache {
     this.prune();
   }
 
+  delete(key: string): boolean {
+    const entry = this.entries.get(key);
+    if (!entry) return false;
+    this.entries.delete(key);
+    this.totalBytes -= entry.bytes;
+    return true;
+  }
+
   retain(keys: ReadonlySet<string>): void {
     for (const [key, entry] of this.entries) {
       if (!keys.has(key)) {

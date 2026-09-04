@@ -359,6 +359,110 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("discards an in-flight preview when the same UUID changes surface identity", async () => {
+    let observedAt = 0;
+    let surfaceTitle = "Codex";
+    const finishReads: Array<(text: string) => void> = [];
+    const transport: CmuxTransport = {
+      ...connectedTransport(observedAt),
+      snapshot: async () => {
+        const current = snapshot(++observedAt);
+        current.windows[0]!.workspaces[0]!.panes[0]!.surfaces[0]!.title = surfaceTitle;
+        return current;
+      },
+      readPreview: (target) =>
+        new Promise((resolve) => {
+          finishReads.push((text) => resolve({
+            ...target,
+            text,
+            observedAt,
+            truncated: false
+          }));
+        })
+    };
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const original = controller.store.getState().sessions[0]!;
+    const staleLoad = controller.loadPreview(original);
+    await vi.waitFor(() => expect(finishReads).toHaveLength(1));
+
+    surfaceTitle = "Claude";
+    await controller.refreshTopology();
+    const current = controller.store.getState().sessions[0]!;
+    const currentLoad = controller.loadPreview(current);
+    await vi.waitFor(() => expect(finishReads).toHaveLength(2));
+
+    finishReads[1]!("Claude Code v2\ncurrent output");
+    await currentLoad;
+    finishReads[0]!("OpenAI Codex (v1)\nstale output");
+    await staleLoad;
+
+    expect(controller.store.getState().sessions[0]).toMatchObject({
+      surfaceTitle: "Claude",
+      provider: { provider: "claude" },
+      preview: { text: "Claude Code v2\ncurrent output" }
+    });
+    expect(notices.slice(noticeStart)).toContain(
+      "The cmux surface changed while its preview was loading. The stale preview was discarded."
+    );
+    controller.dispose();
+  });
+
+  it("clears a cached preview when the same UUID changes surface identity", async () => {
+    let observedAt = 0;
+    let surfaceTitle = "Codex";
+    const transport: CmuxTransport = {
+      ...connectedTransport(observedAt),
+      snapshot: async () => {
+        const current = snapshot(++observedAt);
+        current.windows[0]!.workspaces[0]!.panes[0]!.surfaces[0]!.title = surfaceTitle;
+        return current;
+      },
+      readPreview: async (target) => ({
+        ...target,
+        text: "private output from the previous command",
+        observedAt,
+        truncated: false
+      })
+    };
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    await controller.loadPreview(controller.store.getState().sessions[0]!);
+    expect(controller.store.getState().sessions[0]?.preview?.text).toContain("previous command");
+
+    surfaceTitle = "Claude";
+    await controller.refreshTopology();
+
+    expect(controller.store.getState().sessions[0]).toMatchObject({
+      surfaceTitle: "Claude",
+      provider: { provider: "claude" },
+      preview: null
+    });
+    controller.dispose();
+  });
+
   it("re-probes and fully loads the cockpit after access setup succeeds", async () => {
     let clientAttempts = 0;
     let snapshotCalls = 0;
