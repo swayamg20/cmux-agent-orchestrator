@@ -16,13 +16,14 @@ export default class AgentCockpitPlugin extends Plugin {
 
   override async onload(): Promise<void> {
     const providerMetadata = new ProviderMetadataService();
-    this.controller = new AgentCockpitController(
+    const controller = new AgentCockpitController(
       this.app,
       this,
       (explicitBinaryPath) => CmuxClient.create(explicitBinaryPath),
       providerMetadata,
       new AutomaticProviderSessionResolver(providerMetadata)
     );
+    this.controller = controller;
     this.registerView(AGENT_COCKPIT_VIEW_TYPE, (leaf) => new AgentCockpitView(leaf, this.requireController()));
     this.addRibbonIcon("layout-dashboard", `Open ${PRODUCT_NAME}`, () => {
       void runUiAction(() => this.activateView(), `Could not open ${PRODUCT_NAME}.`);
@@ -43,7 +44,7 @@ export default class AgentCockpitPlugin extends Plugin {
         `Could not refresh ${PRODUCT_NAME}.`
       )
     });
-    this.addSettingTab(new AgentCockpitSettingsTab(this.app, this, this.controller));
+    this.addSettingTab(new AgentCockpitSettingsTab(this.app, this, controller));
 
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
@@ -64,15 +65,19 @@ export default class AgentCockpitPlugin extends Plugin {
     );
 
     try {
-      await this.controller.initialize();
+      await controller.initialize();
     } catch (error) {
+      if (this.controller !== controller) return;
       new Notice(error instanceof Error ? error.message : `${PRODUCT_NAME} could not initialize.`);
     }
   }
 
   override onunload(): void {
-    this.controller?.dispose();
+    const controller = this.controller;
     this.controller = null;
+    this.taskReloadQueued = false;
+    this.pendingTaskReloadPaths.clear();
+    controller?.dispose();
   }
 
   private async activateView(): Promise<void> {
@@ -106,6 +111,7 @@ export default class AgentCockpitPlugin extends Plugin {
       const controller = this.controller;
       if (controller === null) return;
       void controller.reloadTasks(changedPaths).catch((error: unknown) => {
+        if (this.controller !== controller) return;
         new Notice(error instanceof Error ? error.message : "Could not refresh agent task notes.");
       });
     });

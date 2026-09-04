@@ -28,6 +28,7 @@ All notable changes to this project will be documented in this file.
 - Stop explicit task and conversation continuations after plugin unload before they can start follow-up writes, republish cleared state, open stale UI, or show late notices.
 - Keep disposed controllers inert when initialization, direct refreshes, or queued settings changes finish after plugin unload.
 - Suppress late focus, preview, connection-test, and clipboard UI effects after plugin unload.
+- Suppress plugin-level initialization and queued task-reload errors that arrive after plugin unload.
 - Hide every duplicated Markdown task identity from the Work board and discard stale write-through identity when indexed frontmatter proves that the same file changed IDs.
 - Recover an ambiguously failed task-note creation only when exact Markdown read-back proves that the intended file was written.
 - Recover an ambiguously failed legacy-data migration only when exact plugin-data read-back proves that the normalized import persisted.
