@@ -598,18 +598,21 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     signal?: AbortSignal
   ): Promise<ProviderSessionKind | null> {
     if (signal?.aborted || this.disposed) return null;
-    try {
-      if (await verifyExact("claude", sessionId, cwd, signal)) return "claude";
-    } catch {
-      // Try the other provider; exact metadata is required before assigning a provider.
+    let identified: ProviderSessionKind | null = null;
+    for (const provider of ["claude", "codex"] as const) {
+      if (!this.metadata.supports(provider)) continue;
+      try {
+        const match = await verifyExact(provider, sessionId, cwd, signal);
+        if (signal?.aborted || this.disposed) return null;
+        if (match === null) continue;
+        if (identified !== null) return null;
+        identified = provider;
+      } catch {
+        // A configured provider source that cannot be checked leaves ownership ambiguous.
+        return null;
+      }
     }
-    if (signal?.aborted || this.disposed) return null;
-    try {
-      if (await verifyExact("codex", sessionId, cwd, signal)) return "codex";
-    } catch {
-      // Leave the provider unresolved when neither source proves ownership.
-    }
-    return null;
+    return identified;
   }
 
   private async readNativeAgents(

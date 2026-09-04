@@ -1062,6 +1062,49 @@ describe("AutomaticProviderSessionResolver", () => {
     metadata.dispose();
   });
 
+  it("does not guess a native provider when both metadata stores own the session ID", async () => {
+    const matchingSource = (provider: "claude" | "codex"): ProviderSessionSource => ({
+      provider,
+      list: async () => [],
+      get: async (requestedId, cwd) =>
+        requestedId === sessionId
+          ? {
+              provider,
+              sessionId,
+              title: `Shared ${provider} session`,
+              titleSource: "explicit-name",
+              cwd,
+              updatedAt: 900,
+              status: "idle",
+              parentSessionId: null,
+              sourceKind: "cli"
+            }
+          : null,
+      dispose: () => undefined
+    });
+    const metadata = new ProviderMetadataService([
+      matchingSource("claude"),
+      matchingSource("codex")
+    ]);
+    const processes = new FakeProcessSource([]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+    const agents: CmuxAgentRecord[] = [
+      {
+        surfaceId,
+        state: "working",
+        source: "hook",
+        sessionId,
+        updatedAt: 1_900
+      }
+    ];
+
+    const result = await resolver.resolve(snapshot(), client(agents));
+
+    expect(result.mappings).toEqual([]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
   it("does not let bounded browse metadata prove a native provider identity", async () => {
     let markExactLookupStarted: (() => void) | undefined;
     const exactLookupStarted = new Promise<void>((resolve) => {

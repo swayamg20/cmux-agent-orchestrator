@@ -45,6 +45,10 @@ export class ProviderMetadataService {
     return this.metadata;
   }
 
+  supports(provider: ProviderSessionKind): boolean {
+    return this.sources.has(provider);
+  }
+
   async list(
     provider: ProviderSessionKind,
     cwd: string,
