@@ -1121,6 +1121,95 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("rejects a stale manual attachment after the exact cmux surface disappears", async () => {
+    let currentSnapshot = snapshot(5_300);
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const transport: CmuxTransport = {
+      ...connectedTransport(5_300),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const original = controller.store.getState().sessions[0]!;
+    const task = await controller.createTask({ title: "Inspect a stale attachment" });
+
+    currentSnapshot = snapshot(5_301);
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces = [];
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.selectedSurfaceId = null;
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    await expect(controller.attachTask(original, task)).rejects.toThrow(/no longer exists/);
+    await expect(
+      controller.createTask({ title: "Do not create from a vanished surface" }, original)
+    ).rejects.toThrow(/no longer exists/);
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    controller.dispose();
+  });
+
+  it("rejects a stale manual attachment after the provider conversation changes", async () => {
+    let observedAt = 5_400;
+    let providerSessionId = "55555555-5555-4555-8555-55555555555a";
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        ...exactCodexResolverResult(currentSnapshot.observedAt),
+        mappings: [
+          {
+            ...exactCodexResolverResult(currentSnapshot.observedAt).mappings[0]!,
+            providerSessionId
+          }
+        ]
+      }),
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(observedAt),
+      snapshot: async () => snapshot(++observedAt)
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const original = controller.store.getState().sessions[0]!;
+    const task = await controller.createTask({ title: "Inspect a changed conversation" });
+
+    providerSessionId = "66666666-6666-4666-8666-66666666666b";
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    await expect(controller.attachTask(original, task)).rejects.toThrow(/conversation changed/);
+    await expect(
+      controller.createTask({ title: "Do not create from a replaced conversation" }, original)
+    ).rejects.toThrow(/conversation changed/);
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    controller.dispose();
+  });
+
   it("reuses the deterministic note when binding persistence recovers on a later refresh", async () => {
     let persisted: unknown;
     let saveAttempts = 0;

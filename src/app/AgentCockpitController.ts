@@ -27,7 +27,7 @@ import { AttentionEngine } from "../runtime/AttentionEngine";
 import { PreviewCache } from "../runtime/PreviewCache";
 import { PreviewScheduler } from "../runtime/PreviewScheduler";
 import { projectLiveSessions } from "../runtime/SessionProjection";
-import { isCanonicalUuid } from "../security/identifiers";
+import { isCanonicalUuid, normalizeCanonicalUuid } from "../security/identifiers";
 import { parseSettings, type AgentCockpitSettings } from "../settings/AgentCockpitSettings";
 import { CockpitStore } from "../state/CockpitStore";
 import type {
@@ -268,16 +268,17 @@ export class AgentCockpitController {
 
   async attachTask(session: LiveSession, task: TaskRecord): Promise<void> {
     try {
-      validateBindingIdentity(task.taskId, session);
+      const current = this.resolveCurrentBindingSession(session);
+      validateBindingIdentity(task.taskId, current);
       this.requireTaskRepository().findById(task.taskId);
       const attachedAt = new Date().toISOString();
       const result = await this.bindings.attach({
         taskId: task.taskId,
-        workspaceId: session.workspaceId,
-        paneId: session.paneId,
-        surfaceId: session.surfaceId,
-        provider: session.provider.provider,
-        providerSessionId: session.provider.sessionId,
+        workspaceId: current.workspaceId,
+        paneId: current.paneId,
+        surfaceId: current.surfaceId,
+        provider: current.provider.provider,
+        providerSessionId: current.provider.sessionId,
         attachedAt
       });
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
@@ -302,7 +303,8 @@ export class AgentCockpitController {
   }
 
   async detachTask(session: LiveSession): Promise<void> {
-    await this.bindings.detach(session.surfaceId);
+    const current = this.resolveCurrentBindingSession(session);
+    await this.bindings.detach(current.surfaceId);
     this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
     this.recomputeSessions();
     new Notice("Detached the session. The task note and run history were not deleted.");
@@ -310,9 +312,10 @@ export class AgentCockpitController {
 
   async createTask(options: CreateTaskOptions, session: LiveSession | null = null): Promise<TaskRecord> {
     try {
+      const current = session === null ? null : this.resolveCurrentBindingSession(session);
       const task = await this.requireTaskRepository().create(options);
       this.store.update((state) => ({ tasks: [task, ...state.tasks] }));
-      if (session !== null) await this.attachTask(session, task);
+      if (current !== null) await this.attachTask(current, task);
       else new Notice(`Created ${task.title}.`);
       return task;
     } catch (error) {
@@ -1018,6 +1021,22 @@ export class AgentCockpitController {
           candidate.surfaceId === original.surfaceId
       );
     if (!current) throw new Error("The exact cmux surface no longer exists. Refresh and try again.");
+    return current;
+  }
+
+  private resolveCurrentBindingSession(original: LiveSession): LiveSession {
+    const current = this.resolveCurrentSession(original);
+    const provider = original.provider.provider;
+    const originalSessionId =
+      provider === "claude" || provider === "codex"
+        ? normalizeCanonicalUuid(original.provider.sessionId ?? "")
+        : null;
+    if (originalSessionId === null) return current;
+
+    const currentSessionId = normalizeCanonicalUuid(current.provider.sessionId ?? "");
+    if (current.provider.provider !== provider || currentSessionId !== originalSessionId) {
+      throw new Error("The exact provider conversation changed before the task binding was updated.");
+    }
     return current;
   }
 
