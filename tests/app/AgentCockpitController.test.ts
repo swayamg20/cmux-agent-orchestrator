@@ -5168,6 +5168,7 @@ describe("AgentCockpitController connection failures", () => {
     type GuardedMapper = (
       mapping: ProviderSessionMapping,
       expected: ProviderSessionMapping | null,
+      expectedBinding: Parameters<BindingRepository["mapProviderSessionIfUnchanged"]>[2],
       canMutate?: () => boolean
     ) => Promise<boolean>;
     const matchingController = controller as unknown as {
@@ -5187,10 +5188,15 @@ describe("AgentCockpitController connection failures", () => {
     const writeQueued = new Promise<void>((resolve) => {
       markWriteQueued = resolve;
     });
-    repository.mapProviderSessionIfUnchanged = async (mapping, expected, canMutate) => {
+    repository.mapProviderSessionIfUnchanged = async (
+      mapping,
+      expected,
+      expectedBinding,
+      canMutate
+    ) => {
       markWriteQueued();
       await writeGate;
-      return mapProviderSession(mapping, expected, canMutate);
+      return mapProviderSession(mapping, expected, expectedBinding, canMutate);
     };
     const matching = matchingController.matchConversation(exactSession, metadata);
     await writeQueued;
@@ -5204,6 +5210,81 @@ describe("AgentCockpitController connection failures", () => {
 
     await expect(matching).rejects.toThrow(/no longer exists/);
     expect(repository.listProviderSessions()).toEqual([]);
+    controller.dispose();
+  });
+
+  it("does not apply a conversation match over a task binding saved by another repository", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: false } };
+    const metadata: ProviderSessionMetadata = {
+      provider: "codex",
+      sessionId: "55555555-5555-4555-8555-555555555555",
+      title: "Exact concurrent conversation",
+      titleSource: "explicit-name",
+      cwd: "/repository",
+      updatedAt: 5_394,
+      status: "idle"
+    };
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_394)),
+      new ProviderMetadataService([{
+        provider: "codex",
+        list: async () => [],
+        get: async () => metadata,
+        dispose: () => undefined
+      }]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const exactSession = controller.store.getState().sessions[0]!;
+    const matchingController = controller as unknown as {
+      matchConversation(
+        original: typeof exactSession,
+        conversation: ProviderSessionMetadata
+      ): Promise<void>;
+      bindings: BindingRepository;
+    };
+    const repository = matchingController.bindings;
+    const concurrent = new BindingRepository(plugin);
+    await concurrent.load();
+    const mapProviderSession = repository.mapProviderSessionIfUnchanged.bind(repository);
+    repository.mapProviderSessionIfUnchanged = async (
+      mapping,
+      expectedMapping,
+      expectedBinding,
+      canMutate
+    ) => {
+      await concurrent.attach({
+        taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        workspaceId: exactSession.workspaceId,
+        paneId: exactSession.paneId,
+        surfaceId: exactSession.surfaceId,
+        provider: "unknown",
+        providerSessionId: null,
+        attachedAt: "2026-09-04T00:01:00.000Z"
+      });
+      return mapProviderSession(mapping, expectedMapping, expectedBinding, canMutate);
+    };
+
+    await expect(
+      matchingController.matchConversation(exactSession, metadata)
+    ).rejects.toThrow(/task binding changed on disk/);
+
+    const reloaded = new BindingRepository(plugin);
+    await reloaded.load();
+    expect(reloaded.listProviderSessions()).toEqual([]);
+    expect(reloaded.list()).toMatchObject([
+      { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", provider: "unknown", providerSessionId: null }
+    ]);
     controller.dispose();
   });
 

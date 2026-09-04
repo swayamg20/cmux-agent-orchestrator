@@ -951,24 +951,41 @@ export class BindingRepository {
 
   async mapProviderSessionIfUnchanged(
     mapping: ProviderSessionMapping,
-    expected: ProviderSessionMapping | null,
+    expectedMapping: ProviderSessionMapping | null,
+    expectedBinding: BindingRecord | null,
     canMutate?: MutationGuard
   ): Promise<boolean> {
     if (!isProviderSessionMapping(mapping)) {
       throw new Error("Provider session mapping contains an invalid canonical identity or value.");
     }
-    if (expected !== null && !isProviderSessionMapping(expected)) {
+    if (expectedMapping !== null && !isProviderSessionMapping(expectedMapping)) {
       throw new Error("Expected provider session mapping contains an invalid canonical identity or value.");
     }
+    if (expectedBinding !== null && !isBinding(expectedBinding)) {
+      throw new Error("Expected binding contains an invalid canonical identity or value.");
+    }
     const normalized = normalizeProviderSessionMapping(mapping);
-    const normalizedExpected = expected === null ? null : normalizeProviderSessionMapping(expected);
+    const normalizedExpectedMapping = expectedMapping === null
+      ? null
+      : normalizeProviderSessionMapping(expectedMapping);
+    const normalizedExpectedBinding = expectedBinding === null
+      ? null
+      : normalizeBindingRecord(expectedBinding);
     return this.commitConditional((data) => {
       if (canMutate && !canMutate()) return false;
       const machine = this.machineFor(data);
-      const current = machine.providerSessions.find(
+      const currentMapping = machine.providerSessions.find(
         (candidate) => candidate.surfaceId === normalized.surfaceId
       ) ?? null;
-      if (!sameProviderSessionMapping(current, normalizedExpected)) return false;
+      const currentBinding = machine.bindings.find(
+        (candidate) => candidate.surfaceId === normalized.surfaceId
+      ) ?? null;
+      if (
+        !sameProviderSessionMapping(currentMapping, normalizedExpectedMapping) ||
+        !sameBinding(currentBinding, normalizedExpectedBinding)
+      ) {
+        return false;
+      }
       mapProviderSessionToMachine(machine, normalized);
       return true;
     });

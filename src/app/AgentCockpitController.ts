@@ -1570,6 +1570,7 @@ export class AgentCockpitController {
     try {
       const expectedMapping = this.expectedProviderSessionMapping(original);
       let current = this.resolveCurrentBindingSession(original);
+      const expectedBinding = this.expectedTaskBinding(original, current);
       this.assertConversationMatchesSession(current, conversation);
       const verified = await this.providerMetadata.verifyExact(
         conversation.provider,
@@ -1595,9 +1596,11 @@ export class AgentCockpitController {
       const matched = await this.bindings.mapProviderSessionIfUnchanged(
         mapping,
         expectedMapping,
+        expectedBinding,
         () => {
           if (this.disposed) return false;
           const guardedCurrent = this.resolveCurrentBindingSession(original);
+          this.expectedTaskBinding(original, guardedCurrent);
           this.assertConversationMatchesSession(guardedCurrent, verified);
           return true;
         }
@@ -1605,7 +1608,7 @@ export class AgentCockpitController {
       if (this.disposed) return;
       if (!matched) {
         throw new Error(
-          "The saved provider conversation changed on disk while the picker was open. Reload the plugin and try again."
+          "The saved provider conversation or task binding changed on disk while the picker was open. Reload the plugin and try again."
         );
       }
       this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });

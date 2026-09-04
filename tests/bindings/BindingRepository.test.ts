@@ -2413,17 +2413,58 @@ describe("BindingRepository", () => {
       providerSessionId: "77777777-7777-4777-8777-777777777777",
       matchedAt: "2026-09-04T00:02:00.000Z"
     };
-    await expect(repository.mapProviderSessionIfUnchanged(original, null)).resolves.toBe(true);
+    await expect(repository.mapProviderSessionIfUnchanged(original, null, null)).resolves.toBe(true);
 
     const replacementWrite = repository.mapProviderSession(replacement);
     await replacementSaveStarted;
-    const staleWrite = repository.mapProviderSessionIfUnchanged(staleChoice, original);
+    const staleWrite = repository.mapProviderSessionIfUnchanged(staleChoice, original, null);
     releaseReplacementSave?.();
 
     await expect(replacementWrite).resolves.toBeUndefined();
     await expect(staleWrite).resolves.toBe(false);
     expect(saveCount).toBe(2);
     expect(repository.listProviderSessions()).toEqual([replacement]);
+  });
+
+  it("does not map a conversation over a task binding added by another repository", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => structuredClone(data),
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const stale = new BindingRepository(plugin);
+    const concurrent = new BindingRepository(plugin);
+    await stale.load();
+    await concurrent.load();
+    const target = {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444"
+    };
+    const mapping = {
+      ...target,
+      provider: "codex" as const,
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      matchedAt: "2026-09-04T00:02:00.000Z"
+    };
+
+    await concurrent.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      ...target,
+      provider: "unknown",
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:01:00.000Z"
+    });
+    await expect(stale.mapProviderSessionIfUnchanged(mapping, null, null)).resolves.toBe(false);
+
+    const reloaded = new BindingRepository(plugin);
+    await reloaded.load();
+    expect(reloaded.listProviderSessions()).toEqual([]);
+    expect(reloaded.list()).toMatchObject([
+      { taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", provider: "unknown", providerSessionId: null }
+    ]);
   });
 
   it("keeps several runs for one durable task and reuses the run on repeated attachment", async () => {
