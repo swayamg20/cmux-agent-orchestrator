@@ -548,6 +548,59 @@ describe("BindingRepository", () => {
     expect(saveData).not.toHaveBeenCalled();
   });
 
+  it("does not mistake an unknown-only persisted object for missing data", async () => {
+    const persisted = { futureState: { enabled: true } };
+    const saveData = vi.fn(async () => undefined);
+    const loadLegacyData = vi.fn(async () => ({ settings: { taskFolder: "Legacy/Tasks" } }));
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin, loadLegacyData);
+    await repository.load();
+
+    await expect(
+      repository.updateSettings({ ...repository.getSettings(), previewLines: 40 })
+    ).rejects.toThrow(/unknown persisted fields|cannot be saved safely/);
+
+    expect(loadLegacyData).not.toHaveBeenCalled();
+    expect(saveData).not.toHaveBeenCalled();
+    expect(persisted).toEqual({ futureState: { enabled: true } });
+  });
+
+  it("prefers an existing empty current data object over legacy data", async () => {
+    const saveData = vi.fn(async () => undefined);
+    const loadLegacyData = vi.fn(async () => ({ settings: { taskFolder: "Legacy/Tasks" } }));
+    const plugin = {
+      loadData: async () => ({}),
+      saveData
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin, loadLegacyData);
+
+    await repository.load();
+
+    expect(repository.getSettings().taskFolder).toBe("Agent Cockpit/Tasks");
+    expect(loadLegacyData).not.toHaveBeenCalled();
+    expect(saveData).not.toHaveBeenCalled();
+  });
+
+  it("refuses to overwrite a non-record persisted root", async () => {
+    const persisted: unknown = 42;
+    const saveData = vi.fn(async () => undefined);
+    const plugin = {
+      loadData: async () => persisted,
+      saveData
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin, async () => undefined);
+    await repository.load();
+
+    await expect(
+      repository.updateSettings({ ...repository.getSettings(), previewLines: 40 })
+    ).rejects.toThrow(/malformed|cannot be saved safely/);
+
+    expect(saveData).not.toHaveBeenCalled();
+  });
+
   it("refuses to discard an invalid foreign-machine record during a local save", async () => {
     const repositorySeed = {
       schemaVersion: 3,

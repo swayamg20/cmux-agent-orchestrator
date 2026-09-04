@@ -286,9 +286,10 @@ function decodePluginData(
   currentMachineId: string,
   options: DecodePluginDataOptions = {}
 ): PersistedPluginData {
-  const raw = typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {};
+  if (options.strictForWrite && !isRecord(value)) {
+    throw new Error(`${PRODUCT_NAME} data is malformed and cannot be saved safely.`);
+  }
+  const raw = isRecord(value) ? value : {};
   if (options.strictForWrite) assertPluginDataCanBeSaved(raw, currentMachineId);
   const hasMachineObject =
     typeof raw.machines === "object" && raw.machines !== null && !Array.isArray(raw.machines);
@@ -685,10 +686,10 @@ export class BindingRepository {
 
   async load(): Promise<void> {
     let loaded: unknown = await this.plugin.loadData();
-    this.hasObservedCurrentData = hasPersistedPluginData(loaded);
+    this.hasObservedCurrentData = !isMissingPluginData(loaded);
     if (this.hasObservedCurrentData) pluginsWithObservedData.add(this.plugin);
     let importedLegacyData = false;
-    if (!hasPersistedPluginData(loaded)) {
+    if (isMissingPluginData(loaded)) {
       const legacyData = await this.loadLegacyData();
       if (hasPersistedPluginData(legacyData)) {
         loaded = legacyData;
@@ -700,7 +701,7 @@ export class BindingRepository {
       const imported = structuredClone(this.data);
       await enqueuePluginSave(this.plugin, async () => {
         const current = (await this.plugin.loadData()) as unknown;
-        if (hasPersistedPluginData(current)) {
+        if (!isMissingPluginData(current)) {
           this.markCurrentDataObserved();
           this.data = decodePluginData(current, this.currentMachineId, { strictForWrite: true });
           return;
@@ -1045,7 +1046,7 @@ export class BindingRepository {
 
   private async loadLatest(base: PersistedPluginData): Promise<PersistedPluginData> {
     const loaded = (await this.plugin.loadData()) as unknown;
-    if (!hasPersistedPluginData(loaded)) {
+    if (isMissingPluginData(loaded)) {
       if (this.hasObservedCurrentData || pluginsWithObservedData.has(this.plugin)) {
         throw new Error(`${PRODUCT_NAME} data became unavailable before it could be saved.`);
       }
@@ -1061,7 +1062,7 @@ export class BindingRepository {
     } catch (saveError) {
       try {
         const persisted = (await this.plugin.loadData()) as unknown;
-        if (hasPersistedPluginData(persisted)) {
+        if (!isMissingPluginData(persisted)) {
           this.markCurrentDataObserved();
         }
         if (isDeepStrictEqual(persisted, draft)) {
@@ -1086,6 +1087,10 @@ export class BindingRepository {
 function hasPersistedPluginData(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null) return false;
   return "schemaVersion" in value || "settings" in value || "machines" in value;
+}
+
+function isMissingPluginData(value: unknown): value is null | undefined {
+  return value === null || value === undefined;
 }
 
 function inferRelation(latest: AgentRunRecord | null, input: NewBindingRecord): RunRelation {
