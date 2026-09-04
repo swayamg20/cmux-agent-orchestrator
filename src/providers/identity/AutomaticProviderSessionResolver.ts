@@ -39,6 +39,13 @@ interface ProcessResolution {
   lifecycle: AutomaticLifecycleObservation | null;
 }
 
+type ExactMetadataReader = (
+  provider: ProviderSessionKind,
+  sessionId: string,
+  cwd: string,
+  signal?: AbortSignal
+) => Promise<ProviderSessionMetadata | null>;
+
 const RESOLUTION_CONCURRENCY = 2;
 const MAX_CODEX_WRITER_LOCKS = 8;
 
@@ -61,11 +68,12 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     if (this.disposed || signal?.aborted) return emptyResolution(checkedAt);
     const surfaces = indexSurfaces(snapshot);
     const issues: string[] = [];
+    const verifyExact = memoizeExactMetadataReads(this.metadata);
 
     const nativePromise = this.readNativeAgents(client, signal, issues);
     const processResolutions =
       this.platform === "darwin"
-        ? await this.resolveLocalProcesses(surfaces, checkedAt, signal, issues)
+        ? await this.resolveLocalProcesses(surfaces, checkedAt, verifyExact, signal, issues)
         : [];
     const nativeAgents = await nativePromise;
     if (this.disposed || signal?.aborted) return emptyResolution(checkedAt);
@@ -75,6 +83,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
       processResolutions.map((resolution) => resolution.mapping),
       surfaces,
       checkedAt,
+      verifyExact,
       signal,
       issues
     );
@@ -134,6 +143,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
   private async resolveLocalProcesses(
     surfaces: ReadonlyMap<string, IndexedSurface>,
     checkedAt: number,
+    verifyExact: ExactMetadataReader,
     signal: AbortSignal | undefined,
     issues: string[]
   ): Promise<ProcessResolution[]> {
@@ -161,7 +171,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
       RESOLUTION_CONCURRENCY,
       async (candidate) => {
         try {
-          return await this.resolveProcessCandidate(candidate, checkedAt, signal);
+          return await this.resolveProcessCandidate(candidate, checkedAt, verifyExact, signal);
         } catch {
           return null;
         }
@@ -185,6 +195,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
   private async resolveProcessCandidate(
     candidate: ProcessCandidate,
     checkedAt: number,
+    verifyExact: ExactMetadataReader,
     signal?: AbortSignal
   ): Promise<ProcessResolution | null> {
     const cwd = candidate.surface.currentDirectory;
@@ -225,7 +236,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
       if (normalizedWriterId === null || writerThreads.has(normalizedWriterId)) return null;
       let thread: ProviderSessionMetadata | null;
       try {
-        thread = await this.metadata.get("codex", sessionId, cwd, signal);
+        thread = await verifyExact("codex", sessionId, cwd, signal);
       } catch {
         return null;
       }
@@ -255,6 +266,7 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
     processMappings: readonly AutomaticProviderSessionMapping[],
     surfaces: ReadonlyMap<string, IndexedSurface>,
     checkedAt: number,
+    verifyExact: ExactMetadataReader,
     signal: AbortSignal | undefined,
     issues: string[]
   ): Promise<AutomaticProviderSessionMapping[]> {
@@ -281,7 +293,12 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
         let provider: ProviderSessionKind | null =
           processMapping?.providerSessionId === providerSessionId ? processMapping.provider : null;
         if (!provider) {
-          provider = await this.identifyNativeProvider(providerSessionId, surface.currentDirectory, signal);
+          provider = await this.identifyNativeProvider(
+            providerSessionId,
+            surface.currentDirectory,
+            verifyExact,
+            signal
+          );
         }
         if (!provider) return null;
         return {
@@ -300,17 +317,18 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
   private async identifyNativeProvider(
     sessionId: string,
     cwd: string,
+    verifyExact: ExactMetadataReader,
     signal?: AbortSignal
   ): Promise<ProviderSessionKind | null> {
     if (signal?.aborted || this.disposed) return null;
     try {
-      if (await this.metadata.get("claude", sessionId, cwd, signal)) return "claude";
+      if (await verifyExact("claude", sessionId, cwd, signal)) return "claude";
     } catch {
       // Try the other provider; exact metadata is required before assigning a provider.
     }
     if (signal?.aborted || this.disposed) return null;
     try {
-      if (await this.metadata.get("codex", sessionId, cwd, signal)) return "codex";
+      if (await verifyExact("codex", sessionId, cwd, signal)) return "codex";
     } catch {
       // Leave the provider unresolved when neither source proves ownership.
     }
@@ -330,6 +348,22 @@ export class AutomaticProviderSessionResolver implements ProviderSessionResolver
       return { records: [], available: false };
     }
   }
+}
+
+function memoizeExactMetadataReads(metadata: ProviderMetadataService): ExactMetadataReader {
+  const reads = new Map<string, Promise<ProviderSessionMetadata | null>>();
+  return (provider, sessionId, cwd, signal) => {
+    const canonicalSessionId = normalizeCanonicalUuid(sessionId);
+    if (canonicalSessionId === null || signal?.aborted) return Promise.resolve(null);
+    const key = `${provider}\0${canonicalSessionId}\0${cwd}`;
+    const existing = reads.get(key);
+    const pending =
+      existing ?? metadata.verifyExact(provider, canonicalSessionId, cwd, signal);
+    if (!existing) reads.set(key, pending);
+    return pending.then((session) =>
+      session === null || signal?.aborted ? null : { ...session }
+    );
+  };
 }
 
 function singleConnectedCodexRoot(

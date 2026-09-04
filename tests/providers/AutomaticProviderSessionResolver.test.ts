@@ -584,6 +584,60 @@ describe("AutomaticProviderSessionResolver", () => {
     metadata.dispose();
   });
 
+  it("does not let bounded browse metadata prove a native provider identity", async () => {
+    let markExactLookupStarted: (() => void) | undefined;
+    const exactLookupStarted = new Promise<void>((resolve) => {
+      markExactLookupStarted = resolve;
+    });
+    let finishExactLookup: ((value: null) => void) | undefined;
+    const exactLookup = new Promise<null>((resolve) => {
+      finishExactLookup = resolve;
+    });
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async (cwd) => [
+        {
+          provider: "codex",
+          sessionId,
+          title: "Stale bounded browse result",
+          titleSource: "explicit-name",
+          cwd,
+          updatedAt: 800,
+          status: "idle",
+          parentSessionId: null,
+          sourceKind: "cli"
+        }
+      ],
+      get: async () => {
+        markExactLookupStarted?.();
+        return exactLookup;
+      },
+      dispose: () => undefined
+    };
+    const metadata = new ProviderMetadataService([source]);
+    const processes = new FakeProcessSource([]);
+    const resolver = new AutomaticProviderSessionResolver(metadata, processes, () => 2_000, "darwin");
+    const agents: CmuxAgentRecord[] = [
+      {
+        surfaceId,
+        state: "working",
+        source: "hook",
+        sessionId,
+        updatedAt: 1_900
+      }
+    ];
+
+    const resolving = resolver.resolve(snapshot(), client(agents));
+    await exactLookupStarted;
+    await metadata.list("codex", "/workspace/project");
+    finishExactLookup?.(null);
+    const result = await resolving;
+
+    expect(result.mappings).toEqual([]);
+    resolver.dispose();
+    metadata.dispose();
+  });
+
   it("keeps stronger local identity proof when detected cmux evidence agrees", async () => {
     const metadata = new ProviderMetadataService([codexSource()]);
     const processes = new FakeProcessSource([processRecord()]);
