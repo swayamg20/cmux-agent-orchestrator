@@ -220,6 +220,27 @@ describe("TaskRepository", () => {
     expect(repository.list()).toEqual([]);
   });
 
+  it("does not let recent write-through state mask a changed task identity at the same path", async () => {
+    const memory = createMemoryTaskApp();
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const task = await repository.create({ title: "Identity changed manually" });
+    const replacementTaskId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    memory.replaceFrontmatter(task.file.path, {
+      "agent-cockpit": "task",
+      "schema-version": 1,
+      "task-id": replacementTaskId,
+      title: "Replacement identity",
+      "workflow-status": "active",
+      priority: "normal",
+      "run-count": 0
+    });
+
+    expect(repository.list()).toMatchObject([
+      { taskId: replacementTaskId, title: "Replacement identity" }
+    ]);
+    expect(() => repository.findById(task.taskId)).toThrow("The linked task no longer exists.");
+  });
+
   it("keeps a successful write authoritative until Obsidian invalidates its stale index", async () => {
     const taskFile = file("Agent Cockpit/Tasks/task.md");
     const root = folder("Agent Cockpit/Tasks", [taskFile]);
@@ -285,6 +306,7 @@ describe("TaskRepository", () => {
     } as unknown as App;
     const repository = new TaskRepository(app, root.path);
 
+    expect(repository.list()).toEqual([]);
     expect(() => repository.findById(taskId)).toThrow("The task ID is duplicated in the vault.");
     await expect(
       repository.ensure({ taskId, title: "Codex run · repository", repository: "/repository" })

@@ -60,25 +60,25 @@ export class TaskRepository {
 
   list(): TaskRecord[] {
     const indexed = this.indexedTasks();
-    const byId = new Map(indexed.map((task) => [task.taskId, task]));
+    const indexedByPath = new Map(
+      indexed.map((task) => [normalizePath(task.file.path), task] as const)
+    );
+    const candidates = [...indexed];
     for (const [taskId, task] of this.recentTasks) {
-      if (
-        this.app.vault.getAbstractFileByPath(task.file.path) === null ||
-        !this.isInTaskFolder(task.file.path)
-      ) {
+      const taskPath = normalizePath(task.file.path);
+      if (this.app.vault.getAbstractFileByPath(taskPath) === null || !this.isInTaskFolder(taskPath)) {
         this.recentTasks.delete(taskId);
-      } else if (
-        !byId.has(taskId) ||
-        byId.get(taskId)?.file.path === task.file.path
-      ) {
-        const indexedTask = byId.get(taskId);
-        byId.set(
-          taskId,
-          indexedTask === undefined ? task : reconcileTaskSnapshots(indexedTask, task)
-        );
+        continue;
       }
+      const indexedTask = indexedByPath.get(taskPath);
+      if (indexedTask !== undefined && indexedTask.taskId !== taskId) {
+        this.recentTasks.delete(taskId);
+        continue;
+      }
+      candidates.push(task);
     }
-    return [...byId.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return unambiguousTaskSnapshots(candidates)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
   private taskFiles(): TFile[] {
@@ -290,13 +290,21 @@ export class TaskRepository {
   private findMatchesById(taskId: string): TaskRecord[] {
     const normalizedTaskId = normalizeCanonicalUuid(taskId);
     if (normalizedTaskId === null) return [];
-    const matches = this.indexedTasks().filter((task) => task.taskId === normalizedTaskId);
+    const indexed = this.indexedTasks();
+    const matches = indexed.filter((task) => task.taskId === normalizedTaskId);
     const recent = this.recentTasks.get(normalizedTaskId);
     if (recent === undefined) return matches;
     if (
       this.app.vault.getAbstractFileByPath(recent.file.path) === null ||
       !this.isInTaskFolder(recent.file.path)
     ) {
+      this.recentTasks.delete(normalizedTaskId);
+      return matches;
+    }
+    const indexedAtRecentPath = indexed.find(
+      (task) => normalizePath(task.file.path) === normalizePath(recent.file.path)
+    );
+    if (indexedAtRecentPath !== undefined && indexedAtRecentPath.taskId !== normalizedTaskId) {
       this.recentTasks.delete(normalizedTaskId);
       return matches;
     }
@@ -319,6 +327,26 @@ export class TaskRepository {
     );
     return operation;
   }
+}
+
+function unambiguousTaskSnapshots(candidates: TaskRecord[]): TaskRecord[] {
+  const snapshots = new Map<string, TaskRecord>();
+  const pathsByTaskId = new Map<string, Set<string>>();
+  for (const candidate of candidates) {
+    const path = normalizePath(candidate.file.path);
+    const key = `${candidate.taskId}\0${path}`;
+    const existing = snapshots.get(key);
+    snapshots.set(
+      key,
+      existing === undefined ? candidate : reconcileTaskSnapshots(existing, candidate)
+    );
+    const paths = pathsByTaskId.get(candidate.taskId) ?? new Set<string>();
+    paths.add(path);
+    pathsByTaskId.set(candidate.taskId, paths);
+  }
+  return [...snapshots.values()].filter(
+    (task) => pathsByTaskId.get(task.taskId)?.size === 1
+  );
 }
 
 function reconcileTaskSnapshots(indexed: TaskRecord, recent: TaskRecord): TaskRecord {
