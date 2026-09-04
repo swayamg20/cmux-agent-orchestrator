@@ -1,5 +1,11 @@
+import { parse as parseYamlDocument } from "yaml";
+
 export function normalizePath(value: string): string {
   return value.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
+}
+
+export function parseYaml(yaml: string): unknown {
+  return parseYamlDocument(yaml);
 }
 
 export class Notice {

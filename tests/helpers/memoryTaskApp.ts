@@ -4,6 +4,8 @@ export interface MemoryTaskAppOptions {
   failFrontmatterWrites?: number;
   failFrontmatterWritesAfterMutation?: number;
   failCreatesAfterMutation?: number;
+  failCreateAttemptsAfterMutation?: readonly number[];
+  afterCreateMutation?: (path: string, file: TFile) => Promise<void>;
   beforeCreate?: () => Promise<void>;
   beforeCreateFolder?: (path: string) => Promise<void>;
   beforeFrontmatter?: () => Promise<void>;
@@ -19,6 +21,7 @@ export interface MemoryTaskApp {
   createdPaths: string[];
   frontmatterWriteAttempts: () => number;
   replaceFrontmatter(path: string, value: Record<string, unknown>): void;
+  replaceMarkdown(path: string, markdown: string): void;
   replaceFile(path: string, frontmatter?: Record<string, unknown>): TFile;
   renameFile(oldPath: string, newPath: string): TFile;
   renameFolder(oldPath: string, newPath: string): TFolder;
@@ -95,6 +98,7 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
           "created-at": jsonLine(markdown, "created-at"),
           "updated-at": jsonLine(markdown, "updated-at")
         });
+        await options.afterCreateMutation?.(path, created);
         if (options.removeAfterCreate) {
           queueMicrotask(() => {
             entries.delete(path);
@@ -102,7 +106,10 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
             if (parent instanceof TFolder && index >= 0) parent.children.splice(index, 1);
           });
         }
-        if (createAttempts <= (options.failCreatesAfterMutation ?? 0)) {
+        if (
+          createAttempts <= (options.failCreatesAfterMutation ?? 0) ||
+          options.failCreateAttemptsAfterMutation?.includes(createAttempts) === true
+        ) {
           throw new Error("simulated post-create vault failure");
         }
         return created;
@@ -145,6 +152,11 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
       const entry = entries.get(path);
       if (!(entry instanceof TFile)) throw new Error(`Missing task fixture at ${path}.`);
       cachedFrontmatter.set(entry, value);
+    },
+    replaceMarkdown: (path, markdown) => {
+      const entry = entries.get(path);
+      if (!(entry instanceof TFile)) throw new Error(`Missing task fixture at ${path}.`);
+      markdownByFile.set(entry, markdown);
     },
     replaceFile: (path, frontmatter) => {
       const previous = entries.get(path);

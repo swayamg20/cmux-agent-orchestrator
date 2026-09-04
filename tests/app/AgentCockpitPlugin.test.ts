@@ -21,7 +21,8 @@ const harness = vi.hoisted(() => ({
   controller: null as { dispose: () => void } | null,
   dispose: vi.fn(),
   initialize: vi.fn<() => Promise<void>>(),
-  notices: [] as string[]
+  notices: [] as string[],
+  observesTaskVaultPath: vi.fn<(path: string) => boolean>()
 }));
 
 vi.mock("obsidian", () => {
@@ -58,8 +59,8 @@ vi.mock("../../src/app/AgentCockpitController", () => ({
       harness.dispose();
     }
 
-    getLoadedTaskFolder(): null {
-      return null;
+    observesTaskVaultPath(path: string): boolean {
+      return harness.observesTaskVaultPath(path);
     }
 
     initialize(): Promise<void> {
@@ -96,7 +97,26 @@ describe("AgentCockpitPlugin lifecycle", () => {
     harness.controller = null;
     harness.dispose.mockReset();
     harness.initialize.mockReset().mockResolvedValue(undefined);
+    harness.observesTaskVaultPath.mockReset().mockReturnValue(false);
     harness.notices.length = 0;
+  });
+
+  it("forwards the event filter to every task path observed by the controller", async () => {
+    harness.observesTaskVaultPath.mockImplementation(
+      (path) => path === "Previous Folder/Tasks/pending.md"
+    );
+    const plugin = createPlugin();
+    await plugin.onload();
+    const taskFolderAffected = (
+      plugin as unknown as { taskFolderAffected: (path: string) => boolean }
+    ).taskFolderAffected.bind(plugin);
+
+    expect(taskFolderAffected("Previous Folder/Tasks/pending.md")).toBe(true);
+    expect(taskFolderAffected("Unrelated/note.md")).toBe(false);
+    expect(harness.observesTaskVaultPath).toHaveBeenNthCalledWith(
+      1,
+      "Previous Folder/Tasks/pending.md"
+    );
   });
 
   it("does not report a late initialization failure after unload", async () => {

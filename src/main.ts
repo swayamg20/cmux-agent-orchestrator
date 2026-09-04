@@ -6,7 +6,6 @@ import { PRODUCT_NAME } from "./identity";
 import { ProviderMetadataService } from "./providers/ProviderMetadataService";
 import { AutomaticProviderSessionResolver } from "./providers/identity/AutomaticProviderSessionResolver";
 import { AgentCockpitSettingsTab } from "./settings/AgentCockpitSettingsTab";
-import { pathAffectsTaskFolder } from "./tasks/TaskFolderEvents";
 import type {
   TaskInvalidationEvidence,
   TaskRenameEvidence
@@ -108,9 +107,7 @@ export default class AgentCockpitPlugin extends Plugin {
   }
 
   private taskFolderAffected(path: string): boolean {
-    const controller = this.controller;
-    const taskFolder = controller?.getLoadedTaskFolder() ?? null;
-    return taskFolder !== null && pathAffectsTaskFolder(path, taskFolder);
+    return this.controller?.observesTaskVaultPath(path) === true;
   }
 
   private reloadTasksFromVaultEvent(file: TAbstractFile): void {

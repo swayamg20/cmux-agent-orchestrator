@@ -1,6 +1,7 @@
 import { TFile, TFolder, type App } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
 import { TaskRepository } from "../../src/tasks/TaskRepository";
+import { createTaskMarkdown } from "../../src/tasks/TaskTemplate";
 import { createMemoryTaskApp } from "../helpers/memoryTaskApp";
 
 function file(path: string, extension = "md"): TFile {
@@ -15,6 +16,19 @@ function file(path: string, extension = "md"): TFile {
 
 function folder(path: string, children: Array<TFile | TFolder>): TFolder {
   return Object.assign(new TFolder(), { path, children });
+}
+
+function taskMarkdown(taskId: string, title = "Codex run · repository"): string {
+  return createTaskMarkdown({
+    taskId,
+    title,
+    workflowStatus: "active",
+    priority: "normal",
+    repository: "/repository",
+    branch: null,
+    worktree: null,
+    now: "2026-09-04T00:00:00.000Z"
+  });
 }
 
 describe("TaskRepository", () => {
@@ -56,6 +70,7 @@ describe("TaskRepository", () => {
   it("creates a deterministic task once and reuses it after the vault index catches up", async () => {
     const entries = new Map<string, TFile | TFolder>();
     const frontmatter = new Map<TFile, Record<string, unknown>>();
+    const markdownByFile = new Map<TFile, string>();
     const writes: string[] = [];
     const createFolder = async (path: string): Promise<void> => {
       const created = folder(path, []);
@@ -72,6 +87,7 @@ describe("TaskRepository", () => {
           writes.push(markdown);
           const created = file(path);
           entries.set(path, created);
+          markdownByFile.set(created, markdown);
           const parent = entries.get(path.split("/").slice(0, -1).join("/"));
           if (parent instanceof TFolder) parent.children.push(created);
           frontmatter.set(created, {
@@ -87,7 +103,8 @@ describe("TaskRepository", () => {
             "updated-at": "2026-09-04T00:00:00.000Z"
           });
           return created;
-        }
+        },
+        read: async (candidate: TFile) => markdownByFile.get(candidate) ?? ""
       },
       metadataCache: {
         getFileCache: (candidate: TFile) => ({ frontmatter: frontmatter.get(candidate) })
@@ -181,6 +198,75 @@ describe("TaskRepository", () => {
     expect(replacement).toMatchObject({ created: false, task: { taskId: options.taskId } });
     expect(memory.markdownWrites).toHaveLength(1);
     expect(memory.createdPaths).toEqual(["Agent Cockpit/Tasks/codex-run-repository.md"]);
+  });
+
+  it("does not report success when a concurrent vault writer creates the same task ID", async () => {
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let injectDuplicate = true;
+    let memory!: ReturnType<typeof createMemoryTaskApp>;
+    memory = createMemoryTaskApp({
+      afterCreateMutation: async () => {
+        if (!injectDuplicate) return;
+        injectDuplicate = false;
+        await memory.app.vault.create(
+          "Agent Cockpit/Tasks/racing-duplicate.md",
+          taskMarkdown(taskId, "Racing duplicate")
+        );
+      }
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+
+    await expect(repository.ensure({
+      taskId,
+      title: "Codex run · repository",
+      repository: "/repository"
+    })).rejects.toThrow("automatic task ID is duplicated");
+    expect(memory.markdownWrites).toHaveLength(2);
+    expect(repository.list()).toEqual([]);
+  });
+
+  it("does not trust a task write invalidated during post-create verification", async () => {
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const taskPath = "Agent Cockpit/Tasks/codex-run-repository.md";
+    const memory = createMemoryTaskApp();
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const readMarkdown = memory.app.vault.read.bind(memory.app.vault);
+    let invalidated = false;
+    vi.spyOn(memory.app.vault, "read").mockImplementation(async (file) => {
+      const markdown = await readMarkdown(file);
+      if (!invalidated && file.path === taskPath) {
+        invalidated = true;
+        memory.replaceMarkdown(taskPath, "# User replaced this task\n");
+        memory.replaceFrontmatter(taskPath, {});
+        repository.invalidateVaultEvents([{ file, path: file.path }], []);
+      }
+      return markdown;
+    });
+
+    await expect(repository.ensure({
+      taskId,
+      title: "Codex run · repository",
+      repository: "/repository"
+    })).rejects.toThrow("Task notes changed during verification");
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(repository.list()).toEqual([]);
+    expect(() => repository.findById(taskId)).toThrow("The linked task no longer exists.");
+  });
+
+  it("does not report success when the created task disappears before post-create verification", async () => {
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const taskPath = "Agent Cockpit/Tasks/codex-run-repository.md";
+    const memory = createMemoryTaskApp({ removeAfterCreate: true });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+
+    await expect(repository.ensure({
+      taskId,
+      title: "Codex run · repository",
+      repository: "/repository"
+    })).rejects.toThrow("could not be verified safely");
+    expect(memory.createdPaths).toEqual([taskPath]);
+    expect(memory.app.vault.getAbstractFileByPath(taskPath)).toBeNull();
+    expect(repository.list()).toEqual([]);
   });
 
   it("does not restore stale write-through state after leaving and returning to a task folder", async () => {
@@ -539,6 +625,514 @@ describe("TaskRepository", () => {
     expect(memory.createdPaths).toHaveLength(1);
   });
 
+  it("does not duplicate a deterministic task after an uncertain post-create failure", async () => {
+    let metadataVisible = false;
+    const memory = createMemoryTaskApp({
+      failCreatesAfterMutation: 1,
+      metadataVisible: () => metadataVisible
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+    vi.spyOn(memory.app.vault, "read").mockRejectedValueOnce(
+      new Error("simulated transient task read failure")
+    );
+
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "simulated post-create vault failure"
+    );
+    expect(memory.markdownWrites).toHaveLength(1);
+
+    const recovered = await repository.ensure(options);
+
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(memory.createdPaths).toHaveLength(1);
+    expect(recovered).toMatchObject({ created: false, task: { taskId: options.taskId } });
+
+    metadataVisible = true;
+    expect(repository.list()).toMatchObject([{ taskId: options.taskId }]);
+  });
+
+  it("retains uncertain task evidence when recovery is invalidated during its read", async () => {
+    let metadataVisible = false;
+    const memory = createMemoryTaskApp({
+      failCreatesAfterMutation: 1,
+      metadataVisible: () => metadataVisible
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const taskPath = "Agent Cockpit/Tasks/codex-run-repository.md";
+    const options = {
+      taskId,
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+    const readMarkdown = memory.app.vault.read.bind(memory.app.vault);
+    let readAttempts = 0;
+    vi.spyOn(memory.app.vault, "read").mockImplementation(async (file) => {
+      readAttempts += 1;
+      if (readAttempts === 1) throw new Error("simulated transient task read failure");
+      const markdown = await readMarkdown(file);
+      if (readAttempts === 2) {
+        memory.replaceMarkdown(taskPath, "# User replaced this task\n");
+        memory.replaceFrontmatter(taskPath, {});
+        metadataVisible = true;
+        repository.invalidateVaultEvents([{ file, path: file.path }], []);
+      }
+      return markdown;
+    });
+
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "simulated post-create vault failure"
+    );
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "Task notes changed during verification"
+    );
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(repository.list()).toEqual([]);
+    expect(() => repository.findById(taskId)).toThrow("The linked task no longer exists.");
+
+    await expect(repository.ensure(options)).resolves.toMatchObject({
+      created: true,
+      task: { taskId, file: { path: "Agent Cockpit/Tasks/codex-run-repository-2.md" } }
+    });
+    expect(memory.markdownWrites).toHaveLength(2);
+  });
+
+  it("keeps an unreadable uncertain task write fail-closed until it can be verified", async () => {
+    const memory = createMemoryTaskApp({
+      failCreatesAfterMutation: 1,
+      metadataVisible: () => false
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+    const read = vi.spyOn(memory.app.vault, "read");
+    read.mockRejectedValueOnce(new Error("simulated first task read failure"));
+
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "simulated post-create vault failure"
+    );
+    read.mockRejectedValueOnce(new Error("simulated retry task read failure"));
+
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "could not be verified safely"
+    );
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(memory.createdPaths).toHaveLength(1);
+
+    await expect(repository.ensure(options)).resolves.toMatchObject({
+      created: false,
+      task: { taskId: options.taskId }
+    });
+    expect(memory.markdownWrites).toHaveLength(1);
+  });
+
+  it("recovers an uncertain deterministic create across repository replacement", async () => {
+    const memory = createMemoryTaskApp({
+      failCreatesAfterMutation: 1,
+      metadataVisible: () => false
+    });
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+    vi.spyOn(memory.app.vault, "read").mockRejectedValueOnce(
+      new Error("simulated transient task read failure")
+    );
+
+    await expect(
+      new TaskRepository(memory.app, "Agent Cockpit/Tasks").ensure(options)
+    ).rejects.toThrow("simulated post-create vault failure");
+
+    const replacement = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    await expect(replacement.ensure(options)).resolves.toMatchObject({
+      created: false,
+      task: { taskId: options.taskId }
+    });
+    expect(memory.createdPaths).toEqual(["Agent Cockpit/Tasks/codex-run-repository.md"]);
+  });
+
+  it("does not duplicate an unresolved task while a different task folder is selected", async () => {
+    const memory = createMemoryTaskApp({
+      failCreatesAfterMutation: 1,
+      metadataVisible: () => false
+    });
+    const repository = new TaskRepository(memory.app, "Folder A");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+    vi.spyOn(memory.app.vault, "read").mockRejectedValueOnce(
+      new Error("simulated transient task read failure")
+    );
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "simulated post-create vault failure"
+    );
+
+    repository.setTaskFolder("Folder B");
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "could not be verified safely"
+    );
+    expect(memory.markdownWrites).toHaveLength(1);
+
+    repository.setTaskFolder("Folder A");
+    await expect(repository.ensure(options)).resolves.toMatchObject({
+      created: false,
+      task: { taskId: options.taskId }
+    });
+    expect(memory.markdownWrites).toHaveLength(1);
+  });
+
+  it("releases a cross-folder pending claim after its Markdown proves a different identity", async () => {
+    const memory = createMemoryTaskApp({
+      failCreatesAfterMutation: 1,
+      metadataVisible: () => false
+    });
+    const repository = new TaskRepository(memory.app, "Folder A");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+    vi.spyOn(memory.app.vault, "read").mockRejectedValueOnce(
+      new Error("simulated transient task read failure")
+    );
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "simulated post-create vault failure"
+    );
+    const oldPath = memory.createdPaths[0]!;
+    repository.setTaskFolder("Folder B");
+    expect(repository.observesVaultPath(oldPath)).toBe(true);
+    expect(repository.observesVaultPath("Folder B/new-task.md")).toBe(true);
+    expect(repository.observesVaultPath("Unrelated/note.md")).toBe(false);
+    memory.replaceMarkdown(
+      oldPath,
+      taskMarkdown("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "Different task")
+    );
+
+    const replacement = new TaskRepository(memory.app, "Folder B");
+    await expect(replacement.ensure(options)).resolves.toMatchObject({
+      created: true,
+      task: { taskId: options.taskId, file: { path: "Folder B/codex-run-repository.md" } }
+    });
+    expect(replacement.observesVaultPath(oldPath)).toBe(false);
+    expect(memory.markdownWrites).toHaveLength(2);
+  });
+
+  it("does not suffix-create over an unindexed deterministic task after restart", async () => {
+    let metadataVisible = false;
+    const memory = createMemoryTaskApp({ metadataVisible: () => metadataVisible });
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    await memory.app.vault.createFolder("Agent Cockpit");
+    await memory.app.vault.createFolder("Agent Cockpit/Tasks");
+    await memory.app.vault.create(
+      "Agent Cockpit/Tasks/codex-run-repository.md",
+      taskMarkdown(taskId).replace(/\n/g, "\r\n")
+    );
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+
+    await expect(repository.ensure({
+      taskId,
+      title: "Codex run · repository",
+      repository: "/repository"
+    })).rejects.toThrow("has not indexed it yet");
+    expect(memory.markdownWrites).toHaveLength(1);
+
+    metadataVisible = true;
+    await expect(repository.ensure({
+      taskId,
+      title: "Codex run · repository",
+      repository: "/repository"
+    })).resolves.toMatchObject({ created: false, task: { taskId } });
+    expect(memory.markdownWrites).toHaveLength(1);
+  });
+
+  it("does not reuse one indexed match while a second same-ID note is unindexed", async () => {
+    const hiddenPath = "Agent Cockpit/Tasks/hidden-copy.md";
+    const memory = createMemoryTaskApp({
+      metadataVisible: (file) => file.path !== hiddenPath
+    });
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    await memory.app.vault.createFolder("Agent Cockpit");
+    await memory.app.vault.createFolder("Agent Cockpit/Tasks");
+    await memory.app.vault.create(
+      "Agent Cockpit/Tasks/indexed-copy.md",
+      taskMarkdown(taskId, "Indexed copy")
+    );
+    await memory.app.vault.create(hiddenPath, taskMarkdown(taskId, "Hidden copy"));
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+
+    await expect(repository.ensure({
+      taskId,
+      title: "Codex run · repository",
+      repository: "/repository"
+    })).rejects.toThrow(/duplicated|has not indexed/);
+    expect(memory.markdownWrites).toHaveLength(2);
+  });
+
+  it("does not duplicate a same-ID note whose metadata cache is present but stale", async () => {
+    const memory = createMemoryTaskApp();
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const stalePath = "Agent Cockpit/Tasks/old-title.md";
+    await memory.app.vault.createFolder("Agent Cockpit");
+    await memory.app.vault.createFolder("Agent Cockpit/Tasks");
+    await memory.app.vault.create(stalePath, taskMarkdown(taskId, "Old title"));
+    memory.replaceFrontmatter(stalePath, {});
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+
+    await expect(repository.ensure({
+      taskId,
+      title: "Codex run · repository",
+      repository: "/repository"
+    })).rejects.toThrow("has not indexed it yet");
+    expect(memory.markdownWrites).toHaveLength(1);
+  });
+
+  it("does not trust a valid cached task identity when the Markdown identity changed", async () => {
+    const memory = createMemoryTaskApp();
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const cachedTaskId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const stalePath = "Agent Cockpit/Tasks/stale-valid-cache.md";
+    await memory.app.vault.createFolder("Agent Cockpit");
+    await memory.app.vault.createFolder("Agent Cockpit/Tasks");
+    await memory.app.vault.create(
+      stalePath,
+      taskMarkdown(cachedTaskId, "Cached identity")
+    );
+    memory.replaceMarkdown(stalePath, taskMarkdown(taskId, "Current identity"));
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+
+    await expect(repository.ensure({
+      taskId,
+      title: "Codex run · repository",
+      repository: "/repository"
+    })).rejects.toThrow("could not be verified safely");
+    expect(memory.markdownWrites).toHaveLength(1);
+  });
+
+  it("recognizes valid quoted YAML keys when checking an unindexed task identity", async () => {
+    const memory = createMemoryTaskApp({ metadataVisible: () => false });
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const quotedPath = "Agent Cockpit/Tasks/old-title.md";
+    await memory.app.vault.createFolder("Agent Cockpit");
+    await memory.app.vault.createFolder("Agent Cockpit/Tasks");
+    await memory.app.vault.create(quotedPath, taskMarkdown(taskId, "Old title"));
+    memory.replaceMarkdown(
+      quotedPath,
+      taskMarkdown(taskId, "Old title")
+        .replace(/^agent-cockpit:/m, '"agent-cockpit":')
+        .replace(/^task-id:/m, '"task-id":')
+    );
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+
+    await expect(repository.ensure({
+      taskId,
+      title: "Codex run · repository",
+      repository: "/repository"
+    })).rejects.toThrow("has not indexed it yet");
+    expect(memory.markdownWrites).toHaveLength(1);
+  });
+
+  it("fails closed when raw task frontmatter repeats an identity key", async () => {
+    const memory = createMemoryTaskApp({ metadataVisible: () => false });
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const ambiguousPath = "Agent Cockpit/Tasks/ambiguous.md";
+    await memory.app.vault.createFolder("Agent Cockpit");
+    await memory.app.vault.createFolder("Agent Cockpit/Tasks");
+    await memory.app.vault.create(ambiguousPath, taskMarkdown(taskId, "Ambiguous"));
+    memory.replaceMarkdown(
+      ambiguousPath,
+      taskMarkdown(taskId, "Ambiguous").replace(
+        /^task-id:.*$/m,
+        `task-id: "${taskId}"\n"task-id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"`
+      )
+    );
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+
+    await expect(repository.ensure({
+      taskId,
+      title: "Codex run · repository",
+      repository: "/repository"
+    })).rejects.toThrow("could not be verified safely");
+    expect(memory.markdownWrites).toHaveLength(1);
+  });
+
+  it("recovers an uncertain pending create after a same-folder Markdown rename", async () => {
+    const memory = createMemoryTaskApp({
+      failCreatesAfterMutation: 1,
+      metadataVisible: () => false
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+    vi.spyOn(memory.app.vault, "read").mockRejectedValueOnce(
+      new Error("simulated transient task read failure")
+    );
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "simulated post-create vault failure"
+    );
+    const originalPath = memory.createdPaths[0]!;
+    const renamedPath = "Agent Cockpit/Tasks/renamed-pending.md";
+    const renamed = memory.renameFile(originalPath, renamedPath);
+
+    repository.invalidateVaultEvents([], [{ file: renamed, oldPath: originalPath }]);
+
+    await expect(repository.ensure(options)).resolves.toMatchObject({
+      created: false,
+      task: { taskId: options.taskId, file: { path: renamedPath } }
+    });
+    expect(memory.markdownWrites).toHaveLength(1);
+  });
+
+  it("releases an uncertain pending create after its file is renamed out of the managed set", async () => {
+    const memory = createMemoryTaskApp({
+      failCreatesAfterMutation: 1,
+      metadataVisible: () => false
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+    vi.spyOn(memory.app.vault, "read").mockRejectedValueOnce(
+      new Error("simulated transient task read failure")
+    );
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "simulated post-create vault failure"
+    );
+    const originalPath = memory.createdPaths[0]!;
+    const renamed = memory.renameFile(originalPath, originalPath.replace(/\.md$/, ".txt"));
+
+    repository.invalidateVaultEvents([], [{ file: renamed, oldPath: originalPath }]);
+
+    await expect(repository.ensure(options)).resolves.toMatchObject({
+      created: true,
+      task: { taskId: options.taskId, file: { path: originalPath } }
+    });
+    expect(memory.markdownWrites).toHaveLength(2);
+  });
+
+  it("does not trust task content read from a file that moves during verification", async () => {
+    const memory = createMemoryTaskApp({ metadataVisible: () => false });
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const originalPath = "Agent Cockpit/Tasks/codex-run-repository.md";
+    await memory.app.vault.createFolder("Agent Cockpit");
+    await memory.app.vault.createFolder("Agent Cockpit/Tasks");
+    await memory.app.vault.create(originalPath, taskMarkdown(taskId));
+    const readTask = memory.app.vault.read.bind(memory.app.vault);
+    vi.spyOn(memory.app.vault, "read").mockImplementationOnce(async (file) => {
+      const markdown = await readTask(file);
+      memory.renameFile(originalPath, "Agent Cockpit/Tasks/moved-during-read.md");
+      return markdown;
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+
+    await expect(repository.ensure({
+      taskId,
+      title: "Codex run · repository",
+      repository: "/repository"
+    })).rejects.toThrow("could not be verified safely");
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(memory.createdPaths).toHaveLength(1);
+  });
+
+  it("uses the next filename when readable task content proves a title collision", async () => {
+    const memory = createMemoryTaskApp();
+    await memory.app.vault.createFolder("Agent Cockpit");
+    await memory.app.vault.createFolder("Agent Cockpit/Tasks");
+    await memory.app.vault.create(
+      "Agent Cockpit/Tasks/codex-run-repository.md",
+      taskMarkdown("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    );
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+
+    const result = await repository.ensure({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    });
+
+    expect(result).toMatchObject({ created: true });
+    expect(memory.createdPaths).toEqual([
+      "Agent Cockpit/Tasks/codex-run-repository.md",
+      "Agent Cockpit/Tasks/codex-run-repository-2.md"
+    ]);
+  });
+
+  it("recovers an uncertain write at the end of a filename collision chain", async () => {
+    const memory = createMemoryTaskApp({ failCreateAttemptsAfterMutation: [2] });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    await repository.create({ title: "Codex run · repository" });
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+    const readTask = memory.app.vault.read.bind(memory.app.vault);
+    let rejectSecondPathRead = true;
+    vi.spyOn(memory.app.vault, "read").mockImplementation(async (file) => {
+      if (file.path.endsWith("-2.md") && rejectSecondPathRead) {
+        rejectSecondPathRead = false;
+        throw new Error("simulated collision-path read failure");
+      }
+      return readTask(file);
+    });
+
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "simulated post-create vault failure"
+    );
+    await expect(repository.ensure(options)).resolves.toMatchObject({
+      created: false,
+      task: { taskId: options.taskId }
+    });
+    expect(memory.createdPaths).toEqual([
+      "Agent Cockpit/Tasks/codex-run-repository.md",
+      "Agent Cockpit/Tasks/codex-run-repository-2.md"
+    ]);
+  });
+
+  it("does not hide a pending duplicate behind one indexed task match", async () => {
+    const pendingPath = "Agent Cockpit/Tasks/codex-run-repository.md";
+    const memory = createMemoryTaskApp({
+      failCreatesAfterMutation: 1,
+      metadataVisible: (file) => file.path !== pendingPath
+    });
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const options = {
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Codex run · repository",
+      repository: "/repository"
+    };
+    vi.spyOn(memory.app.vault, "read").mockRejectedValueOnce(
+      new Error("simulated transient task read failure")
+    );
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "simulated post-create vault failure"
+    );
+    await memory.app.vault.create(
+      "Agent Cockpit/Tasks/indexed-duplicate.md",
+      taskMarkdown(options.taskId, "Indexed duplicate")
+    );
+
+    await expect(repository.ensure(options)).rejects.toThrow(
+      "automatic task ID is duplicated"
+    );
+    expect(memory.markdownWrites).toHaveLength(2);
+  });
+
   it("preserves the create error when the occupied path does not contain the intended task", async () => {
     const entries = new Map<string, TFile | TFolder>();
     const root = folder("Agent Cockpit/Tasks", []);
@@ -715,7 +1309,8 @@ describe("TaskRepository", () => {
     const app = {
       vault: {
         getAbstractFileByPath: (path: string) =>
-          path === root.path ? root : path === taskFile.path ? taskFile : null
+          path === root.path ? root : path === taskFile.path ? taskFile : null,
+        read: async () => taskMarkdown(taskId.toUpperCase(), "Existing task")
       },
       metadataCache: {
         getFileCache: () => ({ frontmatter })

@@ -536,6 +536,10 @@ export class AgentCockpitController {
     return this.settings?.taskFolder ?? null;
   }
 
+  observesTaskVaultPath(path: string): boolean {
+    return !this.disposed && this.taskRepository?.observesVaultPath(path) === true;
+  }
+
   async updateSettings(next: AgentCockpitSettings): Promise<void> {
     if (this.disposed) return;
     const parsed = parseSettings({ ...next, cmuxBinaryPath: validateBinarySetting(next.cmuxBinaryPath) });

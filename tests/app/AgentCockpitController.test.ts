@@ -190,8 +190,11 @@ describe("AgentCockpitController connection failures", () => {
     );
 
     expect(controller.getLoadedTaskFolder()).toBeNull();
+    expect(controller.observesTaskVaultPath("Agent Work/Tasks/example.md")).toBe(false);
     await controller.initialize();
     expect(controller.getLoadedTaskFolder()).toBe("Agent Work/Tasks");
+    expect(controller.observesTaskVaultPath("Agent Work/Tasks/example.md")).toBe(true);
+    expect(controller.observesTaskVaultPath("Unrelated/example.md")).toBe(false);
     controller.dispose();
   });
 
@@ -3993,6 +3996,58 @@ describe("AgentCockpitController connection failures", () => {
     await controller.waitForBackgroundWork();
     expect(saveAttempts).toBe(3);
     expect(markdownWrites).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("recovers an uncertain automatic task create without writing a duplicate note", async () => {
+    let persisted: unknown;
+    let metadataVisible = false;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const memory = memoryTaskApp({
+      failCreatesAfterMutation: 1,
+      metadataVisible: () => metadataVisible
+    });
+    const readTask = memory.app.vault.read.bind(memory.app.vault);
+    let allowTaskVerification = false;
+    vi.spyOn(memory.app.vault, "read").mockImplementation(async (file) => {
+      if (!allowTaskVerification) throw new Error("simulated transient task read failure");
+      return readTask(file);
+    });
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_600)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().tasks).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+
+    allowTaskVerification = true;
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(memory.createdPaths).toEqual([
+      "Agent Cockpit/Tasks/codex-run-repository.md"
+    ]);
+    expect(controller.store.getState().tasks).toMatchObject([{ runCount: 1 }]);
+    expect(controller.store.getState().bindings).toHaveLength(1);
+    expect(controller.store.getState().runs).toHaveLength(1);
+
+    metadataVisible = true;
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+    expect(memory.markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().tasks).toHaveLength(1);
     controller.dispose();
   });
 });
