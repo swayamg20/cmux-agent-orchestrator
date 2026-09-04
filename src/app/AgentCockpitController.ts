@@ -86,6 +86,8 @@ export class AgentCockpitController {
   private metadataWork: Promise<void> = Promise.resolve();
   private identityWork: Promise<void> = Promise.resolve();
   private automaticTrackingWork: Promise<void> = Promise.resolve();
+  private settingsUpdateWork: Promise<void> = Promise.resolve();
+  private pendingSettingsUpdates = 0;
   private automaticTrackingGeneration = 0;
   private readonly reportedAutomaticTrackingIssues = new Map<string, string>();
   private automaticTrackingPass: AutomaticTrackingPass | null = null;
@@ -450,32 +452,32 @@ export class AgentCockpitController {
   }
 
   async updateSettings(next: AgentCockpitSettings): Promise<void> {
-    const current = this.requireSettings();
     const parsed = parseSettings({ ...next, cmuxBinaryPath: validateBinarySetting(next.cmuxBinaryPath) });
-    const cmuxBinaryChanged = current.cmuxBinaryPath !== parsed.cmuxBinaryPath;
-    const taskFolderChanged = current.taskFolder !== parsed.taskFolder;
-    const suspendingAutomaticTracking =
-      current.autoTrackAgentRuns &&
-      (!parsed.autoTrackAgentRuns || cmuxBinaryChanged || taskFolderChanged);
-    if (suspendingAutomaticTracking) {
-      // Pause immediately so identity and metadata work that finishes while
-      // connection or storage settings are being saved cannot use stale context.
-      this.settings = { ...current, autoTrackAgentRuns: false };
-      this.cancelAutomaticTaskTracking();
-    }
+    this.pendingSettingsUpdates += 1;
+    this.cancelAutomaticTaskTracking();
+    const operation = this.settingsUpdateWork
+      .catch(() => undefined)
+      .then(() => this.applySettingsUpdate(parsed));
+    this.settingsUpdateWork = operation.then(
+      () => undefined,
+      () => undefined
+    );
     try {
-      await this.bindings.updateSettings(parsed);
-    } catch (error) {
-      if (suspendingAutomaticTracking) {
-        this.settings = current;
-        this.cancelAutomaticTaskTracking();
+      await operation;
+    } finally {
+      this.pendingSettingsUpdates -= 1;
+      if (this.pendingSettingsUpdates === 0 && this.settings?.autoTrackAgentRuns === true) {
         this.scheduleAutomaticTaskTracking();
       }
-      throw error;
     }
+  }
+
+  private async applySettingsUpdate(parsed: AgentCockpitSettings): Promise<void> {
+    const current = this.requireSettings();
+    const cmuxBinaryChanged = current.cmuxBinaryPath !== parsed.cmuxBinaryPath;
+    await this.bindings.updateSettings(parsed);
     this.settings = parsed;
     this.requireTaskRepository().setTaskFolder(parsed.taskFolder);
-    let connectionReadyForTracking = true;
     if (cmuxBinaryChanged) {
       this.cancelIdentityResolution();
       this.automaticProviderMappings = [];
@@ -484,13 +486,9 @@ export class AgentCockpitController {
       this.client = null;
       this.focusAction = null;
       await this.connect();
-      connectionReadyForTracking = this.client !== null;
-      if (connectionReadyForTracking) await this.refreshNow();
+      if (this.client !== null) await this.refreshNow();
     }
     await this.reloadTasks();
-    if (parsed.autoTrackAgentRuns && connectionReadyForTracking) {
-      this.scheduleAutomaticTaskTracking();
-    }
   }
 
   async testConnection(): Promise<void> {
@@ -794,7 +792,13 @@ export class AgentCockpitController {
   }
 
   private scheduleAutomaticTaskTracking(): void {
-    if (this.disposed || this.settings?.autoTrackAgentRuns !== true) return;
+    if (
+      this.disposed ||
+      this.pendingSettingsUpdates > 0 ||
+      this.settings?.autoTrackAgentRuns !== true
+    ) {
+      return;
+    }
     const generation = this.automaticTrackingGeneration;
     this.automaticTrackingWork = this.automaticTrackingWork
       .catch(() => undefined)
@@ -1073,6 +1077,7 @@ export class AgentCockpitController {
     const state = this.store.getState();
     return (
       !this.disposed &&
+      this.pendingSettingsUpdates === 0 &&
       this.settings?.autoTrackAgentRuns === true &&
       generation === this.automaticTrackingGeneration &&
       state.connection.status === "connected" &&

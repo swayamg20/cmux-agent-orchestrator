@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file.
 - Refuse to reuse a persisted run that belongs to another task, repairing the binding with a new task-owned run while retaining history.
 - Ignore task-note vault events until plugin settings finish loading, preventing startup races from throwing before initialization.
 - Keep a successful task-note write authoritative while Obsidian's metadata index catches up, preventing Kanban state or run counts from snapping backward.
+- Serialize overlapping settings transitions and pause automatic tracking until the latest save settles, preventing a superseded enable request from creating an unwanted task after opt-out.
 - Hide every duplicated Markdown task identity from the Work board and discard stale write-through identity when indexed frontmatter proves that the same file changed IDs.
 - Recover an ambiguously failed task-note creation only when exact Markdown read-back proves that the intended file was written.
 - Recover an ambiguously failed legacy-data migration only when exact plugin-data read-back proves that the normalized import persisted.

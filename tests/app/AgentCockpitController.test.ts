@@ -2033,6 +2033,86 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("does not start automatic tracking from a superseded overlapping settings save", async () => {
+    let persisted: unknown = { settings: { autoTrackAgentRuns: false } };
+    let releaseFirstSave: (() => void) | undefined;
+    let markFirstSaveStarted: (() => void) | undefined;
+    const firstSaveStarted = new Promise<void>((resolve) => {
+      markFirstSaveStarted = resolve;
+    });
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    let releaseSecondSave: (() => void) | undefined;
+    let markSecondSaveStarted: (() => void) | undefined;
+    const secondSaveStarted = new Promise<void>((resolve) => {
+      markSecondSaveStarted = resolve;
+    });
+    const secondSaveGate = new Promise<void>((resolve) => {
+      releaseSecondSave = resolve;
+    });
+    let saveCount = 0;
+    let taskCreateAttempts = 0;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        saveCount += 1;
+        if (saveCount === 1) {
+          markFirstSaveStarted?.();
+          await firstSaveGate;
+        } else if (saveCount === 2) {
+          markSecondSaveStarted?.();
+          await secondSaveGate;
+        }
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const { app, markdownWrites } = memoryTaskApp({
+      beforeCreate: async () => {
+        taskCreateAttempts += 1;
+      }
+    });
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(4_640)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    const enable = controller.updateSettings({
+      ...controller.getSettings(),
+      autoTrackAgentRuns: true
+    });
+    await firstSaveStarted;
+    const remainDisabled = controller.updateSettings({
+      ...controller.getSettings(),
+      autoTrackAgentRuns: false
+    });
+    releaseFirstSave?.();
+    await secondSaveStarted;
+    await enable;
+    for (let step = 0; step < 50 && taskCreateAttempts === 0; step += 1) {
+      await Promise.resolve();
+    }
+
+    expect(taskCreateAttempts).toBe(0);
+    expect(markdownWrites).toEqual([]);
+
+    releaseSecondSave?.();
+    await remainDisabled;
+    await controller.waitForBackgroundWork();
+
+    expect(controller.getSettings().autoTrackAgentRuns).toBe(false);
+    expect(markdownWrites).toEqual([]);
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toEqual([]);
+    controller.dispose();
+  });
+
   it("does not bind stale automatic work after topology fails and resumes from a fresh snapshot", async () => {
     let persisted: unknown;
     let snapshotCalls = 0;
