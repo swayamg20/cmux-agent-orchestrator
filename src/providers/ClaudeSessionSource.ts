@@ -125,7 +125,7 @@ export class ClaudeSessionSource implements ProviderSessionSource {
       const details = await stat(filename);
       if (!details.isFile()) return null;
       const content = await readBoundedEdges(filename, details.size, signal);
-      const title = decodeClaudeTitleRecords(content, sessionId);
+      const title = decodeClaudeTitleRecords(content, sessionId, cwd);
       return title ? { ...title, updatedAt: details.mtimeMs } : null;
     } catch (error) {
       if (isAbort(error)) throw error;
@@ -166,16 +166,23 @@ export function decodeClaudeSession(
 
 export function decodeClaudeTitleRecords(
   content: string,
-  sessionId: string
+  sessionId: string,
+  cwd?: string
 ): Pick<ClaudeTitleMetadata, "title" | "titleSource"> | null {
   assertProviderSessionId(sessionId);
+  if (cwd !== undefined) assertAbsoluteCwd(cwd);
   let aiTitle: string | null = null;
   let customTitle: string | null = null;
+  let exactCwdObserved = cwd === undefined;
   for (const line of content.split(/\r?\n/)) {
-    if (!/"type"\s*:\s*"(?:ai-title|custom-title)"/.test(line)) continue;
+    const isTitleRecord = /"type"\s*:\s*"(?:ai-title|custom-title)"/.test(line);
+    const mayContainCwd = cwd !== undefined && /"cwd"\s*:/.test(line);
+    if (!isTitleRecord && !mayContainCwd) continue;
     try {
       const raw = record(JSON.parse(line) as unknown);
       if (!raw || raw.sessionId !== sessionId) continue;
+      if (cwd !== undefined && raw.cwd === cwd) exactCwdObserved = true;
+      if (!isTitleRecord) continue;
       if (raw.type === "custom-title") {
         customTitle = sanitizeProviderTitle(raw.customTitle) ?? customTitle;
       } else if (raw.type === "ai-title") {
@@ -185,6 +192,7 @@ export function decodeClaudeTitleRecords(
       // Edge chunks may begin or end in the middle of a JSONL record.
     }
   }
+  if (!exactCwdObserved) return null;
   if (customTitle) return { title: customTitle, titleSource: "explicit-name" };
   if (aiTitle) return { title: aiTitle, titleSource: "ai-title" };
   return null;
