@@ -1,4 +1,4 @@
-# cmux Agent Orchestrator v0.1 Design Brief
+# cmux Agent Orchestrator Design Brief
 
 ## Feature summary
 
@@ -17,7 +17,7 @@ Recognize the session or task that needs human judgment and focus its exact exis
 
 ## Scope
 
-Production-ready desktop plugin surface covering Needs My Attention, Work Kanban, Live Sessions, settings, empty/loading/error states, and the explicit focus/task-linking flows. Mobile and embedded terminal interaction are excluded.
+Production-ready desktop plugin surface covering Work attention and the durable board, Agent runs, cmux, settings, empty/loading/error states, and the explicit focus/task-linking flows. Mobile and embedded terminal interaction are excluded.
 
 ## Layout strategy
 
