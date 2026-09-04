@@ -78,6 +78,7 @@ export class AgentCockpitController {
   private readonly attentionEngine = new AttentionEngine();
   private readonly previewScheduler = new PreviewScheduler(2);
   private readonly previewCache = new PreviewCache();
+  private readonly previewSurfaceSignatures = new Map<string, string>();
   private readonly providerClassifier = new ProviderClassifier(this.detector, this.previewScheduler);
   private readonly evidence = new CmuxEvidenceService(this.detector);
   private readonly refreshCoordinator = new RefreshCoordinator();
@@ -206,6 +207,7 @@ export class AgentCockpitController {
         new Notice("The cmux surface changed while its preview was loading. The stale preview was discarded.");
         return;
       }
+      this.previewSurfaceSignatures.set(current.key, signature);
       this.previewCache.set(current.key, preview);
       this.evidence.recordPreview(current.key, preview);
       const detection = this.providerClassifier.detect(current, preview.text);
@@ -515,6 +517,7 @@ export class AgentCockpitController {
     this.providerMetadata.dispose();
     this.attentionEngine.clear();
     this.previewCache.clear();
+    this.previewSurfaceSignatures.clear();
     this.evidence.clear();
     this.providerClassifier.clear();
     this.reportedAutomaticTrackingIssues.clear();
@@ -650,23 +653,42 @@ export class AgentCockpitController {
 
   private recomputeSessions(): void {
     const state = this.store.getState();
-    if (state.snapshot === null) {
+    const snapshot = state.snapshot;
+    if (snapshot === null) {
       this.store.update({ sessions: [], attention: [] });
       return;
     }
-    this.syncCurrentEvidence(state.snapshot, state.notifications);
-    const sessions = projectLiveSessions({
-      snapshot: state.snapshot,
-      notifications: state.notifications,
-      bindings: state.bindings,
-      providerMappings: this.bindings.listProviderSessions(),
-      automaticProviderMappings: this.automaticProviderMappings,
-      providerMetadata: this.providerMetadata.evidence,
-      detector: this.detector,
-      providerEvidence: this.providerClassifier.evidence,
-      previewFor: (key) => this.previewCache.peek(key),
-      evidenceFor: (key) => this.evidence.list(key)
-    });
+    this.syncCurrentEvidence(snapshot, state.notifications);
+    const project = (): LiveSession[] =>
+      projectLiveSessions({
+        snapshot,
+        notifications: state.notifications,
+        bindings: state.bindings,
+        providerMappings: this.bindings.listProviderSessions(),
+        automaticProviderMappings: this.automaticProviderMappings,
+        providerMetadata: this.providerMetadata.evidence,
+        detector: this.detector,
+        providerEvidence: this.providerClassifier.evidence,
+        previewFor: (key) => this.previewCache.peek(key),
+        evidenceFor: (key) => this.evidence.list(key)
+      });
+    let sessions = project();
+    const invalidatedPreviews = new Set<string>();
+    for (const session of sessions) {
+      const storedSignature = this.previewSurfaceSignatures.get(session.key);
+      if (
+        storedSignature !== undefined &&
+        storedSignature !== previewSurfaceSignature(session)
+      ) {
+        this.previewSurfaceSignatures.delete(session.key);
+        this.previewCache.delete(session.key);
+        invalidatedPreviews.add(session.key);
+      }
+    }
+    if (invalidatedPreviews.size > 0) {
+      this.evidence.clearPreviews(invalidatedPreviews);
+      sessions = project();
+    }
     const attention = this.attentionEngine.build(
       sessions,
       state.tasks,
@@ -688,9 +710,15 @@ export class AgentCockpitController {
     );
     this.evidence.clearProviders(invalidatedProviders);
     this.evidence.clearPreviews(invalidatedProviders);
-    for (const key of invalidatedProviders) this.previewCache.delete(key);
+    for (const key of invalidatedProviders) {
+      this.previewCache.delete(key);
+      this.previewSurfaceSignatures.delete(key);
+    }
     const liveKeys = this.evidence.sync(snapshot, notifications, notificationObservedAt);
     this.previewCache.retain(liveKeys);
+    for (const key of this.previewSurfaceSignatures.keys()) {
+      if (!liveKeys.has(key)) this.previewSurfaceSignatures.delete(key);
+    }
     return liveKeys;
   }
 
@@ -1429,13 +1457,17 @@ function providerSurfaceIdentities(snapshot: CmuxSnapshot): ProviderSurfaceIdent
 }
 
 function previewSurfaceSignature(session: LiveSession): string {
-  const exactIdentity = exactTrackableIdentity(session);
+  const providerSessionId =
+    (session.provider.provider === "claude" || session.provider.provider === "codex") &&
+    session.provider.sessionId !== null
+      ? normalizeCanonicalUuid(session.provider.sessionId)
+      : null;
   return JSON.stringify([
     session.surfaceTitle,
     session.surfaceType,
     session.currentDirectory,
-    exactIdentity?.provider ?? null,
-    exactIdentity?.sessionId ?? null
+    providerSessionId === null ? null : session.provider.provider,
+    providerSessionId
   ]);
 }
 

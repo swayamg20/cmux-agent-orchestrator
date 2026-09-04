@@ -463,6 +463,72 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("clears a cached preview when a different exact provider session reuses the surface", async () => {
+    let observedAt = 2_000;
+    let providerSessionId = "55555555-5555-4555-8555-555555555555";
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => ({
+        checkedAt: currentSnapshot.observedAt + 1,
+        nativeLifecycleAvailable: false,
+        issues: [],
+        mappings: [{
+          workspaceId: "22222222-2222-4222-8222-222222222222",
+          paneId: "33333333-3333-4333-8333-333333333333",
+          surfaceId: "44444444-4444-4444-8444-444444444444",
+          provider: "codex",
+          providerSessionId,
+          matchSource: "codex-writer-lock",
+          confidence: "high",
+          explanation: "Verified exact writer identity.",
+          observedAt: currentSnapshot.observedAt + 1
+        }],
+        lifecycle: []
+      }),
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(observedAt),
+      snapshot: async () => snapshot(++observedAt),
+      readPreview: async (target) => ({
+        ...target,
+        text: "output from the first provider conversation",
+        observedAt,
+        truncated: false
+      })
+    };
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService(),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    await controller.loadPreview(controller.store.getState().sessions[0]!);
+    expect(controller.store.getState().sessions[0]).toMatchObject({
+      provider: { sessionId: "55555555-5555-4555-8555-555555555555" },
+      preview: { text: "output from the first provider conversation" }
+    });
+    expect(controller.store.getState().tasks).toHaveLength(1);
+
+    providerSessionId = "66666666-6666-4666-8666-666666666666";
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().sessions[0]).toMatchObject({
+      provider: { sessionId: "66666666-6666-4666-8666-666666666666" },
+      preview: null
+    });
+    expect(controller.store.getState().tasks).toHaveLength(2);
+    controller.dispose();
+  });
+
   it("re-probes and fully loads the cockpit after access setup succeeds", async () => {
     let clientAttempts = 0;
     let snapshotCalls = 0;
