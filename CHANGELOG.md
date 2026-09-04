@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Automatically create one neutral Active Work task for each newly discovered, uniquely resolved Claude or Codex provider session.
+- Reconnect an exact provider conversation to its existing task when its previous cmux surface has disappeared, without creating another run.
 - Show the memory-only provider conversation title on its live Work card while keeping automatically written Markdown free of conversation and terminal titles.
 - Add a default-on setting to disable creation of new automatic tasks without changing existing tasks or running agents.
 
@@ -23,6 +24,7 @@ All notable changes to this project will be documented in this file.
 - Ignore saved identity claims whose complete canonical cmux tuple is absent so stale surfaces cannot shadow fresh exact evidence.
 - Canonicalize cmux, task, binding, run, and provider UUID casing across CLI, process, Markdown, and plugin-data boundaries so case-only representations cannot bypass uniqueness or produce false missing/focus results.
 - Preserve the strongest agreeing identity proof when newer cmux detection and exact local process evidence describe the same provider session.
+- Relocate a stale binding only when its complete old cmux target is absent and one unique high-confidence live surface proves the same canonical provider session.
 
 ## [0.2.0] - 2026-09-03
 

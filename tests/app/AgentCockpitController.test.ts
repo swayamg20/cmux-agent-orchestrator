@@ -726,6 +726,104 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("reconnects an exact provider conversation to its existing task after its surface changes", async () => {
+    let persisted: unknown;
+    let currentSnapshot = snapshot(2_000);
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const resolver: ProviderSessionResolver = {
+      resolve: async (nextSnapshot) => {
+        const workspace = nextSnapshot.windows[0]!.workspaces[0]!;
+        const pane = workspace.panes[0]!;
+        const surface = pane.surfaces[0]!;
+        return {
+          checkedAt: nextSnapshot.observedAt + 1,
+          nativeLifecycleAvailable: false,
+          issues: [],
+          mappings: [
+            {
+              workspaceId: workspace.id,
+              paneId: pane.id,
+              surfaceId: surface.id,
+              provider: "codex",
+              providerSessionId: "55555555-5555-4555-8555-555555555555",
+              matchSource: "codex-writer-lock",
+              confidence: "high",
+              explanation: "Verified exact writer identity.",
+              observedAt: nextSnapshot.observedAt + 1
+            }
+          ],
+          lifecycle: []
+        };
+      },
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(2_000),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const { app, markdownWrites } = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const originalBinding = controller.store.getState().bindings[0]!;
+    const originalRun = controller.store.getState().runs[0]!;
+    expect(markdownWrites).toHaveLength(1);
+
+    currentSnapshot = snapshot(2_100);
+    const workspace = currentSnapshot.windows[0]!.workspaces[0]!;
+    const pane = workspace.panes[0]!;
+    const surface = pane.surfaces[0]!;
+    workspace.id = "66666666-6666-4666-8666-666666666666";
+    currentSnapshot.windows[0]!.selectedWorkspaceId = workspace.id;
+    pane.id = "77777777-7777-4777-8777-777777777777";
+    pane.selectedSurfaceId = "88888888-8888-4888-8888-888888888888";
+    surface.id = pane.selectedSurfaceId;
+    surface.paneId = pane.id;
+
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().tasks).toHaveLength(1);
+    expect(markdownWrites).toHaveLength(1);
+    expect(controller.store.getState().bindings).toMatchObject([
+      {
+        bindingId: originalBinding.bindingId,
+        runId: originalBinding.runId,
+        taskId: originalBinding.taskId,
+        workspaceId: workspace.id,
+        paneId: pane.id,
+        surfaceId: surface.id
+      }
+    ]);
+    expect(controller.store.getState().runs).toMatchObject([
+      {
+        runId: originalRun.runId,
+        taskId: originalRun.taskId,
+        firstAttachedAt: originalRun.firstAttachedAt
+      }
+    ]);
+    expect(controller.store.getState().tasks[0]?.runCount).toBe(1);
+    expect(controller.store.getState().sessions[0]?.linkedTaskId).toBe(originalBinding.taskId);
+    expect(
+      controller.store.getState().attention.some((item) =>
+        item.reasons.some((reason) => reason.kind === "linked-surface-missing")
+      )
+    ).toBe(false);
+    controller.dispose();
+  });
+
   it("tracks an exact session before optional provider-title metadata finishes loading", async () => {
     let persisted: unknown;
     let finishMetadata: ((sessions: []) => void) | undefined;

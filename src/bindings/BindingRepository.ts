@@ -600,7 +600,12 @@ function isRelocateBindingInput(value: RelocateBindingInput): boolean {
     ids.every(isCanonicalUuid) &&
     (value.provider === "claude" || value.provider === "codex") &&
     validDate(value.relocatedAt) &&
-    normalizeCanonicalUuid(value.fromSurfaceId) !== normalizeCanonicalUuid(value.toSurfaceId) &&
+    [value.fromWorkspaceId, value.fromPaneId, value.fromSurfaceId]
+      .map((id) => normalizeCanonicalUuid(id))
+      .join(":") !==
+      [value.toWorkspaceId, value.toPaneId, value.toSurfaceId]
+        .map((id) => normalizeCanonicalUuid(id))
+        .join(":") &&
     new Set([
       normalizeCanonicalUuid(value.fromWorkspaceId),
       normalizeCanonicalUuid(value.fromPaneId),

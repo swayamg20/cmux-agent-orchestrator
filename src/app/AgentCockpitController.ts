@@ -4,6 +4,7 @@ import { validateBinarySetting, validateBindingIdentity } from "../actions/valid
 import { AgentDetector } from "../agents/AgentDetector";
 import { ProviderClassifier } from "../agents/ProviderClassifier";
 import { BindingRepository } from "../bindings/BindingRepository";
+import type { BindingRecord } from "../bindings/types";
 import { CMUX_SETUP_CLIPBOARD_TEXT } from "../cmux/accessSetup";
 import { CmuxClient } from "../cmux/CmuxClient";
 import {
@@ -681,7 +682,9 @@ export class AgentCockpitController {
   private async reconcileAutomaticTasks(generation: number): Promise<void> {
     if (!this.automaticTrackingAllowed(generation) || this.taskRepository === null) return;
 
-    let changed = await this.repairAutomaticRunCounts(generation);
+    const relocated = await this.relocateResumedProviderSessions(generation);
+    let changed = relocated > 0;
+    changed = (await this.repairAutomaticRunCounts(generation)) || changed;
     if (!this.automaticTrackingAllowed(generation)) {
       if (changed) this.publishAutomaticTrackingState();
       return;
@@ -759,6 +762,100 @@ export class AgentCockpitController {
         `Automatically tracked ${String(tracked)} exact agent ${tracked === 1 ? "run" : "runs"} on the Work board.`
       );
     }
+    if (relocated > 0) {
+      new Notice(
+        `Reconnected ${String(relocated)} exact agent ${relocated === 1 ? "run" : "runs"} to existing Work ${relocated === 1 ? "task" : "tasks"}.`
+      );
+    }
+  }
+
+  private async relocateResumedProviderSessions(generation: number): Promise<number> {
+    const repository = this.taskRepository;
+    if (repository === null) return 0;
+    const sessions = this.store.getState().sessions;
+    const bindingsByProviderSession = new Map<string, BindingRecord[]>();
+    for (const binding of this.bindings.list()) {
+      if (
+        (binding.provider !== "claude" && binding.provider !== "codex") ||
+        binding.providerSessionId === null ||
+        !isCanonicalUuid(binding.providerSessionId)
+      ) {
+        continue;
+      }
+      const key = providerSessionKey(binding.provider, binding.providerSessionId);
+      const group = bindingsByProviderSession.get(key) ?? [];
+      group.push(binding);
+      bindingsByProviderSession.set(key, group);
+    }
+
+    let relocated = 0;
+    for (const [identityKey, bindings] of bindingsByProviderSession) {
+      if (!this.automaticTrackingAllowed(generation)) break;
+      if (bindings.length !== 1) continue;
+      const binding = bindings[0]!;
+      const provider = binding.provider;
+      const providerSessionId = normalizeCanonicalUuid(binding.providerSessionId ?? "");
+      if ((provider !== "claude" && provider !== "codex") || providerSessionId === null) {
+        continue;
+      }
+      const oldSurfaceStillExists = sessions.some(
+        (session) =>
+          canonicalUuidEquals(session.workspaceId, binding.workspaceId) &&
+          canonicalUuidEquals(session.paneId, binding.paneId) &&
+          canonicalUuidEquals(session.surfaceId, binding.surfaceId)
+      );
+      if (oldSurfaceStillExists) continue;
+
+      const matches = sessions.filter((session) => {
+        const identity = exactTrackableIdentity(session);
+        return (
+          identity !== null &&
+          providerSessionKey(identity.provider, identity.sessionId) === identityKey &&
+          session.linkedTaskId === null
+        );
+      });
+      if (matches.length !== 1) continue;
+
+      const issueKey = `${identityKey}:relocation`;
+      try {
+        let current = this.resolveUniqueUnlinkedProviderSession(
+          matches[0]!,
+          provider,
+          providerSessionId
+        );
+        if (current === null) continue;
+        const task = repository.findById(binding.taskId);
+        validateBindingIdentity(task.taskId, current);
+
+        // Re-resolve immediately before the machine-local binding mutation.
+        current = this.resolveUniqueUnlinkedProviderSession(
+          current,
+          provider,
+          providerSessionId
+        );
+        if (current === null) continue;
+        const relocatedAt = new Date().toISOString();
+        await this.bindings.relocateProviderSession({
+          bindingId: binding.bindingId,
+          runId: binding.runId,
+          taskId: binding.taskId,
+          provider,
+          providerSessionId,
+          fromWorkspaceId: binding.workspaceId,
+          fromPaneId: binding.paneId,
+          fromSurfaceId: binding.surfaceId,
+          toWorkspaceId: current.workspaceId,
+          toPaneId: current.paneId,
+          toSurfaceId: current.surfaceId,
+          relocatedAt
+        });
+        relocated += 1;
+        this.clearAutomaticTrackingIssues(issueKey);
+      } catch (error) {
+        this.reportAutomaticTrackingIssue(issueKey, error);
+      }
+    }
+    return relocated;
   }
 
   private async repairAutomaticRunCounts(generation: number): Promise<boolean> {
@@ -817,20 +914,32 @@ export class AgentCockpitController {
   }
 
   private resolveCurrentAutomaticCandidate(candidate: AutomaticTrackCandidate): LiveSession | null {
+    return this.resolveUniqueUnlinkedProviderSession(
+      candidate.session,
+      candidate.provider,
+      candidate.providerSessionId
+    );
+  }
+
+  private resolveUniqueUnlinkedProviderSession(
+    original: LiveSession,
+    provider: "claude" | "codex",
+    providerSessionId: string
+  ): LiveSession | null {
     const state = this.store.getState();
     const current = state.sessions.find(
       (session) =>
-        canonicalUuidEquals(session.workspaceId, candidate.session.workspaceId) &&
-        canonicalUuidEquals(session.paneId, candidate.session.paneId) &&
-        canonicalUuidEquals(session.surfaceId, candidate.session.surfaceId)
+        canonicalUuidEquals(session.workspaceId, original.workspaceId) &&
+        canonicalUuidEquals(session.paneId, original.paneId) &&
+        canonicalUuidEquals(session.surfaceId, original.surfaceId)
     );
     if (current === undefined || current.linkedTaskId !== null) return null;
 
     const identity = exactTrackableIdentity(current);
     if (
       identity === null ||
-      identity.provider !== candidate.provider ||
-      identity.sessionId !== candidate.providerSessionId
+      identity.provider !== provider ||
+      identity.sessionId !== normalizeCanonicalUuid(providerSessionId)
     ) {
       return null;
     }
@@ -838,8 +947,8 @@ export class AgentCockpitController {
     const matchingSurfaces = state.sessions.filter((session) => {
       const other = exactTrackableIdentity(session);
       return (
-        other?.provider === candidate.provider &&
-        other.sessionId === candidate.providerSessionId
+        other?.provider === provider &&
+        other.sessionId === identity.sessionId
       );
     });
     return matchingSurfaces.length === 1 ? current : null;
