@@ -258,6 +258,50 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("drops stale heuristic provider evidence when a live surface identity changes", async () => {
+    let observedAt = 0;
+    let surfaceTitle = "repository";
+    let previewCalls = 0;
+    const transport: CmuxTransport = {
+      ...connectedTransport(observedAt),
+      snapshot: async () => {
+        const current = snapshot(++observedAt);
+        current.windows[0]!.workspaces[0]!.panes[0]!.surfaces[0]!.title = surfaceTitle;
+        return current;
+      },
+      readPreview: async (target) => {
+        previewCalls += 1;
+        return {
+          ...target,
+          text: previewCalls === 1 ? "• Ran npm test" : "plain shell output",
+          observedAt,
+          truncated: false
+        };
+      }
+    };
+    const app = {
+      vault: {
+        getAbstractFileByPath: () => null
+      }
+    } as unknown as App;
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(app, plugin, async () => new CmuxClient(transport));
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().sessions[0]?.provider.provider).toBe("codex");
+
+    surfaceTitle = "new command";
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+    expect(previewCalls).toBe(2);
+    expect(controller.store.getState().sessions[0]?.provider.provider).toBe("unknown");
+    controller.dispose();
+  });
+
   it("uses deeper bounded evidence without replacing the visible preview", async () => {
     const requests: { lines: number; maxBytes: number }[] = [];
     const shallowText = "Answer body without visible provider chrome.";

@@ -2,13 +2,17 @@ import { Notice, type App, type Plugin } from "obsidian";
 import { FocusSessionAction } from "../actions/FocusSessionAction";
 import { validateBinarySetting, validateBindingIdentity } from "../actions/validators";
 import { AgentDetector } from "../agents/AgentDetector";
-import { ProviderClassifier } from "../agents/ProviderClassifier";
+import {
+  ProviderClassifier,
+  type ProviderSurfaceIdentity
+} from "../agents/ProviderClassifier";
 import { BindingRepository } from "../bindings/BindingRepository";
 import type { BindingRecord, ProviderSessionMapping } from "../bindings/types";
 import { CMUX_SETUP_CLIPBOARD_TEXT } from "../cmux/accessSetup";
 import { CmuxClient } from "../cmux/CmuxClient";
 import {
   CmuxError,
+  surfaceKey,
   type CmuxNotification,
   type CmuxSnapshot
 } from "../cmux/types";
@@ -189,7 +193,10 @@ export class AgentCockpitController {
       this.previewCache.set(session.key, preview);
       this.evidence.recordPreview(session.key, preview);
       const detection = this.providerClassifier.detect(session, preview.text);
-      if (detection.provider === "claude" || detection.provider === "codex") {
+      if (
+        detection !== null &&
+        (detection.provider === "claude" || detection.provider === "codex")
+      ) {
         this.evidence.recordProvider(session.key, detection, preview.observedAt);
       }
       this.recomputeSessions();
@@ -660,9 +667,12 @@ export class AgentCockpitController {
   ): ReadonlySet<string> {
     const notificationObservedAt =
       this.store.getState().health.notifications.lastSuccessAt ?? snapshot.observedAt;
+    const invalidatedProviders = this.providerClassifier.syncSurfaces(
+      providerSurfaceIdentities(snapshot)
+    );
+    this.evidence.clearProviders(invalidatedProviders);
     const liveKeys = this.evidence.sync(snapshot, notifications, notificationObservedAt);
     this.previewCache.retain(liveKeys);
-    this.providerClassifier.retain(liveKeys);
     return liveKeys;
   }
 
@@ -1379,6 +1389,21 @@ export class AgentCockpitController {
     if (this.taskRepository === null) throw new Error("Task repository is not initialized.");
     return this.taskRepository;
   }
+}
+
+function providerSurfaceIdentities(snapshot: CmuxSnapshot): ProviderSurfaceIdentity[] {
+  return snapshot.windows.flatMap((window) =>
+    window.workspaces.flatMap((workspace) =>
+      workspace.panes.flatMap((pane) =>
+        pane.surfaces.map((surface) => ({
+          key: surfaceKey({ workspaceId: workspace.id, surfaceId: surface.id }),
+          surfaceTitle: surface.title,
+          surfaceType: surface.type,
+          currentDirectory: workspace.currentDirectory
+        }))
+      )
+    )
+  );
 }
 
 function automaticRunCountError(error: unknown): Error {
