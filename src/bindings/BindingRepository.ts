@@ -452,12 +452,17 @@ export class BindingRepository {
       typeof raw.machines === "object" && raw.machines !== null
         ? (raw.machines as Record<string, unknown>)
         : {};
-    const machines: Record<string, MachineBindings> = {};
-    for (const [id, value] of Object.entries(rawMachines).slice(0, MAX_MACHINES)) {
+    const machines: Record<string, MachineBindings> = {
+      [this.currentMachineId]: decodeMachine(rawMachines[this.currentMachineId], this.currentMachineId)
+    };
+    let examinedOtherMachines = 0;
+    for (const [id, value] of Object.entries(rawMachines)) {
+      if (id === this.currentMachineId) continue;
+      if (examinedOtherMachines >= MAX_MACHINES - 1) break;
+      examinedOtherMachines += 1;
       if (!MACHINE_ID_PATTERN.test(id)) continue;
       machines[id] = decodeMachine(value, id);
     }
-    machines[this.currentMachineId] ??= { bindings: [], runs: [], providerSessions: [] };
     this.data = {
       schemaVersion: 3,
       settings: parseSettings(raw.settings),

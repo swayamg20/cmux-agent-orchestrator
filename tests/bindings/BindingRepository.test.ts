@@ -181,6 +181,52 @@ describe("BindingRepository", () => {
     expect(repository.listProviderSessions()).toEqual([]);
   });
 
+  it("retains the current machine when synced data contains the maximum other namespaces", async () => {
+    let data: unknown;
+    const plugin = {
+      loadData: async () => data,
+      saveData: async (next: unknown) => {
+        data = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const seed = new BindingRepository(plugin);
+    await seed.load();
+    await seed.attach({
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      provider: "codex",
+      providerSessionId: null,
+      attachedAt: "2026-09-04T00:00:00.000Z"
+    });
+    const stored = data as {
+      schemaVersion: number;
+      settings: unknown;
+      machines: Record<string, unknown>;
+    };
+    const currentMachineId = Object.keys(stored.machines)[0]!;
+    const currentMachine = stored.machines[currentMachineId];
+    const crowdedMachines: Record<string, unknown> = {};
+    for (let index = 0; index < 100; index += 1) {
+      const id = index.toString(16).padStart(20, "0");
+      if (id !== currentMachineId) {
+        crowdedMachines[id] = { bindings: [], runs: [], providerSessions: [] };
+      }
+    }
+    crowdedMachines[currentMachineId] = currentMachine;
+    data = { ...stored, machines: crowdedMachines };
+
+    const reloaded = new BindingRepository(plugin);
+    await reloaded.load();
+    expect(reloaded.list()).toHaveLength(1);
+
+    await reloaded.updateSettings(reloaded.getSettings());
+    const persistedMachines = (data as { machines: Record<string, unknown> }).machines;
+    expect(Object.keys(persistedMachines)).toHaveLength(100);
+    expect(persistedMachines[currentMachineId]).toBeDefined();
+  });
+
   it("drops every conflicting persisted task binding claim", async () => {
     let data: unknown;
     const plugin = {

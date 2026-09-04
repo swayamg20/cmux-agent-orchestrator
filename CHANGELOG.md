@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Treat an exact read-back of an ambiguously failed plugin-data save as committed, preventing retries from creating duplicate run records.
+- Always retain the current Mac's machine-scoped bindings when bounded synced data contains many other machine namespaces.
 - Refuse to reuse a persisted run that belongs to another task, repairing the binding with a new task-owned run while retaining history.
 - Ignore task-note vault events until plugin settings finish loading, preventing startup races from throwing before initialization.
 - Keep a successful task-note write authoritative while Obsidian's metadata index catches up, preventing Kanban state or run counts from snapping backward.
