@@ -24,6 +24,7 @@ export class ProviderClassifier {
   private readonly detections = new Map<string, ProviderDetection>();
   private readonly attempted = new Map<string, string>();
   private readonly surfaceSignatures = new Map<string, string>();
+  private generation = 0;
 
   constructor(
     private readonly detector: AgentDetector,
@@ -45,6 +46,7 @@ export class ProviderClassifier {
   }
 
   classifyNew(sessions: readonly LiveSession[], client: CmuxClient): Promise<ProviderObservation[]> | null {
+    const generation = this.generation;
     const candidates = sessions.filter(
       (session) =>
         session.surfaceType === "terminal" &&
@@ -60,7 +62,7 @@ export class ProviderClassifier {
     return Promise.allSettled(
       candidates.map((session) =>
         this.scheduler
-          .schedule(`provider:${session.key}:${surfaceSignature(session)}`, () =>
+          .schedule(`provider:${generation}:${session.key}:${surfaceSignature(session)}`, () =>
             client.readPreview(session, {
               lines: PROVIDER_EVIDENCE_LINES,
               maxBytes: PROVIDER_EVIDENCE_MAX_BYTES
@@ -69,6 +71,7 @@ export class ProviderClassifier {
           .then((preview) => ({ session, preview }))
       )
     ).then((results) => {
+      if (generation !== this.generation) return [];
       const observations: ProviderObservation[] = [];
       for (const [index, result] of results.entries()) {
         if (result.status !== "fulfilled") {
@@ -112,6 +115,7 @@ export class ProviderClassifier {
   }
 
   clear(): void {
+    this.generation += 1;
     this.detections.clear();
     this.attempted.clear();
     this.surfaceSignatures.clear();

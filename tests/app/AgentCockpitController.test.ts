@@ -670,6 +670,59 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("retries provider classification without applying evidence from an earlier cmux connection", async () => {
+    let clientCreations = 0;
+    let finishOldClassification: ((text: string) => void) | null = null;
+    let currentPreviewReads = 0;
+    const firstTransport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      snapshot: async () => snapshot(Date.now()),
+      readPreview: (target) =>
+        new Promise((resolve) => {
+          finishOldClassification = (text) => resolve({
+            ...target,
+            text,
+            observedAt: Date.now(),
+            truncated: false
+          });
+        })
+    };
+    const currentTransport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      snapshot: async () => snapshot(Date.now()),
+      readPreview: async (target) => {
+        currentPreviewReads += 1;
+        return {
+          ...target,
+          text: "plain shell output after reconnect",
+          observedAt: Date.now(),
+          truncated: false
+        };
+      }
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(clientCreations++ === 0 ? firstTransport : currentTransport)
+    );
+
+    await controller.initialize();
+    await vi.waitFor(() => expect(finishOldClassification).not.toBeNull());
+
+    await controller.testConnection();
+    await vi.waitFor(() => expect(currentPreviewReads).toBe(1));
+
+    finishOldClassification!("• Ran npm test\n  └ stale Codex output from the old connection");
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().sessions[0]?.provider.provider).toBe("unknown");
+    controller.dispose();
+  });
+
   it("re-probes and fully loads the cockpit after access setup succeeds", async () => {
     let clientAttempts = 0;
     let snapshotCalls = 0;

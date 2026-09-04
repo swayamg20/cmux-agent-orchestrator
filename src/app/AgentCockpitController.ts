@@ -770,6 +770,7 @@ export class AgentCockpitController {
     this.client?.dispose();
     this.client = null;
     this.focusAction = null;
+    this.resetHeuristicProviderEvidence();
     this.store.update({
       connection: {
         ...this.store.getState().connection,
@@ -820,6 +821,13 @@ export class AgentCockpitController {
       this.focusAction = null;
       this.handleError(error);
     }
+  }
+
+  private resetHeuristicProviderEvidence(): void {
+    const sessionKeys = new Set(this.store.getState().sessions.map((session) => session.key));
+    this.providerClassifier.clear();
+    this.evidence.clearProviders(sessionKeys);
+    if (sessionKeys.size > 0) this.recomputeSessions();
   }
 
   private applyRefreshResult(result: RefreshResult): void {
