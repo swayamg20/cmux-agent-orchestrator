@@ -1210,6 +1210,73 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("loads metadata from fresh process evidence when an old saved surface is absent", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const staleMappings = new BindingRepository(plugin);
+    await staleMappings.load();
+    await staleMappings.updateSettings({
+      ...staleMappings.getSettings(),
+      autoTrackAgentRuns: false
+    });
+    await staleMappings.mapProviderSession({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      paneId: "33333333-3333-4333-8333-333333333333",
+      surfaceId: "66666666-6666-4666-8666-666666666666",
+      provider: "codex",
+      providerSessionId: "55555555-5555-4555-8555-555555555555",
+      matchedAt: "2026-09-02T00:00:00.000Z"
+    });
+    const list = vi.fn(async () => [
+      {
+        provider: "codex" as const,
+        sessionId: "55555555-5555-4555-8555-555555555555",
+        title: "Fresh exact conversation",
+        titleSource: "explicit-name" as const,
+        cwd: "/repository",
+        updatedAt: 5_499,
+        status: "active",
+        parentSessionId: null,
+        sourceKind: "cli"
+      }
+    ]);
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list,
+      get: async () => null,
+      dispose: () => undefined
+    };
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(5_500)),
+      new ProviderMetadataService([source]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(list).toHaveBeenCalledWith("/repository", expect.any(AbortSignal));
+    expect(controller.store.getState().sessions[0]).toMatchObject({
+      provider: {
+        provider: "codex",
+        source: "codex-writer-lock",
+        sessionId: "55555555-5555-4555-8555-555555555555"
+      },
+      conversation: {
+        title: "Fresh exact conversation",
+        matchSource: "codex-writer-lock"
+      }
+    });
+    controller.dispose();
+  });
+
   it("reuses the deterministic note when binding persistence recovers on a later refresh", async () => {
     let persisted: unknown;
     let saveAttempts = 0;

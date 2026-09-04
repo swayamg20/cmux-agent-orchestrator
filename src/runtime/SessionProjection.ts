@@ -28,6 +28,7 @@ export interface SessionProjectionInput {
 }
 
 export function projectLiveSessions(input: SessionProjectionInput): LiveSession[] {
+  const liveSurfaces = indexLiveSurfaces(input.snapshot);
   const notificationIndex = new Map<string, CmuxNotification[]>();
   for (const notification of input.notifications) {
     const key = surfaceKey(notification);
@@ -42,6 +43,7 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
   const bindingProviderSurfaceIds = new Set<string>();
   const claimedProviderSessions = new Set<string>();
   for (const mapping of input.providerMappings) {
+    if (!isCurrentSurface(mapping, liveSurfaces)) continue;
     const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
     if (providerSessionId === null) continue;
     const providerSessionKey = `${mapping.provider}:${providerSessionId}`;
@@ -64,6 +66,7 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
     claimedProviderSessions.add(providerSessionKey);
   }
   for (const mapping of input.automaticProviderMappings ?? []) {
+    if (!isCurrentSurface(mapping, liveSurfaces)) continue;
     const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
     if (providerSessionId === null) continue;
     const providerSessionKey = `${mapping.provider}:${providerSessionId}`;
@@ -87,6 +90,7 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
   }
   for (const binding of input.bindings) {
     if (
+      !isCurrentSurface(binding, liveSurfaces) ||
       providerMappingIndex.has(binding.surfaceId) ||
       (binding.provider !== "claude" && binding.provider !== "codex") ||
       binding.providerSessionId === null ||
@@ -160,6 +164,30 @@ export function projectLiveSessions(input: SessionProjectionInput): LiveSession[
       left.paneIndex - right.paneIndex ||
       left.surfaceIndex - right.surfaceIndex
   );
+}
+
+function indexLiveSurfaces(
+  snapshot: CmuxSnapshot
+): ReadonlyMap<string, { workspaceId: string; paneId: string }> {
+  const liveSurfaces = new Map<string, { workspaceId: string; paneId: string }>();
+  for (const window of snapshot.windows) {
+    for (const workspace of window.workspaces) {
+      for (const pane of workspace.panes) {
+        for (const surface of pane.surfaces) {
+          liveSurfaces.set(surface.id, { workspaceId: workspace.id, paneId: pane.id });
+        }
+      }
+    }
+  }
+  return liveSurfaces;
+}
+
+function isCurrentSurface(
+  target: { workspaceId: string; paneId: string; surfaceId: string },
+  liveSurfaces: ReadonlyMap<string, { workspaceId: string; paneId: string }>
+): boolean {
+  const current = liveSurfaces.get(target.surfaceId);
+  return current?.workspaceId === target.workspaceId && current.paneId === target.paneId;
 }
 
 interface ExactProviderMapping {

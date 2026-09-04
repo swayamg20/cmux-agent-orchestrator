@@ -946,28 +946,36 @@ export class AgentCockpitController {
   private effectiveProviderMappings(): ProviderSessionReference[] {
     const mappings = new Map<string, ProviderSessionReference>();
     const claimedProviderSessions = new Set<string>();
-    for (const mapping of this.bindings.listProviderSessions()) {
-      mappings.set(mapping.surfaceId, mapping);
-      claimedProviderSessions.add(`${mapping.provider}:${mapping.providerSessionId}`);
-    }
-    for (const mapping of this.automaticProviderMappings) {
-      const providerSessionKey = `${mapping.provider}:${mapping.providerSessionId}`;
-      if (mappings.has(mapping.surfaceId) || claimedProviderSessions.has(providerSessionKey)) continue;
-      mappings.set(mapping.surfaceId, mapping);
-      claimedProviderSessions.add(providerSessionKey);
-    }
-    for (const binding of this.bindings.list()) {
-      const providerSessionKey = `${binding.provider}:${binding.providerSessionId ?? ""}`;
+    const liveSessions = new Map(
+      this.store.getState().sessions.map((session) => [session.surfaceId, session] as const)
+    );
+    const addMapping = (mapping: ProviderSessionReference): void => {
+      const live = liveSessions.get(mapping.surfaceId);
+      const providerSessionId = normalizeCanonicalUuid(mapping.providerSessionId);
       if (
-        mappings.has(binding.surfaceId) ||
+        providerSessionId === null ||
+        live?.workspaceId !== mapping.workspaceId ||
+        live.paneId !== mapping.paneId
+      ) {
+        return;
+      }
+      const identityKey = providerSessionKey(mapping.provider, providerSessionId);
+      if (mappings.has(mapping.surfaceId) || claimedProviderSessions.has(identityKey)) return;
+      mappings.set(mapping.surfaceId, { ...mapping, providerSessionId });
+      claimedProviderSessions.add(identityKey);
+    };
+
+    for (const mapping of this.bindings.listProviderSessions()) addMapping(mapping);
+    for (const mapping of this.automaticProviderMappings) addMapping(mapping);
+    for (const binding of this.bindings.list()) {
+      if (
         (binding.provider !== "claude" && binding.provider !== "codex") ||
         binding.providerSessionId === null ||
-        !isCanonicalUuid(binding.providerSessionId) ||
-        claimedProviderSessions.has(providerSessionKey)
+        !isCanonicalUuid(binding.providerSessionId)
       ) {
         continue;
       }
-      mappings.set(binding.surfaceId, {
+      addMapping({
         workspaceId: binding.workspaceId,
         paneId: binding.paneId,
         surfaceId: binding.surfaceId,
@@ -975,7 +983,6 @@ export class AgentCockpitController {
         providerSessionId: binding.providerSessionId,
         matchedAt: binding.attachedAt
       });
-      claimedProviderSessions.add(providerSessionKey);
     }
     return [...mappings.values()];
   }

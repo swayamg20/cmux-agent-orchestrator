@@ -239,4 +239,52 @@ describe("projectLiveSessions provider conversations", () => {
     expect(manualSession.provider.source).toBe("provider-session-mapping");
     expect(manualSession.conversation?.matchSource).toBe("manual");
   });
+
+  it("does not let an absent saved surface shadow fresh exact process evidence", () => {
+    const session = projectLiveSessions({
+      snapshot: snapshot(),
+      notifications: [],
+      bindings: [],
+      providerMappings: [
+        {
+          workspaceId,
+          paneId,
+          surfaceId: "66666666-6666-4666-8666-666666666666",
+          provider: "codex",
+          providerSessionId,
+          matchedAt: "2026-09-02T00:00:00.000Z"
+        }
+      ],
+      automaticProviderMappings: [
+        {
+          workspaceId,
+          paneId,
+          surfaceId,
+          provider: "codex",
+          providerSessionId,
+          matchSource: "codex-writer-lock",
+          confidence: "high",
+          explanation: "Verified current foreground process and root writer lock.",
+          observedAt: 1_000
+        }
+      ],
+      providerMetadata: new Map([
+        [providerMetadataKey("codex", providerSessionId), metadata]
+      ]),
+      detector: new AgentDetector(),
+      providerEvidence: new Map(),
+      previewFor: () => null,
+      evidenceFor: () => []
+    })[0]!;
+
+    expect(session.provider).toMatchObject({
+      provider: "codex",
+      source: "codex-writer-lock",
+      sessionId: providerSessionId
+    });
+    expect(session.conversation).toMatchObject({
+      title: "Implement exact conversation titles",
+      matchSource: "codex-writer-lock"
+    });
+  });
 });
