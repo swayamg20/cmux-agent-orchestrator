@@ -1,4 +1,4 @@
-import { Notice, type App, type Plugin } from "obsidian";
+import { Modal, Notice, type App, type Plugin } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
 import { AgentCockpitController } from "../../src/app/AgentCockpitController";
 import { BindingRepository } from "../../src/bindings/BindingRepository";
@@ -11,6 +11,7 @@ import type {
   ProviderSessionResolver
 } from "../../src/providers/identity/types";
 import type { ProviderSessionMetadata, ProviderSessionSource } from "../../src/providers/types";
+import type { LiveSession } from "../../src/state/types";
 import { TaskRepository } from "../../src/tasks/TaskRepository";
 import { automaticTaskId } from "../../src/tracking/AutomaticTaskTracking";
 import { createMemoryTaskApp as memoryTaskApp } from "../helpers/memoryTaskApp";
@@ -123,6 +124,51 @@ function emptyCodexMetadataSource(): ProviderSessionSource {
     dispose: () => undefined
   };
 }
+
+describe("AgentCockpitController modal lifecycle", () => {
+  function modalInstances(): Array<{ close: () => void; closeCalls: number; opened: boolean }> {
+    return (Modal as unknown as {
+      instances: Array<{ close: () => void; closeCalls: number; opened: boolean }>;
+    }).instances;
+  }
+
+  it("closes an open task picker when the controller is disposed", () => {
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(memoryTaskApp().app, plugin);
+    const instances = modalInstances();
+    const instanceCount = instances.length;
+
+    controller.showTaskPicker({} as LiveSession);
+
+    const modal = instances[instanceCount];
+    expect(modal).toMatchObject({ closeCalls: 0, opened: true });
+
+    controller.dispose();
+
+    expect(modal).toMatchObject({ closeCalls: 1, opened: false });
+  });
+
+  it("does not retain a task picker after the user closes it", () => {
+    const plugin = {
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(memoryTaskApp().app, plugin);
+    const instances = modalInstances();
+    const instanceCount = instances.length;
+
+    controller.showTaskPicker({} as LiveSession);
+
+    const modal = instances[instanceCount]!;
+    modal.close();
+    controller.dispose();
+
+    expect(modal).toMatchObject({ closeCalls: 1, opened: false });
+  });
+});
 
 describe("AgentCockpitController connection failures", () => {
   it("does not expose a task folder until initialization has loaded settings", async () => {

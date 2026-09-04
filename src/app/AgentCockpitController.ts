@@ -1,4 +1,4 @@
-import { Notice, type App, type Plugin } from "obsidian";
+import { Notice, type App, type Modal, type Plugin } from "obsidian";
 import { FocusSessionAction } from "../actions/FocusSessionAction";
 import { validateBinarySetting, validateBindingIdentity } from "../actions/validators";
 import { AgentDetector } from "../agents/AgentDetector";
@@ -90,6 +90,7 @@ export class AgentCockpitController {
   private pendingSettingsUpdates = 0;
   private automaticTrackingGeneration = 0;
   private readonly reportedAutomaticTrackingIssues = new Map<string, string>();
+  private readonly openModals = new Set<Modal>();
   private automaticTrackingPass: AutomaticTrackingPass | null = null;
   private identityAbortController: AbortController | null = null;
   private identityGeneration = 0;
@@ -264,18 +265,30 @@ export class AgentCockpitController {
 
   showTaskPicker(session: LiveSession): void {
     if (this.disposed) return;
-    const modal = new TaskPickerModal(this.app, this.store.getState().tasks, (task) => {
-      void this.attachTask(session, task).catch(() => undefined);
-    });
-    modal.open();
+    this.openModal((closed) =>
+      new TaskPickerModal(
+        this.app,
+        this.store.getState().tasks,
+        (task) => {
+          void this.attachTask(session, task).catch(() => undefined);
+        },
+        closed
+      )
+    );
   }
 
   showCreateTask(session: LiveSession | null): void {
     if (this.disposed) return;
-    const modal = new CreateTaskModal(this.app, session, async (options) => {
-      await this.createTask(options, session);
-    });
-    modal.open();
+    this.openModal((closed) =>
+      new CreateTaskModal(
+        this.app,
+        session,
+        async (options) => {
+          await this.createTask(options, session);
+        },
+        closed
+      )
+    );
   }
 
   async showConversationPicker(session: LiveSession): Promise<void> {
@@ -302,9 +315,16 @@ export class AgentCockpitController {
         new Notice(`No ${session.provider.provider === "claude" ? "Claude" : "Codex"} conversations were found for this repository.`);
         return;
       }
-      new ConversationPickerModal(this.app, conversations, (conversation) => {
-        void this.matchConversation(session, conversation).catch(() => undefined);
-      }).open();
+      this.openModal((closed) =>
+        new ConversationPickerModal(
+          this.app,
+          conversations,
+          (conversation) => {
+            void this.matchConversation(session, conversation).catch(() => undefined);
+          },
+          closed
+        )
+      );
     } catch (error) {
       if (this.disposed) return;
       new Notice(readableError(error));
@@ -566,6 +586,7 @@ export class AgentCockpitController {
 
   dispose(): void {
     this.disposed = true;
+    this.closeOpenModals();
     this.clientGeneration += 1;
     this.cancelAutomaticTaskTracking();
     this.refreshCoordinator.dispose();
@@ -584,6 +605,31 @@ export class AgentCockpitController {
     this.reportedAutomaticTrackingIssues.clear();
     this.automaticTrackingPass = null;
     this.store.clear();
+  }
+
+  private openModal(create: (closed: () => void) => Modal): void {
+    let modal: Modal | null = null;
+    const closed = (): void => {
+      if (modal !== null) this.openModals.delete(modal);
+    };
+    modal = create(closed);
+    if (this.disposed) {
+      modal.close();
+      return;
+    }
+    this.openModals.add(modal);
+    try {
+      modal.open();
+    } catch (error) {
+      this.openModals.delete(modal);
+      throw error;
+    }
+  }
+
+  private closeOpenModals(): void {
+    const modals = [...this.openModals];
+    this.openModals.clear();
+    for (const modal of modals) modal.close();
   }
 
   private async connect(): Promise<void> {

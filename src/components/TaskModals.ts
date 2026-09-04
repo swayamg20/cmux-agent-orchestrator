@@ -7,7 +7,8 @@ export class TaskPickerModal extends SuggestModal<TaskRecord> {
   constructor(
     app: App,
     private readonly tasks: readonly TaskRecord[],
-    private readonly choose: (task: TaskRecord) => void
+    private readonly choose: (task: TaskRecord) => void,
+    private readonly closed: () => void = () => undefined
   ) {
     super(app);
     this.setPlaceholder("Attach to a task...");
@@ -37,6 +38,11 @@ export class TaskPickerModal extends SuggestModal<TaskRecord> {
   override onChooseSuggestion(task: TaskRecord): void {
     this.choose(task);
   }
+
+  override onClose(): void {
+    super.onClose();
+    this.closed();
+  }
 }
 
 export class CreateTaskModal extends Modal {
@@ -48,7 +54,8 @@ export class CreateTaskModal extends Modal {
   constructor(
     app: App,
     session: LiveSession | null,
-    private readonly create: (options: CreateTaskOptions) => Promise<void>
+    private readonly create: (options: CreateTaskOptions) => Promise<void>,
+    private readonly closed: () => void = () => undefined
   ) {
     super(app);
     this.hasSession = session !== null;
@@ -109,6 +116,7 @@ export class CreateTaskModal extends Modal {
 
   override onClose(): void {
     this.contentEl.empty();
+    this.closed();
   }
 }
 
