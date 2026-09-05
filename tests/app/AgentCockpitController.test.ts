@@ -4,7 +4,7 @@ import { AgentCockpitController } from "../../src/app/AgentCockpitController";
 import { BindingRepository } from "../../src/bindings/BindingRepository";
 import type { ProviderSessionMapping } from "../../src/bindings/types";
 import { CmuxClient } from "../../src/cmux/CmuxClient";
-import type { CmuxTransport } from "../../src/cmux/CmuxTransport";
+import type { CmuxEventObserver, CmuxTransport } from "../../src/cmux/CmuxTransport";
 import {
   CmuxError,
   type CmuxNotification,
@@ -1119,7 +1119,8 @@ describe("AgentCockpitController connection failures", () => {
     expect(controller.store.getState().connection).toMatchObject({
       status: "connected",
       accessMode: "password",
-      message: "Connected through cmux Password mode. The socket password remains owned by cmux."
+      message:
+        "Connected through cmux Password mode. The socket password remains owned by cmux. Live cmux events are unavailable; use Refresh after changes."
     });
     expect(controller.store.getState().sessions).toHaveLength(1);
     expect(controller.store.getState().sessions[0]?.provider.provider).toBe("codex");
@@ -6528,6 +6529,110 @@ describe("AgentCockpitController connection failures", () => {
     await controller.waitForBackgroundWork();
     expect(memory.markdownWrites).toHaveLength(1);
     expect(controller.store.getState().tasks).toHaveLength(1);
+    controller.dispose();
+  });
+});
+
+describe("AgentCockpitController event-driven refresh", () => {
+  it("coalesces modern cmux event bursts into one authoritative refresh", async () => {
+    let observer: CmuxEventObserver | null = null;
+    let stopped = false;
+    const snapshotSource = vi.fn(async () => snapshot(Date.now()));
+    const notificationSource = vi.fn(async () => [] as CmuxNotification[]);
+    const transport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      probe: async () => ({
+        binaryPath: "/cmux",
+        versionText: "cmux modern",
+        capabilities: {
+          version: 2,
+          protocol: "cmux-socket",
+          accessMode: "password",
+          methods: new Set(["events.stream"])
+        },
+        latencyMs: 1
+      }),
+      snapshot: snapshotSource,
+      notifications: notificationSource,
+      subscribeEvents: (next) => {
+        observer = next;
+        return () => { stopped = true; };
+      }
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().connection.message).toContain(
+      "Changes refresh automatically from cmux events."
+    );
+    snapshotSource.mockClear();
+    notificationSource.mockClear();
+
+    const currentObserver = observer as CmuxEventObserver | null;
+    expect(currentObserver).not.toBeNull();
+    currentObserver?.onSignal({
+      scope: "topology",
+      bootId: "11111111-1111-4111-8111-111111111111",
+      seq: 1,
+      name: "surface.created",
+      reason: "change"
+    });
+    currentObserver?.onSignal({
+      scope: "notifications",
+      bootId: "11111111-1111-4111-8111-111111111111",
+      seq: 2,
+      name: "notification.created",
+      reason: "change"
+    });
+    await controller.waitForBackgroundWork();
+
+    expect(snapshotSource).toHaveBeenCalledOnce();
+    expect(notificationSource).toHaveBeenCalledOnce();
+    controller.dispose();
+    expect(stopped).toBe(true);
+  });
+
+  it("falls back to manual Refresh when a claimed event stream stops", async () => {
+    let observer: CmuxEventObserver | null = null;
+    const transport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      subscribeEvents: (next) => {
+        observer = next;
+        return () => undefined;
+      }
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    const currentObserver = observer as CmuxEventObserver | null;
+    currentObserver?.onError(new Error("stream ended"));
+    expect(controller.store.getState().connection).toMatchObject({
+      status: "connected"
+    });
+    expect(controller.store.getState().connection.message).toContain(
+      "Live cmux events are unavailable; use Refresh after changes."
+    );
     controller.dispose();
   });
 });

@@ -69,6 +69,7 @@ import {
 import type { WorkflowProposal } from "../workflow/WorkflowAutomationPolicy";
 import { WorkflowAutomationReconciler } from "../workflow/WorkflowAutomationReconciler";
 import { buildWorkflowProposals } from "../workflow/WorkflowProposalEngine";
+import { CmuxEventRefreshScheduler } from "./CmuxEventRefreshScheduler";
 import { RefreshCoordinator, type RefreshResult } from "./RefreshCoordinator";
 
 export type CmuxClientFactory = (explicitBinaryPath: string) => Promise<CmuxClient>;
@@ -98,6 +99,7 @@ export class AgentCockpitController {
   private readonly providerClassifier = new ProviderClassifier(this.detector, this.previewScheduler);
   private readonly evidence = new CmuxEvidenceService(this.detector);
   private readonly refreshCoordinator = new RefreshCoordinator();
+  private readonly eventRefresh: CmuxEventRefreshScheduler;
   private classificationWork: Promise<void> = Promise.resolve();
   private metadataWork: Promise<void> = Promise.resolve();
   private identityWork: Promise<void> = Promise.resolve();
@@ -117,6 +119,8 @@ export class AgentCockpitController {
   private suppressedProviderSurfaceIds = new Set<string>();
   private suppressedProviderSessionKeys = new Set<string>();
   private client: CmuxClient | null = null;
+  private stopCmuxEvents: (() => void) | null = null;
+  private cmuxEventUpdates: "unknown" | "live" | "manual" = "unknown";
   private clientGeneration = 0;
   private refreshStateGeneration = 0;
   private topologyRefreshGeneration = 0;
@@ -135,6 +139,15 @@ export class AgentCockpitController {
     private readonly providerSessionResolver: ProviderSessionResolver = NOOP_PROVIDER_SESSION_RESOLVER
   ) {
     this.bindings = new BindingRepository(plugin);
+    this.eventRefresh = new CmuxEventRefreshScheduler({
+      refreshAll: () => this.refreshNow(),
+      refreshTopology: () => this.refreshTopology(),
+      refreshNotifications: () => this.refreshNotifications(),
+      refreshLifecycle: () => this.refreshLifecycleFromCurrentSnapshot(),
+      onError: (error) => {
+        if (!this.disposed) this.handleError(error, false);
+      }
+    });
     this.workflowAutomation = new WorkflowAutomationReconciler({
       getAuthority: () => ({
         ready: !this.disposed && this.pendingSettingsUpdates === 0,
@@ -322,6 +335,7 @@ export class AgentCockpitController {
   }
 
   async waitForBackgroundWork(): Promise<void> {
+    await this.eventRefresh.waitForIdle();
     await this.identityWork;
     await Promise.all([this.classificationWork, this.metadataWork]);
     await this.automaticTrackingWork;
@@ -904,6 +918,8 @@ export class AgentCockpitController {
     this.refreshStateGeneration += 1;
     this.cancelAutomaticTaskTracking();
     this.workflowAutomation.cancel();
+    this.stopCmuxEventUpdates();
+    this.eventRefresh.dispose();
     this.refreshCoordinator.dispose();
     this.previewScheduler.dispose();
     this.cancelIdentityResolution();
@@ -952,6 +968,8 @@ export class AgentCockpitController {
   private async connect(): Promise<void> {
     if (this.disposed) return;
     this.workflowAutomation.cancel();
+    this.stopCmuxEventUpdates();
+    this.eventRefresh.cancelPending();
     const clientGeneration = ++this.clientGeneration;
     this.client?.dispose();
     this.client = null;
@@ -980,11 +998,12 @@ export class AgentCockpitController {
       }
       this.client = candidate;
       this.focusAction = new FocusSessionAction(candidate);
+      this.startCmuxEventUpdates(candidate, clientGeneration);
       const checkedAt = Date.now();
       this.store.update((state) => ({
         connection: {
           status: "connected",
-          message: connectionMessage(probe.capabilities.accessMode),
+          message: this.connectedMessage(probe.capabilities.accessMode),
           versionText: probe.versionText,
           accessMode: probe.capabilities.accessMode,
           binaryPath: probe.binaryPath,
@@ -1008,6 +1027,74 @@ export class AgentCockpitController {
       this.focusAction = null;
       this.handleError(error);
     }
+  }
+
+  private startCmuxEventUpdates(client: CmuxClient, clientGeneration: number): void {
+    this.cmuxEventUpdates = "manual";
+    try {
+      const stop = client.subscribeEvents({
+        onSignal: (signal) => {
+          if (
+            this.disposed ||
+            clientGeneration !== this.clientGeneration ||
+            client !== this.client
+          ) {
+            return;
+          }
+          this.eventRefresh.request(signal.scope);
+        },
+        onError: () => {
+          if (
+            this.disposed ||
+            clientGeneration !== this.clientGeneration ||
+            client !== this.client
+          ) {
+            return;
+          }
+          this.stopCmuxEvents = null;
+          this.cmuxEventUpdates = "manual";
+          this.publishConnectedMessage();
+        }
+      });
+      if (stop === null) return;
+      this.stopCmuxEvents = stop;
+      this.cmuxEventUpdates = "live";
+    } catch {
+      this.stopCmuxEvents = null;
+      this.cmuxEventUpdates = "manual";
+    }
+  }
+
+  private stopCmuxEventUpdates(): void {
+    this.stopCmuxEvents?.();
+    this.stopCmuxEvents = null;
+    this.cmuxEventUpdates = "unknown";
+  }
+
+  private connectedMessage(accessMode: string | null): string {
+    const base = connectionMessage(accessMode);
+    return this.cmuxEventUpdates === "live"
+      ? `${base} Changes refresh automatically from cmux events.`
+      : `${base} Live cmux events are unavailable; use Refresh after changes.`;
+  }
+
+  private publishConnectedMessage(): void {
+    this.store.update((state) => {
+      if (state.connection.status !== "connected") return {};
+      return {
+        connection: {
+          ...state.connection,
+          message: this.connectedMessage(state.connection.accessMode)
+        }
+      };
+    });
+  }
+
+  private async refreshLifecycleFromCurrentSnapshot(): Promise<void> {
+    const snapshot = this.store.getState().snapshot;
+    if (this.disposed || this.client === null || snapshot === null) return;
+    this.scheduleProviderIdentityResolution(snapshot);
+    await this.identityWork;
   }
 
   private resetHeuristicProviderEvidence(): void {
@@ -1059,7 +1146,7 @@ export class AgentCockpitController {
       connection: {
         ...state.connection,
         status: "connected",
-        message: connectionMessage(state.connection.accessMode),
+        message: this.connectedMessage(state.connection.accessMode),
         checkedAt
       },
       health: {
