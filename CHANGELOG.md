@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-06
+
 ### Added
 
 - Add Off, Suggest, and Safe auto workflow-automation modes, defaulting to explained suggestions with explicit Apply and Dismiss actions.
