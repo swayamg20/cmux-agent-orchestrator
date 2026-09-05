@@ -5,7 +5,7 @@ import { clearTimeout as cancelTimer, setTimeout as startTimer } from "node:time
 import { PRODUCT_NAME } from "../identity";
 import { canonicalUuidEquals } from "../security/identifiers";
 import { CliCmuxTransport } from "./CliCmuxTransport";
-import type { CmuxTransport, PreviewRequest } from "./CmuxTransport";
+import type { CmuxEventObserver, CmuxTransport, PreviewRequest } from "./CmuxTransport";
 import {
   CmuxError,
   type CmuxAgentRecord,
@@ -51,6 +51,10 @@ export class CmuxClient {
 
   agents(signal?: AbortSignal): Promise<CmuxAgentRecord[] | null> {
     return this.transport.agents?.(signal) ?? Promise.resolve(null);
+  }
+
+  subscribeEvents(observer: CmuxEventObserver): (() => void) | null {
+    return this.transport.subscribeEvents?.(observer) ?? null;
   }
 
   async readPreview(target: CmuxTarget, request: PreviewRequest): Promise<CmuxPreview> {

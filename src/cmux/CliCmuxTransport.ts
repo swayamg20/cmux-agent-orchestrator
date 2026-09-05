@@ -8,8 +8,10 @@ import {
   decodeWorkspaceDirectories
 } from "./decoders";
 import { ProcessExecutionError, SafeProcessRunner } from "./SafeProcessRunner";
+import type { ProcessLineStream } from "./SafeProcessRunner";
 import { PRODUCT_NAME } from "../identity";
-import type { CmuxTransport, PreviewRequest } from "./CmuxTransport";
+import type { CmuxEventObserver, CmuxTransport, PreviewRequest } from "./CmuxTransport";
+import { CmuxEventCursor } from "./CmuxEventCursor";
 import {
   CmuxError,
   type CmuxAgentRecord,
@@ -25,6 +27,8 @@ const JSON_OUTPUT_LIMIT = 512 * 1024;
 const STDERR_LIMIT = 64 * 1024;
 const READ_SCREEN_RAW_LIMIT = 96 * 1024;
 const DIRECTORY_REFRESH_MS = 30_000;
+const EVENT_STREAM_STARTUP_TIMEOUT_MS = 5_000;
+const EVENT_STREAM_LINE_LIMIT = 64 * 1024;
 const REQUIRED_METHODS = [
   "system.tree",
   "workspace.list",
@@ -38,6 +42,8 @@ export class CliCmuxTransport implements CmuxTransport {
   private workspaceDirectories = new Map<string, string | null>();
   private directoryRefreshGeneration = 0;
   private nextDirectoryRefreshAt = 0;
+  private eventsSupported = false;
+  private eventStream: ProcessLineStream | null = null;
 
   constructor(
     private readonly binaryPath: string,
@@ -46,6 +52,7 @@ export class CliCmuxTransport implements CmuxTransport {
   ) {}
 
   async probe(signal?: AbortSignal): Promise<CmuxProbe> {
+    this.eventsSupported = false;
     const startedAt = this.now();
     const version = await this.run(cmuxCommands.version(), 32 * 1024, signal);
     if (!/^cmux\s+\d+\.\d+\.\d+/m.test(version.stdout.trim())) {
@@ -63,6 +70,7 @@ export class CliCmuxTransport implements CmuxTransport {
         `This cmux build is missing required capabilities: ${missingMethods.join(", ")}.`
       );
     }
+    this.eventsSupported = capabilities.methods.has("events.stream");
     return {
       binaryPath: this.binaryPath,
       versionText: version.stdout.trim(),
@@ -109,6 +117,52 @@ export class CliCmuxTransport implements CmuxTransport {
     }
   }
 
+  subscribeEvents(observer: CmuxEventObserver): (() => void) | null {
+    if (!this.eventsSupported) return null;
+    this.eventStream?.dispose();
+    const cursor = new CmuxEventCursor();
+    let active = true;
+    let stream: ProcessLineStream | null = null;
+    const stop = (): void => {
+      if (!active) return;
+      active = false;
+      stream?.dispose();
+      if (this.eventStream === stream) this.eventStream = null;
+    };
+    const fail = (error: unknown): void => {
+      if (!active) return;
+      stop();
+      observer.onError(eventStreamError(error));
+    };
+    stream = this.runner.streamLines(
+      this.binaryPath,
+      cmuxCommands.events(),
+      {
+        startupTimeoutMs: EVENT_STREAM_STARTUP_TIMEOUT_MS,
+        maxLineBytes: EVENT_STREAM_LINE_LIMIT,
+        maxStderrBytes: STDERR_LIMIT
+      },
+      {
+        onLine: (line) => {
+          if (!active) return;
+          try {
+            const signal = cursor.accept(line);
+            if (signal !== null) observer.onSignal(signal);
+          } catch (error) {
+            fail(error);
+          }
+        },
+        onError: (error) => fail(error)
+      }
+    );
+    if (!active) {
+      stream.dispose();
+      return null;
+    }
+    this.eventStream = stream;
+    return stop;
+  }
+
   async readPreview(target: CmuxTarget, request: PreviewRequest): Promise<CmuxPreview> {
     const result = await this.run(
       cmuxCommands.readScreen(target, request.lines),
@@ -136,6 +190,8 @@ export class CliCmuxTransport implements CmuxTransport {
   }
 
   dispose(): void {
+    this.eventStream?.dispose();
+    this.eventStream = null;
     this.runner.dispose();
   }
 
@@ -198,6 +254,28 @@ export class CliCmuxTransport implements CmuxTransport {
       throw new CmuxError("process-failed", error.stderr.trim() || error.message, error);
     }
   }
+}
+
+function eventStreamError(error: unknown): CmuxError {
+  if (error instanceof CmuxError) return error;
+  if (error instanceof ProcessExecutionError) {
+    if (error.originalError instanceof CmuxError) return error.originalError;
+    if (error.reason === "timeout") {
+      return new CmuxError("timeout", "cmux did not start its event stream before the timeout.", error);
+    }
+    if (error.reason === "output-limit") {
+      return new CmuxError("output-limit", `cmux event data exceeded ${PRODUCT_NAME}'s safety limit.`, error);
+    }
+    if (error.reason === "aborted") {
+      return new CmuxError("aborted", "cmux event streaming was cancelled.", error);
+    }
+    return new CmuxError(
+      "process-failed",
+      error.stderr.trim() || "cmux event streaming stopped unexpectedly.",
+      error
+    );
+  }
+  return new CmuxError("process-failed", "cmux event streaming failed unexpectedly.", error);
 }
 
 function isUnsupportedListAgents(error: unknown): boolean {

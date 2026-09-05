@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { CliCmuxTransport } from "../../src/cmux/CliCmuxTransport";
 import {
   ProcessExecutionError,
+  type ProcessLineStream,
+  type ProcessLineStreamHandlers,
   type ProcessResult,
   SafeProcessRunner
 } from "../../src/cmux/SafeProcessRunner";
@@ -95,6 +97,49 @@ class UnsupportedAgentCommandRunner extends SafeProcessRunner {
       "",
       "Error: Unknown command: list-agents"
     );
+  }
+}
+
+class EventStreamRunner extends SafeProcessRunner {
+  readonly argumentsSeen: string[][] = [];
+  handlers: ProcessLineStreamHandlers | null = null;
+  streamDisposed = false;
+
+  override async run(_executable: string, args: readonly string[]): Promise<ProcessResult> {
+    this.argumentsSeen.push([...args]);
+    if (args.includes("--version")) {
+      return { stdout: "cmux 1.0.0", stderr: "", exitCode: 0, durationMs: 1 };
+    }
+    return {
+      stdout: JSON.stringify({
+        version: 2,
+        protocol: "cmux-socket",
+        access_mode: "automation",
+        methods: [
+          "system.tree",
+          "workspace.list",
+          "surface.read_text",
+          "surface.focus",
+          "system.identify",
+          "notification.list",
+          "events.stream"
+        ]
+      }),
+      stderr: "",
+      exitCode: 0,
+      durationMs: 1
+    };
+  }
+
+  override streamLines(
+    _executable: string,
+    args: readonly string[],
+    _options: Parameters<SafeProcessRunner["streamLines"]>[2],
+    handlers: ProcessLineStreamHandlers
+  ): ProcessLineStream {
+    this.argumentsSeen.push([...args]);
+    this.handlers = handlers;
+    return { dispose: () => { this.streamDisposed = true; } };
   }
 }
 
@@ -233,6 +278,66 @@ describe("CliCmuxTransport workspace directory cache", () => {
     await expect(transport.snapshot()).resolves.toMatchObject({
       windows: [{ workspaces: [{ currentDirectory: "/repositories/new" }] }]
     });
+    transport.dispose();
+  });
+});
+
+describe("CliCmuxTransport event streaming", () => {
+  it("feature-detects events.stream and emits only normalized refresh signals", async () => {
+    const runner = new EventStreamRunner();
+    const transport = new CliCmuxTransport("/path/to/cmux", runner);
+    await transport.probe();
+    const signals: unknown[] = [];
+    const stop = transport.subscribeEvents({
+      onSignal: (signal) => signals.push(signal),
+      onError: (error) => { throw error; }
+    });
+
+    expect(stop).not.toBeNull();
+    expect(runner.argumentsSeen.at(-1)).toEqual(["events", "--reconnect"]);
+    runner.handlers?.onLine(
+      JSON.stringify({
+        type: "ack",
+        protocol: "cmux-events",
+        version: 1,
+        boot_id: "11111111-1111-4111-8111-111111111111",
+        resume: { gap: false }
+      })
+    );
+    runner.handlers?.onLine(
+      JSON.stringify({
+        type: "event",
+        protocol: "cmux-events",
+        version: 1,
+        boot_id: "11111111-1111-4111-8111-111111111111",
+        seq: 1,
+        name: "surface.created",
+        category: "surface",
+        payload: { secret: "discarded" }
+      })
+    );
+
+    expect(signals).toEqual([
+      {
+        scope: "topology",
+        bootId: "11111111-1111-4111-8111-111111111111",
+        seq: 1,
+        name: "surface.created",
+        reason: "change"
+      }
+    ]);
+    stop?.();
+    expect(runner.streamDisposed).toBe(true);
+    transport.dispose();
+  });
+
+  it("keeps event streaming disabled when the capability is absent", async () => {
+    const runner = new PasswordModeRunner();
+    const transport = new CliCmuxTransport("/path/to/cmux", runner);
+    await transport.probe();
+    expect(
+      transport.subscribeEvents({ onSignal: () => undefined, onError: () => undefined })
+    ).toBeNull();
     transport.dispose();
   });
 });

@@ -84,6 +84,20 @@ export interface CmuxAgentRecord {
   updatedAt: number;
 }
 
+export type CmuxEventRefreshScope = "topology" | "notifications" | "lifecycle" | "resync";
+
+/**
+ * A bounded, content-free signal derived from the cmux event stream. Raw event
+ * payloads never leave the transport layer or enter persisted plugin state.
+ */
+export interface CmuxEventSignal {
+  scope: CmuxEventRefreshScope;
+  bootId: string;
+  seq: number | null;
+  name: string | null;
+  reason: "change" | "boot-changed" | "resume-gap" | "sequence-gap";
+}
+
 export interface CmuxPreview {
   workspaceId: string;
   paneId: string;

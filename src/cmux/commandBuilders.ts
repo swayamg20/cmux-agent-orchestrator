@@ -42,6 +42,13 @@ export const cmuxCommands = {
     return ["--json", "--id-format", "uuids", "list-agents"];
   },
 
+  events(): readonly string[] {
+    // Deliberately subscribe without category filters. cmux sequence numbers
+    // are global, so receiving every envelope is required for reliable gap
+    // detection. Unrelated categories are discarded by CmuxEventCursor.
+    return ["events", "--reconnect"];
+  },
+
   identifyFocused(): readonly string[] {
     return ["--json", "--id-format", "uuids", "identify", "--no-caller"];
   },

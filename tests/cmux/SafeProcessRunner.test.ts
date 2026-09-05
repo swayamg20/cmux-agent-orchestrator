@@ -71,4 +71,48 @@ describe("SafeProcessRunner", () => {
 
     await expect(pending).rejects.toMatchObject({ reason: "aborted" });
   });
+
+  it("streams complete lines without invoking a shell", async () => {
+    const runner = new SafeProcessRunner();
+    const lines: string[] = [];
+    let resolveLines!: () => void;
+    const received = new Promise<void>((resolve) => {
+      resolveLines = resolve;
+    });
+    const stream = runner.streamLines(
+      process.execPath,
+      ["-e", "process.stdout.write('$(echo unsafe)\\nsecond\\n');setInterval(()=>{},1000)"],
+      { startupTimeoutMs: 1_000, maxLineBytes: 1_024, maxStderrBytes: 1_024 },
+      {
+        onLine: (line) => {
+          lines.push(line);
+          if (lines.length === 2) resolveLines();
+        },
+        onError: () => undefined
+      }
+    );
+
+    await received;
+    expect(lines).toEqual(["$(echo unsafe)", "second"]);
+    stream.dispose();
+    runner.dispose();
+  });
+
+  it("terminates a stream when one JSONL line exceeds its bound", async () => {
+    const runner = new SafeProcessRunner();
+    const failure = new Promise<string>((resolve) => {
+      runner.streamLines(
+        process.execPath,
+        ["-e", "process.stdout.write('x'.repeat(200))"],
+        { startupTimeoutMs: 1_000, maxLineBytes: 32, maxStderrBytes: 1_024 },
+        {
+          onLine: () => undefined,
+          onError: (error) => resolve(error.reason)
+        }
+      );
+    });
+
+    await expect(failure).resolves.toBe("output-limit");
+    runner.dispose();
+  });
 });
