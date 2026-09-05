@@ -39,6 +39,13 @@ describe("cmux Agent Orchestrator settings", () => {
     expect(parseSettings({ autoTrackAgentRuns: false }).autoTrackAgentRuns).toBe(false);
   });
 
+  it("defaults workflow automation to suggestions and accepts every supported mode", () => {
+    expect(parseSettings(undefined).workflowAutomation).toBe("suggest");
+    expect(parseSettings({ workflowAutomation: "off" }).workflowAutomation).toBe("off");
+    expect(parseSettings({ workflowAutomation: "safe-auto" }).workflowAutomation).toBe("safe-auto");
+    expect(parseSettings({ workflowAutomation: "unsafe" }).workflowAutomation).toBe("suggest");
+  });
+
   it("preserves a valid custom stale-working threshold", () => {
     expect(parseSettings({ staleAfterMs: 45 * 60_000 }).staleAfterMs).toBe(45 * 60_000);
   });
