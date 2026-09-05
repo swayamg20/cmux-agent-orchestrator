@@ -22,7 +22,7 @@ import {
   type CmuxTarget
 } from "./types";
 
-const DEFAULT_TIMEOUT_MS = 3_000;
+const DEFAULT_TIMEOUT_MS = 5_000;
 const JSON_OUTPUT_LIMIT = 512 * 1024;
 const STDERR_LIMIT = 64 * 1024;
 const READ_SCREEN_RAW_LIMIT = 96 * 1024;

@@ -18,6 +18,10 @@ All notable changes to this project will be documented in this file.
 - Persist schema-v5 machine-scoped workflow proposal dismissals while keeping proposal evidence, event payloads, and recent-change markers memory-only.
 - Fall back to startup plus manual Refresh when cmux live events are unsupported or the event stream stops, without polling.
 
+### Fixed
+
+- Allow a bounded five-second command window so a cold password-mode cmux socket handshake does not fail at the previous three-second edge.
+
 ### Security
 
 - Revalidate settings, task revision, workflow, exact binding, evidence freshness, source health, and dismissal state immediately before every automated workflow write.

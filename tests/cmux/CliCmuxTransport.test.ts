@@ -56,9 +56,15 @@ class AuthenticationRequiredRunner extends SafeProcessRunner {
 
 class PasswordModeRunner extends SafeProcessRunner {
   readonly argumentsSeen: string[][] = [];
+  readonly timeoutBudgetsSeen: number[] = [];
 
-  override async run(_executable: string, args: readonly string[]): Promise<ProcessResult> {
+  override async run(
+    _executable: string,
+    args: readonly string[],
+    options: Parameters<SafeProcessRunner["run"]>[2]
+  ): Promise<ProcessResult> {
     this.argumentsSeen.push([...args]);
+    this.timeoutBudgetsSeen.push(options.timeoutMs);
     if (this.argumentsSeen.length === 1) {
       return {
         stdout: "cmux 0.62.2 (77) [test]",
@@ -249,6 +255,18 @@ describe("CliCmuxTransport error classification", () => {
       capabilities: { accessMode: "password" }
     });
     expect(runner.argumentsSeen.flat()).not.toContain("--password");
+    transport.dispose();
+  });
+
+  it("keeps a bounded five-second budget for a cold password-mode socket handshake", async () => {
+    const runner = new PasswordModeRunner();
+    const transport = new CliCmuxTransport(
+      "/Applications/cmux.app/Contents/Resources/bin/cmux",
+      runner
+    );
+
+    await transport.probe();
+    expect(runner.timeoutBudgetsSeen).toEqual([5_000, 5_000]);
     transport.dispose();
   });
 });
