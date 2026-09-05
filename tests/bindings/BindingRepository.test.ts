@@ -36,7 +36,7 @@ describe("BindingRepository", () => {
     await repository.load();
 
     expect(repository.getSettings().taskFolder).toBe("Agent Cockpit/Tasks");
-    expect(saved).toMatchObject({ schemaVersion: 4 });
+    expect(saved).toMatchObject({ schemaVersion: 5 });
   });
 
   it("accepts a legacy import save failure only when exact read-back proves persistence", async () => {
@@ -58,7 +58,7 @@ describe("BindingRepository", () => {
     await expect(repository.load()).resolves.toBeUndefined();
 
     expect(repository.getSettings().taskFolder).toBe("Agent Cockpit/Tasks");
-    expect(persisted).toMatchObject({ schemaVersion: 4 });
+    expect(persisted).toMatchObject({ schemaVersion: 5 });
   });
 
   it("prefers current plugin data without consulting the legacy loader", async () => {
@@ -388,7 +388,8 @@ describe("BindingRepository", () => {
           lastAttachedAt: "2026-09-04T00:00:00.000Z"
         }
       ],
-      providerSessions: []
+      providerSessions: [],
+      workflowDismissals: []
     };
     persisted.machines[foreignMachineId] = structuredClone(foreignMachine);
 
@@ -423,7 +424,8 @@ describe("BindingRepository", () => {
     const originalForeignMachine = {
       bindings: [],
       runs: [],
-      providerSessions: []
+      providerSessions: [],
+      workflowDismissals: []
     };
     persisted.machines[foreignMachineId] = structuredClone(originalForeignMachine);
     await repository.load();
@@ -625,7 +627,7 @@ describe("BindingRepository", () => {
       attachedAt: "2026-09-04T00:00:00.000Z"
     })).resolves.toMatchObject({ isNewRun: true });
 
-    expect(secondPersisted).toMatchObject({ schemaVersion: 4 });
+    expect(secondPersisted).toMatchObject({ schemaVersion: 5 });
   });
 
   it("rebases a conditional local attachment onto another repository's saved binding", async () => {
@@ -1085,6 +1087,30 @@ describe("BindingRepository", () => {
     expect(repository.getSettings().workflowAutomation).toBe("safe-auto");
     expect((persisted as { settings: { workflowAutomation: string } }).settings.workflowAutomation)
       .toBe("safe-auto");
+  });
+
+  it("persists workflow proposal dismissals in the current machine namespace", async () => {
+    let persisted: unknown = { schemaVersion: 4, settings: {}, machines: {} };
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const first = new BindingRepository(plugin);
+    await first.load();
+    const dismissal = {
+      proposalId: "proposal:active:review:evidence-1",
+      taskId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      dismissedAt: "2026-09-06T04:00:00.000Z"
+    };
+
+    await first.dismissWorkflowProposal(dismissal);
+
+    expect(first.listWorkflowDismissals()).toEqual([dismissal]);
+    const reloaded = new BindingRepository(plugin);
+    await reloaded.load();
+    expect(reloaded.listWorkflowDismissals()).toEqual([dismissal]);
   });
 
   it("does not save from stale memory when refreshing persisted data fails", async () => {
@@ -1624,7 +1650,7 @@ describe("BindingRepository", () => {
         providerSessions: unknown[];
       }>;
     };
-    expect(saved.schemaVersion).toBe(4);
+    expect(saved.schemaVersion).toBe(5);
     const savedBinding = saved.machines["00000000000000000000"]?.bindings[0];
     expect(savedBinding?.bindingId).toMatch(/^[0-9a-f-]{36}$/);
     expect(savedBinding?.runId).toMatch(/^[0-9a-f-]{36}$/);

@@ -117,7 +117,14 @@ function proposal(input: {
   const evidenceIdentity =
     session.assessment.primaryEvidenceId ?? session.provider.sessionId ?? session.key;
   return {
-    id: [task.taskId, task.workflowStatus, input.to, input.reason, evidenceIdentity].join(":"),
+    id: [
+      task.taskId,
+      task.updatedAt,
+      task.workflowStatus,
+      input.to,
+      input.reason,
+      evidenceIdentity
+    ].join(":"),
     taskId: task.taskId,
     sessionKey: session.key,
     from: task.workflowStatus,

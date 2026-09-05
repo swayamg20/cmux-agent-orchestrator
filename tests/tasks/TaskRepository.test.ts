@@ -1368,6 +1368,58 @@ describe("TaskRepository", () => {
     expect(frontmatter["workflow-status"]).toBe("review");
   });
 
+  it("cancels a guarded workflow update when its runtime authority expires before the write", async () => {
+    const taskFile = file("Agent Cockpit/Tasks/task.md");
+    const root = folder("Agent Cockpit/Tasks", [taskFile]);
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const frontmatter: Record<string, unknown> = {
+      "agent-cockpit": "task",
+      "schema-version": 1,
+      "task-id": taskId,
+      title: "Guarded workflow task",
+      "workflow-status": "active"
+    };
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve;
+    });
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const app = {
+      vault: {
+        getAbstractFileByPath: (path: string) =>
+          path === root.path ? root : path === taskFile.path ? taskFile : null
+      },
+      metadataCache: {
+        getFileCache: () => ({ frontmatter })
+      },
+      fileManager: {
+        processFrontMatter: async (
+          _file: TFile,
+          update: (value: Record<string, unknown>) => void
+        ) => {
+          markWriteStarted();
+          await writeGate;
+          update(frontmatter);
+        }
+      }
+    } as unknown as App;
+    const repository = new TaskRepository(app, root.path);
+    const currentTask = repository.findById(taskId);
+    let allowed = true;
+
+    const update = repository.updateWorkflowIfCurrent(currentTask, "review", () => allowed);
+    await writeStarted;
+    allowed = false;
+    releaseWrite();
+
+    await expect(update).resolves.toBe(false);
+    expect(frontmatter["workflow-status"]).toBe("active");
+    expect(repository.findById(taskId).workflowStatus).toBe("active");
+  });
+
   it.each(["increment", "repair"] as const)(
     "keeps a queued run-count %s on its exact task when the configured folder changes",
     async (operation) => {

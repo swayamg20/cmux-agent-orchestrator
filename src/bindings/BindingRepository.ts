@@ -13,7 +13,8 @@ import type {
   NewBindingRecord,
   ProviderSessionMapping,
   RelocateBindingInput,
-  RunRelation
+  RunRelation,
+  WorkflowProposalDismissal
 } from "./types";
 import { loadLegacyPluginData } from "./LegacyDataImporter";
 
@@ -21,6 +22,7 @@ const MAX_MACHINES = 100;
 const MAX_BINDINGS_PER_MACHINE = 5_000;
 const MAX_RUNS_PER_MACHINE = 20_000;
 const MAX_PROVIDER_SESSIONS_PER_MACHINE = 5_000;
+const MAX_WORKFLOW_DISMISSALS_PER_MACHINE = 5_000;
 const MACHINE_ID_PATTERN = /^[0-9a-f]{20}$/;
 const TOP_LEVEL_KEYS = new Set(["schemaVersion", "settings", "machines"]);
 const SETTINGS_KEYS = new Set([
@@ -32,7 +34,7 @@ const SETTINGS_KEYS = new Set([
   "previewMaxBytes",
   "staleAfterMs"
 ]);
-const MACHINE_KEYS = new Set(["bindings", "runs", "providerSessions"]);
+const MACHINE_KEYS = new Set(["bindings", "runs", "providerSessions", "workflowDismissals"]);
 const LEGACY_BINDING_KEYS = new Set([
   "taskId",
   "workspaceId",
@@ -62,6 +64,7 @@ const PROVIDER_SESSION_KEYS = new Set([
   "providerSessionId",
   "matchedAt"
 ]);
+const WORKFLOW_DISMISSAL_KEYS = new Set(["proposalId", "taskId", "dismissedAt"]);
 
 interface PersistenceCoordinator {
   scopes: WeakMap<object, Map<string, PersistenceScopeState>>;
@@ -88,7 +91,7 @@ const persistenceCoordinator = sharedGlobal[PERSISTENCE_COORDINATOR_SYMBOL] ??= 
 };
 
 interface PersistedPluginData {
-  schemaVersion: 4;
+  schemaVersion: 5;
   settings: AgentCockpitSettings;
   machines: Record<string, MachineBindings>;
 }
@@ -219,6 +222,20 @@ function isProviderSessionMapping(value: unknown): value is ProviderSessionMappi
   );
 }
 
+function isWorkflowProposalDismissal(value: unknown): value is WorkflowProposalDismissal {
+  if (typeof value !== "object" || value === null) return false;
+  const raw = value as Record<string, unknown>;
+  return (
+    typeof raw.proposalId === "string" &&
+    raw.proposalId.length > 0 &&
+    raw.proposalId.length <= 2_048 &&
+    !raw.proposalId.includes("\0") &&
+    typeof raw.taskId === "string" &&
+    isCanonicalUuid(raw.taskId) &&
+    validDate(raw.dismissedAt)
+  );
+}
+
 function normalizeNewBindingRecord(binding: NewBindingRecord): NewBindingRecord {
   return {
     taskId: normalizeCanonicalUuid(binding.taskId)!,
@@ -337,11 +354,29 @@ function decodeMachine(value: unknown, id: string): MachineBindings {
     linkedBindings,
     decodedProviderSessions
   );
+  const workflowDismissals = decodeWorkflowDismissals(raw.workflowDismissals);
   return {
     bindings,
     runs,
-    providerSessions
+    providerSessions,
+    workflowDismissals
   };
+}
+
+function decodeWorkflowDismissals(value: unknown): WorkflowProposalDismissal[] {
+  if (!Array.isArray(value)) return [];
+  const byProposalId = new Map<string, WorkflowProposalDismissal>();
+  for (const candidate of value.slice(0, MAX_WORKFLOW_DISMISSALS_PER_MACHINE)) {
+    if (!isWorkflowProposalDismissal(candidate)) continue;
+    byProposalId.set(candidate.proposalId, {
+      proposalId: candidate.proposalId,
+      taskId: normalizeCanonicalUuid(candidate.taskId)!,
+      dismissedAt: candidate.dismissedAt
+    });
+  }
+  return [...byProposalId.values()]
+    .sort((left, right) => right.dismissedAt.localeCompare(left.dismissedAt))
+    .slice(0, MAX_WORKFLOW_DISMISSALS_PER_MACHINE);
 }
 
 function decodePluginData(
@@ -369,7 +404,7 @@ function decodePluginData(
     machines[id] = decodeMachine(rawMachines[id], id);
   }
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     settings: parseSettings(raw.settings),
     machines
   };
@@ -381,9 +416,9 @@ function assertPluginDataCanBeSaved(raw: Record<string, unknown>, currentMachine
     (typeof raw.schemaVersion !== "number" ||
       !Number.isInteger(raw.schemaVersion) ||
       raw.schemaVersion < 1 ||
-      raw.schemaVersion > 4)
+      raw.schemaVersion > 5)
   ) {
-    const qualifier = typeof raw.schemaVersion === "number" && raw.schemaVersion > 4
+    const qualifier = typeof raw.schemaVersion === "number" && raw.schemaVersion > 5
       ? "uses a newer schema"
       : "uses an unsupported schema";
     throw new Error(`${PRODUCT_NAME} data ${qualifier} and cannot be saved safely.`);
@@ -451,6 +486,13 @@ function assertMachineCanBeSaved(value: unknown, id: string): void {
     id,
     isSavableProviderSessionRecord
   );
+  const workflowDismissals = assertRecordArrayWithinLimit(
+    value.workflowDismissals,
+    MAX_WORKFLOW_DISMISSALS_PER_MACHINE,
+    "workflow proposal dismissals",
+    id,
+    isSavableWorkflowProposalDismissal
+  );
 
   const decoded = decodeMachine(value, id);
   if (decoded.bindings.length !== bindings.length) {
@@ -467,6 +509,11 @@ function assertMachineCanBeSaved(value: unknown, id: string): void {
   if (decoded.providerSessions.length !== providerSessions.length) {
     throw new Error(
       `${PRODUCT_NAME} machine namespace ${id} has ambiguous provider sessions and cannot be saved safely.`
+    );
+  }
+  if (decoded.workflowDismissals.length !== workflowDismissals.length) {
+    throw new Error(
+      `${PRODUCT_NAME} machine namespace ${id} has ambiguous workflow proposal dismissals and cannot be saved safely.`
     );
   }
 }
@@ -488,6 +535,10 @@ function isSavableRunRecord(value: unknown): value is AgentRunRecord {
 
 function isSavableProviderSessionRecord(value: unknown): value is ProviderSessionMapping {
   return isProviderSessionMapping(value) && hasOnlyKnownKeys(value, PROVIDER_SESSION_KEYS);
+}
+
+function isSavableWorkflowProposalDismissal(value: unknown): value is WorkflowProposalDismissal {
+  return isWorkflowProposalDismissal(value) && hasOnlyKnownKeys(value, WORKFLOW_DISMISSAL_KEYS);
 }
 
 function hasOnlyKnownKeys(value: unknown, allowed: ReadonlySet<string>): boolean {
@@ -940,6 +991,32 @@ export class BindingRepository {
     return this.currentMachine().providerSessions.map((mapping) => ({ ...mapping }));
   }
 
+  listWorkflowDismissals(): WorkflowProposalDismissal[] {
+    return this.currentMachine().workflowDismissals.map((dismissal) => ({ ...dismissal }));
+  }
+
+  async dismissWorkflowProposal(dismissal: WorkflowProposalDismissal): Promise<void> {
+    if (!isWorkflowProposalDismissal(dismissal)) {
+      throw new Error("Workflow proposal dismissal contains an invalid identity or timestamp.");
+    }
+    const normalized: WorkflowProposalDismissal = {
+      proposalId: dismissal.proposalId,
+      taskId: normalizeCanonicalUuid(dismissal.taskId)!,
+      dismissedAt: dismissal.dismissedAt
+    };
+    await this.commit((data) => {
+      const machine = this.machineFor(data);
+      machine.workflowDismissals = machine.workflowDismissals.filter(
+        (candidate) => candidate.proposalId !== normalized.proposalId
+      );
+      machine.workflowDismissals.unshift(normalized);
+      machine.workflowDismissals = machine.workflowDismissals.slice(
+        0,
+        MAX_WORKFLOW_DISMISSALS_PER_MACHINE
+      );
+    });
+  }
+
   async mapProviderSession(mapping: ProviderSessionMapping): Promise<void> {
     if (!isProviderSessionMapping(mapping)) {
       throw new Error("Provider session mapping contains an invalid canonical identity or value.");
@@ -1236,7 +1313,12 @@ export class BindingRepository {
   }
 
   private machineFor(data: PersistedPluginData): MachineBindings {
-    data.machines[this.currentMachineId] ??= { bindings: [], runs: [], providerSessions: [] };
+    data.machines[this.currentMachineId] ??= {
+      bindings: [],
+      runs: [],
+      providerSessions: [],
+      workflowDismissals: []
+    };
     return data.machines[this.currentMachineId]!;
   }
 

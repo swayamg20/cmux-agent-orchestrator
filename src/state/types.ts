@@ -3,6 +3,7 @@ import type { AgentRunRecord, BindingRecord } from "../bindings/types";
 import type { ActivityKind, EvidenceSource } from "../evidence/types";
 import type { SessionConversation } from "../providers/types";
 import type { TaskRecord, WorkflowStatus } from "../tasks/TaskSchema";
+import type { WorkflowProposal } from "../workflow/WorkflowAutomationPolicy";
 
 export type ProviderKind = "claude" | "codex" | "shell" | "unknown";
 export type Confidence = "low" | "medium" | "high";
@@ -131,6 +132,7 @@ export interface CockpitState {
   bindings: BindingRecord[];
   runs: AgentRunRecord[];
   attention: AttentionItem[];
+  workflowProposals: WorkflowProposal[];
   health: CockpitHealth;
   filters: SessionFilters;
   refreshing: boolean;
@@ -163,6 +165,7 @@ export const INITIAL_COCKPIT_STATE: CockpitState = {
   bindings: [],
   runs: [],
   attention: [],
+  workflowProposals: [],
   health: {
     topology: {
       status: "unavailable",
