@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Add Off, Suggest, and Safe auto workflow-automation modes, defaulting to explained suggestions with explicit Apply and Dismiss actions.
+- Suggest guarded Backlog-to-Active, Active-to-Review, and Review-to-Active transitions from exact task/session bindings and credible fresh evidence.
+- Allow Safe auto to apply only a fresh, high-confidence structured Active-to-Review proposal, with a visible recent-change marker.
+- Feature-detect cmux live events and coalesce relevant topology, notification, and lifecycle signals into authoritative snapshot refreshes.
+
+### Changed
+
+- Persist schema-v5 machine-scoped workflow proposal dismissals while keeping proposal evidence, event payloads, and recent-change markers memory-only.
+- Fall back to startup plus manual Refresh when cmux live events are unsupported or the event stream stops, without polling.
+
+### Security
+
+- Revalidate settings, task revision, workflow, exact binding, evidence freshness, source health, and dismissal state immediately before every automated workflow write.
+- Protect Parked and Done from automation, prohibit automatic completion, and require compare-and-set task updates so stale proposals cannot overwrite a newer human decision.
+- Strictly bound cmux JSONL event frames and stderr, retain only an in-memory boot/sequence cursor, and force full resynchronization after restart, replay, or sequence gaps.
+
 ## [0.3.0] - 2026-09-05
 
 ### Added
