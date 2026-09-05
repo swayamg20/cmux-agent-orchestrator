@@ -123,6 +123,16 @@ export interface CockpitHealth {
   lifecycle: SourceHealth;
 }
 
+export interface AppliedWorkflowChange {
+  proposalId: string;
+  taskId: string;
+  taskUpdatedAt: string;
+  from: WorkflowStatus;
+  to: WorkflowStatus;
+  explanation: string;
+  appliedAt: number;
+}
+
 export interface CockpitState {
   connection: ConnectionState;
   snapshot: CmuxSnapshot | null;
@@ -133,6 +143,7 @@ export interface CockpitState {
   runs: AgentRunRecord[];
   attention: AttentionItem[];
   workflowProposals: WorkflowProposal[];
+  recentWorkflowChanges: AppliedWorkflowChange[];
   health: CockpitHealth;
   filters: SessionFilters;
   refreshing: boolean;
@@ -166,6 +177,7 @@ export const INITIAL_COCKPIT_STATE: CockpitState = {
   runs: [],
   attention: [],
   workflowProposals: [],
+  recentWorkflowChanges: [],
   health: {
     topology: {
       status: "unavailable",

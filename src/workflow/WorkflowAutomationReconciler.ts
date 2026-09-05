@@ -16,7 +16,12 @@ export interface WorkflowAutomationAuthority {
 
 export interface WorkflowAutomationReconcilerDependencies {
   getAuthority(): WorkflowAutomationAuthority;
-  publishTasks(repository: TaskRepository, taskFolder: string): Promise<void>;
+  publishTasks(
+    repository: TaskRepository,
+    taskFolder: string,
+    proposal: WorkflowProposal,
+    automatic: boolean
+  ): Promise<void>;
   onAutomaticError(proposal: WorkflowProposal, error: unknown): void;
 }
 
@@ -129,7 +134,7 @@ export class WorkflowAutomationReconciler {
 
     const applied = await repository.updateWorkflowIfCurrent(task, proposal.to, canMutate);
     if (!applied) return false;
-    await this.dependencies.publishTasks(repository, taskFolder);
+    await this.dependencies.publishTasks(repository, taskFolder, proposal, automatic);
     return true;
   }
 

@@ -44,6 +44,7 @@ import {
 } from "../settings/AgentCockpitSettings";
 import { CockpitStore } from "../state/CockpitStore";
 import type {
+  AppliedWorkflowChange,
   ConnectionState,
   LiveSession,
   SessionFilters,
@@ -143,7 +144,7 @@ export class AgentCockpitController {
         tasks: this.store.getState().tasks,
         proposals: this.buildCurrentWorkflowProposals()
       }),
-      publishTasks: async (repository, taskFolder) => {
+      publishTasks: async (repository, taskFolder, proposal, automatic) => {
         await this.waitForSettingsUpdates();
         if (
           this.disposed ||
@@ -152,7 +153,29 @@ export class AgentCockpitController {
         ) {
           return;
         }
-        this.store.update({ tasks: repository.list() });
+        const tasks = repository.list();
+        this.store.update((state) => {
+          if (!automatic) return { tasks };
+          const updatedTask = tasks.find((task) => task.taskId === proposal.taskId);
+          if (updatedTask === undefined) return { tasks };
+          return {
+            tasks,
+            recentWorkflowChanges: [
+              {
+                proposalId: proposal.id,
+                taskId: proposal.taskId,
+                taskUpdatedAt: updatedTask.updatedAt,
+                from: proposal.from,
+                to: proposal.to,
+                explanation: proposal.explanation,
+                appliedAt: Date.now()
+              },
+              ...state.recentWorkflowChanges.filter(
+                (change) => change.proposalId !== proposal.id
+              )
+            ].slice(0, 100)
+          };
+        });
         this.recomputeSessions();
       },
       onAutomaticError: (_proposal, error) => {
@@ -1122,8 +1145,17 @@ export class AgentCockpitController {
     if (this.disposed) return;
     const state = this.store.getState();
     const snapshot = state.snapshot;
+    const recentWorkflowChanges = currentWorkflowChanges(
+      state.recentWorkflowChanges,
+      state.tasks
+    );
     if (snapshot === null) {
-      this.store.update({ sessions: [], attention: [], workflowProposals: [] });
+      this.store.update({
+        sessions: [],
+        attention: [],
+        workflowProposals: [],
+        recentWorkflowChanges
+      });
       return;
     }
     this.syncCurrentEvidence(snapshot, state.notifications);
@@ -1173,7 +1205,7 @@ export class AgentCockpitController {
       bindings: state.bindings,
       health: state.health
     });
-    this.store.update({ sessions, attention, workflowProposals });
+    this.store.update({ sessions, attention, workflowProposals, recentWorkflowChanges });
     this.workflowAutomation.schedule(workflowProposals);
   }
 
@@ -2109,6 +2141,21 @@ export class AgentCockpitController {
     if (this.taskRepository === null) throw new Error("Task repository is not initialized.");
     return this.taskRepository;
   }
+}
+
+function currentWorkflowChanges(
+  changes: readonly AppliedWorkflowChange[],
+  tasks: readonly TaskRecord[]
+): AppliedWorkflowChange[] {
+  const tasksById = new Map(tasks.map((task) => [task.taskId, task] as const));
+  return changes.filter((change) => {
+    const task = tasksById.get(change.taskId);
+    return (
+      task !== undefined &&
+      task.workflowStatus === change.to &&
+      task.updatedAt === change.taskUpdatedAt
+    );
+  });
 }
 
 function providerSurfaceIdentities(snapshot: CmuxSnapshot): ProviderSurfaceIdentity[] {

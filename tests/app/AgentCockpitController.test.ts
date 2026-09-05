@@ -6569,6 +6569,7 @@ describe("AgentCockpitController workflow automation", () => {
     await expect(controller.applyWorkflowProposal(proposal)).resolves.toBe(true);
     expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("review");
     expect(controller.store.getState().workflowProposals).toEqual([]);
+    expect(controller.store.getState().recentWorkflowChanges).toEqual([]);
     expect(persisted).toBeDefined();
     controller.dispose();
   });
@@ -6595,6 +6596,13 @@ describe("AgentCockpitController workflow automation", () => {
       { workflowStatus: "review" }
     ]);
     expect(controller.store.getState().workflowProposals).toEqual([]);
+    expect(controller.store.getState().recentWorkflowChanges).toMatchObject([
+      {
+        taskId: controller.store.getState().tasks[0]?.taskId,
+        from: "active",
+        to: "review"
+      }
+    ]);
     controller.dispose();
   });
 

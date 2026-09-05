@@ -127,12 +127,16 @@ export class AgentCockpitView extends ItemView {
     if (this.activeSection === "work") {
       renderNeedsAttentionPanel(panel, state, this.expanded, {
         ...sessionActions,
-        openTask: (task) => void this.controller.openTask(task)
+        openTask: (task) => void this.controller.openTask(task),
+        apply: (proposal) => this.controller.applyWorkflowProposal(proposal),
+        dismiss: (proposal) => this.controller.dismissWorkflowProposal(proposal)
       });
       renderKanbanPanel(panel, state, {
         createTask: () => this.controller.showCreateTask(null),
         openTask: (task) => void this.controller.openTask(task),
-        moveTask: (task, status) => this.controller.updateWorkflow(task, status)
+        moveTask: (task, status) => this.controller.updateWorkflow(task, status),
+        apply: (proposal) => this.controller.applyWorkflowProposal(proposal),
+        dismiss: (proposal) => this.controller.dismissWorkflowProposal(proposal)
       });
     } else if (this.activeSection === "agents") {
       renderSessionInbox(panel, state, this.showAllInbox, {

@@ -1002,6 +1002,69 @@
   line-height: 1.35;
 }
 
+.agent-cockpit-workflow-suggestion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ac-space-3);
+  padding: var(--ac-space-2) var(--ac-space-3);
+  border-left: 2px solid var(--interactive-accent);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary-alt);
+}
+
+.agent-cockpit-workflow-suggestion--task {
+  margin-top: var(--ac-space-3);
+}
+
+.agent-cockpit-workflow-suggestion--attention {
+  margin: 0 var(--ac-space-2) var(--ac-space-2);
+}
+
+.agent-cockpit-workflow-suggestion-copy {
+  min-width: 0;
+}
+
+.agent-cockpit-workflow-suggestion-title {
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+}
+
+.agent-cockpit-workflow-suggestion-detail {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+}
+
+.agent-cockpit-workflow-suggestion-actions {
+  display: flex;
+  flex: none;
+  gap: var(--ac-space-1);
+}
+
+.agent-cockpit-workflow-suggestion-actions button {
+  white-space: nowrap;
+}
+
+.agent-cockpit-workflow-applied {
+  display: flex;
+  align-items: center;
+  gap: var(--ac-space-2);
+  margin-top: var(--ac-space-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-workflow-applied-label {
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--text-success);
+  background: var(--background-modifier-success);
+  font-weight: var(--font-medium);
+}
+
 .agent-cockpit-task-runtime {
   justify-content: space-between;
   gap: var(--ac-space-2);
@@ -1151,6 +1214,14 @@
 
   .agent-cockpit-task-attention-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-cockpit-workflow-suggestion {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-cockpit-workflow-suggestion-actions {
+    justify-content: flex-start;
   }
 
   .agent-cockpit-inbox-row {
