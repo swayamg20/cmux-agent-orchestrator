@@ -1066,6 +1066,27 @@ describe("BindingRepository", () => {
     expect(first.getSettings()).toEqual(remoteSettings);
   });
 
+  it("persists the workflow automation mode through the strict settings allowlist", async () => {
+    let persisted: unknown = { schemaVersion: 4, settings: {}, machines: {} };
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const repository = new BindingRepository(plugin);
+    await repository.load();
+
+    await repository.updateSettings({
+      ...repository.getSettings(),
+      workflowAutomation: "safe-auto"
+    });
+
+    expect(repository.getSettings().workflowAutomation).toBe("safe-auto");
+    expect((persisted as { settings: { workflowAutomation: string } }).settings.workflowAutomation)
+      .toBe("safe-auto");
+  });
+
   it("does not save from stale memory when refreshing persisted data fails", async () => {
     const persisted = { schemaVersion: 3, settings: {}, machines: {} };
     let loadCount = 0;

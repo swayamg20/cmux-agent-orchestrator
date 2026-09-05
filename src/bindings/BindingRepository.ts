@@ -27,6 +27,7 @@ const SETTINGS_KEYS = new Set([
   "cmuxBinaryPath",
   "taskFolder",
   "autoTrackAgentRuns",
+  "workflowAutomation",
   "previewLines",
   "previewMaxBytes",
   "staleAfterMs"
