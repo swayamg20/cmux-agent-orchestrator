@@ -16,10 +16,18 @@ export interface WorkflowProposalInput {
   dismissals: readonly WorkflowProposalDismissal[];
   mode: WorkflowAutomationMode;
   now: number;
+  health: WorkflowEvidenceHealth;
+}
+
+export interface WorkflowEvidenceHealth {
+  connected: boolean;
+  topologyFresh: boolean;
+  lifecycleFresh: boolean;
+  notificationsFresh: boolean;
 }
 
 export function buildWorkflowProposals(input: WorkflowProposalInput): WorkflowProposal[] {
-  if (input.mode === "off") return [];
+  if (input.mode === "off" || !input.health.connected || !input.health.topologyFresh) return [];
   const dismissed = new Set(input.dismissals.map((candidate) => candidate.proposalId));
   const proposals: WorkflowProposal[] = [];
 
@@ -36,6 +44,7 @@ export function buildWorkflowProposals(input: WorkflowProposalInput): WorkflowPr
         })
       )
       .filter((proposal): proposal is WorkflowProposal => proposal !== null)
+      .filter((proposal) => evidenceSourceIsFresh(proposal, input.health))
       .filter((proposal) => !dismissed.has(proposal.id))
       .sort(compareProposals);
     const selected = candidates[0];
@@ -48,6 +57,16 @@ export function buildWorkflowProposals(input: WorkflowProposalInput): WorkflowPr
       right.observedAt - left.observedAt ||
       left.taskId.localeCompare(right.taskId)
   );
+}
+
+function evidenceSourceIsFresh(
+  proposal: WorkflowProposal,
+  health: WorkflowEvidenceHealth
+): boolean {
+  if (proposal.reason === "exact-run-attached") return true;
+  if (proposal.source === "provider-lifecycle") return health.lifecycleFresh;
+  if (proposal.source === "cmux-notification") return health.notificationsFresh;
+  return false;
 }
 
 function hasExactBinding(

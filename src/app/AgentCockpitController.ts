@@ -65,6 +65,9 @@ import {
   selectAutomaticTrackCandidates,
   type AutomaticTrackCandidate
 } from "../tracking/AutomaticTaskTracking";
+import type { WorkflowProposal } from "../workflow/WorkflowAutomationPolicy";
+import { WorkflowAutomationReconciler } from "../workflow/WorkflowAutomationReconciler";
+import { buildWorkflowProposals } from "../workflow/WorkflowProposalEngine";
 import { RefreshCoordinator, type RefreshResult } from "./RefreshCoordinator";
 
 export type CmuxClientFactory = (explicitBinaryPath: string) => Promise<CmuxClient>;
@@ -102,6 +105,7 @@ export class AgentCockpitController {
   private pendingSettingsUpdates = 0;
   private automaticTrackingGeneration = 0;
   private readonly reportedAutomaticTrackingIssues = new Map<string, string>();
+  private readonly workflowAutomation: WorkflowAutomationReconciler;
   private readonly openModals = new Set<Modal>();
   private readonly conversationPickerLoads = new Set<string>();
   private automaticTrackingPass: AutomaticTrackingPass | null = null;
@@ -130,6 +134,33 @@ export class AgentCockpitController {
     private readonly providerSessionResolver: ProviderSessionResolver = NOOP_PROVIDER_SESSION_RESOLVER
   ) {
     this.bindings = new BindingRepository(plugin);
+    this.workflowAutomation = new WorkflowAutomationReconciler({
+      getAuthority: () => ({
+        ready: !this.disposed && this.pendingSettingsUpdates === 0,
+        mode: this.settings?.workflowAutomation ?? "off",
+        repository: this.taskRepository,
+        taskFolder: this.settings?.taskFolder ?? null,
+        tasks: this.store.getState().tasks,
+        proposals: this.buildCurrentWorkflowProposals()
+      }),
+      publishTasks: async (repository, taskFolder) => {
+        await this.waitForSettingsUpdates();
+        if (
+          this.disposed ||
+          this.taskRepository !== repository ||
+          this.settings?.taskFolder !== taskFolder
+        ) {
+          return;
+        }
+        this.store.update({ tasks: repository.list() });
+        this.recomputeSessions();
+      },
+      onAutomaticError: (_proposal, error) => {
+        if (!this.disposed) {
+          new Notice(`Workflow automation could not apply a suggestion: ${readableError(error)}`);
+        }
+      }
+    });
   }
 
   async initialize(): Promise<void> {
@@ -271,6 +302,7 @@ export class AgentCockpitController {
     await this.identityWork;
     await Promise.all([this.classificationWork, this.metadataWork]);
     await this.automaticTrackingWork;
+    await this.workflowAutomation.waitForIdle();
   }
 
   async loadPreview(session: LiveSession): Promise<void> {
@@ -634,6 +666,42 @@ export class AgentCockpitController {
     }
   }
 
+  async applyWorkflowProposal(proposal: WorkflowProposal): Promise<boolean> {
+    if (this.disposed) return false;
+    try {
+      const applied = await this.workflowAutomation.apply(proposal);
+      if (!applied && !this.disposed) {
+        new Notice("That workflow suggestion is no longer current.");
+      }
+      return applied;
+    } catch (error) {
+      if (!this.disposed) new Notice(readableError(error));
+      return false;
+    }
+  }
+
+  async dismissWorkflowProposal(proposal: WorkflowProposal): Promise<boolean> {
+    if (this.disposed) return false;
+    try {
+      const current = this.currentWorkflowProposal(proposal.id);
+      if (current === null || current.taskId !== proposal.taskId) {
+        new Notice("That workflow suggestion is no longer current.");
+        return false;
+      }
+      await this.bindings.dismissWorkflowProposal({
+        proposalId: current.id,
+        taskId: current.taskId,
+        dismissedAt: new Date().toISOString()
+      });
+      if (this.disposed) return false;
+      this.recomputeSessions();
+      return true;
+    } catch (error) {
+      if (!this.disposed) new Notice(readableError(error));
+      return false;
+    }
+  }
+
   async reloadTasks(
     invalidations: readonly TaskInvalidationEvidence[] = [],
     renames: readonly TaskRenameEvidence[] = []
@@ -733,6 +801,7 @@ export class AgentCockpitController {
     const parsed = parseSettings({ ...next, cmuxBinaryPath: validateBinarySetting(next.cmuxBinaryPath) });
     this.pendingSettingsUpdates += 1;
     this.cancelAutomaticTaskTracking();
+    this.workflowAutomation.cancel();
     const operation = this.settingsUpdateWork
       .catch(() => undefined)
       .then(() => this.applySettingsUpdate(parsed));
@@ -744,8 +813,11 @@ export class AgentCockpitController {
       await operation;
     } finally {
       this.pendingSettingsUpdates -= 1;
-      if (this.pendingSettingsUpdates === 0 && this.settings?.autoTrackAgentRuns === true) {
-        this.scheduleAutomaticTaskTracking();
+      if (this.pendingSettingsUpdates === 0) {
+        if (this.settings?.autoTrackAgentRuns === true) {
+          this.scheduleAutomaticTaskTracking();
+        }
+        this.workflowAutomation.schedule(this.store.getState().workflowProposals);
       }
     }
   }
@@ -778,6 +850,7 @@ export class AgentCockpitController {
     if (this.disposed || this.store.getState().refreshing) return;
     this.refreshCoordinator.dispose();
     this.cancelIdentityResolution();
+    this.workflowAutomation.cancel();
     this.automaticProviderMappings = [];
     this.suppressedProviderSurfaceIds.clear();
     this.suppressedProviderSessionKeys.clear();
@@ -807,6 +880,7 @@ export class AgentCockpitController {
     this.clientGeneration += 1;
     this.refreshStateGeneration += 1;
     this.cancelAutomaticTaskTracking();
+    this.workflowAutomation.cancel();
     this.refreshCoordinator.dispose();
     this.previewScheduler.dispose();
     this.cancelIdentityResolution();
@@ -822,6 +896,7 @@ export class AgentCockpitController {
     this.evidence.clear();
     this.providerClassifier.clear();
     this.reportedAutomaticTrackingIssues.clear();
+    this.workflowAutomation.dispose();
     this.automaticTrackingPass = null;
     this.store.clear();
   }
@@ -853,6 +928,7 @@ export class AgentCockpitController {
 
   private async connect(): Promise<void> {
     if (this.disposed) return;
+    this.workflowAutomation.cancel();
     const clientGeneration = ++this.clientGeneration;
     this.client?.dispose();
     this.client = null;
@@ -864,7 +940,8 @@ export class AgentCockpitController {
         status: "connecting",
         message: "Connecting to cmux...",
         checkedAt: Date.now()
-      }
+      },
+      workflowProposals: []
     });
     let candidate: CmuxClient | null = null;
     try {
@@ -947,6 +1024,7 @@ export class AgentCockpitController {
     // the prior snapshot may finish creating a note, but it must not bind a
     // provider session after this point without being selected again.
     this.cancelAutomaticTaskTracking();
+    this.workflowAutomation.cancel();
     this.identityResolvedGeneration = null;
     const checkedAt = snapshot.observedAt;
     this.automaticProviderMappings = [];
@@ -998,6 +1076,7 @@ export class AgentCockpitController {
     // enough to authorize automatic durable bindings.
     this.cancelIdentityResolution();
     this.cancelAutomaticTaskTracking();
+    this.workflowAutomation.cancel();
     this.automaticProviderMappings = [];
     this.suppressedProviderSurfaceIds.clear();
     this.suppressedProviderSessionKeys.clear();
@@ -1015,6 +1094,7 @@ export class AgentCockpitController {
           state.health.lifecycle.lastSuccessAt !== null
         )
       },
+      workflowProposals: [],
       error: message
     }));
   }
@@ -1035,6 +1115,7 @@ export class AgentCockpitController {
       },
       error: `Notifications unavailable: ${message}`
     }));
+    this.recomputeSessions();
   }
 
   private recomputeSessions(): void {
@@ -1042,7 +1123,7 @@ export class AgentCockpitController {
     const state = this.store.getState();
     const snapshot = state.snapshot;
     if (snapshot === null) {
-      this.store.update({ sessions: [], attention: [] });
+      this.store.update({ sessions: [], attention: [], workflowProposals: [] });
       return;
     }
     this.syncCurrentEvidence(snapshot, state.notifications);
@@ -1085,7 +1166,43 @@ export class AgentCockpitController {
       Date.now(),
       this.settings?.staleAfterMs ?? DEFAULT_SETTINGS.staleAfterMs
     );
-    this.store.update({ sessions, attention });
+    const workflowProposals = this.buildCurrentWorkflowProposals({
+      connection: state.connection,
+      sessions,
+      tasks: state.tasks,
+      bindings: state.bindings,
+      health: state.health
+    });
+    this.store.update({ sessions, attention, workflowProposals });
+    this.workflowAutomation.schedule(workflowProposals);
+  }
+
+  private buildCurrentWorkflowProposals(
+    state: Pick<
+      ReturnType<CockpitStore["getState"]>,
+      "connection" | "sessions" | "tasks" | "bindings" | "health"
+    > = this.store.getState()
+  ): WorkflowProposal[] {
+    return buildWorkflowProposals({
+      tasks: state.tasks,
+      sessions: state.sessions,
+      bindings: state.bindings,
+      dismissals: this.bindings.listWorkflowDismissals(),
+      mode: this.settings?.workflowAutomation ?? "off",
+      now: Date.now(),
+      health: {
+        connected: state.connection.status === "connected",
+        topologyFresh: state.health.topology.status === "fresh",
+        lifecycleFresh: state.health.lifecycle.status === "fresh",
+        notificationsFresh: state.health.notifications.status === "fresh"
+      }
+    });
+  }
+
+  private currentWorkflowProposal(proposalId: string): WorkflowProposal | null {
+    return this.buildCurrentWorkflowProposals().find(
+      (candidate) => candidate.id === proposalId
+    ) ?? null;
   }
 
   private syncCurrentEvidence(
@@ -1616,6 +1733,7 @@ export class AgentCockpitController {
             )
           }
         }));
+        this.recomputeSessions();
       })
       .finally(() => {
         if (this.identityAbortController === controller) this.identityAbortController = null;

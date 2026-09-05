@@ -5,6 +5,12 @@ import type { TaskRecord } from "../../src/tasks/TaskSchema";
 import { buildWorkflowProposals } from "../../src/workflow/WorkflowProposalEngine";
 
 const NOW = Date.parse("2026-09-06T04:00:00.000Z");
+const FRESH_HEALTH = {
+  connected: true,
+  topologyFresh: true,
+  lifecycleFresh: true,
+  notificationsFresh: true
+};
 
 function task(): TaskRecord {
   return {
@@ -87,7 +93,8 @@ describe("WorkflowProposalEngine", () => {
         bindings: [binding()],
         dismissals: [],
         mode: "safe-auto",
-        now: NOW
+        now: NOW,
+        health: FRESH_HEALTH
       })
     ).toMatchObject([{ taskId: task().taskId, to: "review", applyAutomatically: true }]);
   });
@@ -105,7 +112,8 @@ describe("WorkflowProposalEngine", () => {
         bindings: [binding(override)],
         dismissals: [],
         mode: "safe-auto",
-        now: NOW
+        now: NOW,
+        health: FRESH_HEALTH
       })
     ).toEqual([]);
   });
@@ -117,7 +125,8 @@ describe("WorkflowProposalEngine", () => {
       bindings: [binding()],
       dismissals: [],
       mode: "suggest",
-      now: NOW
+      now: NOW,
+      health: FRESH_HEALTH
     })[0]!;
     const dismissal = {
       proposalId: first.id,
@@ -131,7 +140,8 @@ describe("WorkflowProposalEngine", () => {
         bindings: [binding()],
         dismissals: [dismissal],
         mode: "suggest",
-        now: NOW
+        now: NOW,
+        health: FRESH_HEALTH
       })
     ).toEqual([]);
 
@@ -143,7 +153,8 @@ describe("WorkflowProposalEngine", () => {
         bindings: [binding()],
         dismissals: [dismissal],
         mode: "suggest",
-        now: NOW
+        now: NOW,
+        health: FRESH_HEALTH
       })
     ).toHaveLength(1);
   });
@@ -163,10 +174,29 @@ describe("WorkflowProposalEngine", () => {
       bindings: [secondBinding, binding()],
       dismissals: [],
       mode: "suggest",
-      now: NOW
+      now: NOW,
+      health: FRESH_HEALTH
     });
 
     expect(proposals).toHaveLength(1);
     expect(proposals[0]?.sessionKey).toBe("workspace:pane:surface");
+  });
+
+  it("removes proposals when their connection or source health becomes stale", () => {
+    const input = {
+      tasks: [task()],
+      sessions: [session()],
+      bindings: [binding()],
+      dismissals: [],
+      mode: "safe-auto" as const,
+      now: NOW
+    };
+
+    expect(buildWorkflowProposals({ ...input, health: { ...FRESH_HEALTH, connected: false } }))
+      .toEqual([]);
+    expect(buildWorkflowProposals({ ...input, health: { ...FRESH_HEALTH, topologyFresh: false } }))
+      .toEqual([]);
+    expect(buildWorkflowProposals({ ...input, health: { ...FRESH_HEALTH, lifecycleFresh: false } }))
+      .toEqual([]);
   });
 });

@@ -100,6 +100,37 @@ function exactCodexResolver(): ProviderSessionResolver {
   };
 }
 
+function exactCodexLifecycleResolver(
+  state: "working" | "blocked" | "idle" | "done" | "unknown" | "failed",
+  source: "detected" | "socket" | "hook" = "hook"
+): ProviderSessionResolver {
+  return {
+    resolve: async (currentSnapshot) => {
+      const resolved = exactCodexResolverResult(currentSnapshot.observedAt);
+      return {
+        ...resolved,
+        checkedAt: Date.now(),
+        nativeLifecycleAvailable: source === "socket" || source === "hook",
+        lifecycle: [
+          {
+            workspaceId: "22222222-2222-4222-8222-222222222222",
+            paneId: "33333333-3333-4333-8333-333333333333",
+            surfaceId: "44444444-4444-4444-8444-444444444444",
+            state,
+            source,
+            provider: "codex",
+            providerSessionId: "55555555-5555-4555-8555-555555555555",
+            observedAt: Date.now(),
+            occurredAt: Date.now(),
+            explanation: `Codex lifecycle state is ${state}.`
+          }
+        ]
+      };
+    },
+    dispose: () => undefined
+  };
+}
+
 function connectedTransport(observedAt: number): CmuxTransport {
   return {
     probe: async () => ({
@@ -4829,7 +4860,7 @@ describe("AgentCockpitController connection failures", () => {
     const task = await taskRepository.create({ title: "Do not trust future run data" });
     const plugin = {
       loadData: async () => ({
-        schemaVersion: 5,
+        schemaVersion: 6,
         settings: { autoTrackAgentRuns: false },
         machines: {
           "11111111111111111111": {
@@ -4982,7 +5013,7 @@ describe("AgentCockpitController connection failures", () => {
 
     await controller.initialize();
     persisted = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       settings: { autoTrackAgentRuns: false },
       machines: {
         "11111111111111111111": {
@@ -6497,6 +6528,177 @@ describe("AgentCockpitController connection failures", () => {
     await controller.waitForBackgroundWork();
     expect(memory.markdownWrites).toHaveLength(1);
     expect(controller.store.getState().tasks).toHaveLength(1);
+    controller.dispose();
+  });
+});
+
+describe("AgentCockpitController workflow automation", () => {
+  it("publishes a review suggestion and applies it only after explicit approval", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "suggest" }
+      }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const observedAt = Date.now() - 1_000;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(observedAt)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done")
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    const task = controller.store.getState().tasks[0]!;
+    const proposal = controller.store.getState().workflowProposals[0]!;
+    expect(task.workflowStatus).toBe("active");
+    expect(proposal).toMatchObject({
+      taskId: task.taskId,
+      from: "active",
+      to: "review",
+      reason: "turn-finished",
+      applyAutomatically: false
+    });
+
+    await expect(controller.applyWorkflowProposal(proposal)).resolves.toBe(true);
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("review");
+    expect(controller.store.getState().workflowProposals).toEqual([]);
+    expect(persisted).toBeDefined();
+    controller.dispose();
+  });
+
+  it("automatically moves Active to Review only for fresh structured high-confidence evidence", async () => {
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "safe-auto" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(Date.now() - 1_000)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done", "hook")
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().tasks).toMatchObject([
+      { workflowStatus: "review" }
+    ]);
+    expect(controller.store.getState().workflowProposals).toEqual([]);
+    controller.dispose();
+  });
+
+  it("keeps notification-only completion evidence as a suggestion in safe-auto mode", async () => {
+    const observedAt = Date.now() - 1_000;
+    const transport: CmuxTransport = {
+      ...connectedTransport(observedAt),
+      notifications: async () => [
+        {
+          id: "notification-1",
+          workspaceId: "22222222-2222-4222-8222-222222222222",
+          surfaceId: "44444444-4444-4444-8444-444444444444",
+          title: "Implementation complete",
+          subtitle: "",
+          body: "Ready for review",
+          isRead: false
+        }
+      ]
+    };
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "safe-auto" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().tasks).toMatchObject([
+      { workflowStatus: "active" }
+    ]);
+    expect(controller.store.getState().workflowProposals).toMatchObject([
+      {
+        from: "active",
+        to: "review",
+        source: "cmux-notification",
+        applyAutomatically: false
+      }
+    ]);
+    controller.dispose();
+  });
+
+  it("persists a dismissal and rejects the now-stale proposal", async () => {
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "suggest" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(Date.now() - 1_000)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done")
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const proposal = controller.store.getState().workflowProposals[0]!;
+
+    await expect(controller.dismissWorkflowProposal(proposal)).resolves.toBe(true);
+    expect(controller.store.getState().workflowProposals).toEqual([]);
+    const internal = controller as unknown as { bindings: BindingRepository };
+    expect(internal.bindings.listWorkflowDismissals()).toMatchObject([
+      { proposalId: proposal.id, taskId: proposal.taskId }
+    ]);
+    await expect(controller.applyWorkflowProposal(proposal)).resolves.toBe(false);
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("active");
+    controller.dispose();
+  });
+
+  it("rejects a proposal after the task workflow changes", async () => {
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "suggest" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(Date.now() - 1_000)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done")
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const task = controller.store.getState().tasks[0]!;
+    const proposal = controller.store.getState().workflowProposals[0]!;
+
+    await expect(controller.updateWorkflow(task, "parked")).resolves.toBe(true);
+    await expect(controller.applyWorkflowProposal(proposal)).resolves.toBe(false);
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("parked");
+    expect(controller.store.getState().workflowProposals).toEqual([]);
     controller.dispose();
   });
 });
