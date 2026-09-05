@@ -49,7 +49,7 @@ function session(
 }
 
 describe("selectSessionInbox", () => {
-  it("automatically includes only unlinked Claude and Codex runs", () => {
+  it("includes linked and unlinked Claude and Codex runs", () => {
     const result = selectSessionInbox(
       {
         sessions: [
@@ -64,8 +64,8 @@ describe("selectSessionInbox", () => {
       null
     );
 
-    expect(result.total).toBe(2);
-    expect(result.sessions.map((item) => item.key)).toEqual(["codex", "claude"]);
+    expect(result.total).toBe(3);
+    expect(result.sessions.map((item) => item.key)).toEqual(["codex", "claude", "linked"]);
   });
 
   it("puts attention-bearing runs first without creating or linking anything", () => {

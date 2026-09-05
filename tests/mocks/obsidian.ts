@@ -10,9 +10,18 @@ export function parseYaml(yaml: string): unknown {
 
 export class Notice {
   static readonly messages: string[] = [];
+  static readonly instances: Notice[] = [];
+  readonly message: unknown;
+  hidden = false;
 
-  constructor(message: unknown) {
+  constructor(message: unknown, _timeout?: number) {
+    this.message = message;
+    Notice.instances.push(this);
     if (typeof message === "string") Notice.messages.push(message);
+  }
+
+  hide(): void {
+    this.hidden = true;
   }
 }
 

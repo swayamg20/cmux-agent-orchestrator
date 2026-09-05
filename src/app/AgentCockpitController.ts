@@ -412,11 +412,11 @@ export class AgentCockpitController {
     ]);
     if (this.conversationPickerLoads.has(loadKey)) return;
     this.conversationPickerLoads.add(loadKey);
+    const loadingNotice = new Notice(
+      `Loading local ${session.provider.provider === "claude" ? "Claude" : "Codex"} conversation titles...`,
+      0
+    );
     try {
-      new Notice(
-        `Loading local ${session.provider.provider === "claude" ? "Claude" : "Codex"} conversation titles...`,
-        2_500
-      );
       const conversations = await this.providerMetadata.list(
         session.provider.provider,
         session.currentDirectory
@@ -447,8 +447,10 @@ export class AgentCockpitController {
       );
     } catch (error) {
       if (this.disposed) return;
+      loadingNotice.hide();
       new Notice(readableError(error));
     } finally {
+      loadingNotice.hide();
       this.conversationPickerLoads.delete(loadKey);
     }
   }

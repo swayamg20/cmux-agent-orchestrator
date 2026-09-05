@@ -5862,6 +5862,66 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("dismisses the conversation loading notice before reporting a metadata failure", async () => {
+    const currentSnapshot = snapshot(5_393);
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces[0]!.title = "Codex";
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => {
+        throw new Error("metadata source unavailable");
+      },
+      get: async () => null,
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(5_393),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const resolver: ProviderSessionResolver = {
+      resolve: async (current) => ({
+        checkedAt: current.observedAt + 1,
+        nativeLifecycleAvailable: false,
+        issues: [],
+        mappings: [],
+        lifecycle: []
+      }),
+      dispose: () => undefined
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([source]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+    const notices = (Notice as unknown as {
+      instances: Array<{ hidden: boolean; message: unknown }>;
+    }).instances;
+    const noticeStart = notices.length;
+
+    await controller.showConversationPicker(session);
+
+    const created = notices.slice(noticeStart);
+    expect(created).toHaveLength(2);
+    expect(created[0]).toMatchObject({
+      hidden: true,
+      message: "Loading local Codex conversation titles..."
+    });
+    expect(created[1]).toMatchObject({
+      hidden: false,
+      message: "metadata source unavailable"
+    });
+    controller.dispose();
+  });
+
   it("revalidates a selected provider conversation before persisting its match", async () => {
     let persisted: unknown;
     const get = vi.fn(async () => null);

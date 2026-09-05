@@ -28,4 +28,8 @@ describe("Work board viewport layout", () => {
     expect(declarationsFor(".agent-cockpit-kanban-column")).toContain("display: flex");
     expect(declarationsFor(".agent-cockpit-kanban-task-list")).toContain("overflow-y: auto");
   });
+
+  it("does not let the Work panel occupy space while another tab is selected", () => {
+    expect(declarationsFor(".agent-cockpit-mode-panel[hidden]")).toContain("display: none");
+  });
 });

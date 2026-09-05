@@ -177,7 +177,7 @@ export class AgentCockpitView extends ItemView {
     };
     const countLabels: Record<CockpitSection, string> = {
       work: "durable tasks",
-      agents: "untracked agent runs",
+      agents: "detected agent runs",
       cmux: "cmux surfaces"
     };
     const labels: Record<CockpitSection, string> = {

@@ -355,6 +355,10 @@
   overflow: auto;
 }
 
+.agent-cockpit-mode-panel[hidden] {
+  display: none;
+}
+
 .agent-cockpit-mode-panel--work {
   display: flex;
   flex-direction: column;
