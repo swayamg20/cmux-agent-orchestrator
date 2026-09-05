@@ -115,4 +115,29 @@ describe("SafeProcessRunner", () => {
     await expect(failure).resolves.toBe("output-limit");
     runner.dispose();
   });
+
+  it("keeps the startup deadline until the first complete stream line", async () => {
+    const runner = new SafeProcessRunner();
+    let stream!: ReturnType<SafeProcessRunner["streamLines"]>;
+    const outcome = new Promise<string>((resolve) => {
+      stream = runner.streamLines(
+        process.execPath,
+        ["-e", "process.stdout.write('{');setInterval(()=>{},1000)"],
+        { startupTimeoutMs: 50, maxLineBytes: 1_024, maxStderrBytes: 1_024 },
+        {
+          onLine: () => resolve("line"),
+          onError: (error) => resolve(error.reason)
+        }
+      );
+    });
+
+    const result = await Promise.race([
+      outcome,
+      new Promise<string>((resolve) => setTimeout(() => resolve("still-running"), 500))
+    ]);
+    stream.dispose();
+    runner.dispose();
+
+    expect(result).toBe("timeout");
+  });
 });

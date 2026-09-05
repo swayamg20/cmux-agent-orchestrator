@@ -221,6 +221,7 @@ export class SafeProcessRunner {
     const stderrChunks: Buffer[] = [];
     let stderrBytes = 0;
     let settled = false;
+    let receivedInitialLine = false;
     let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
     let startupTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -281,6 +282,10 @@ export class SafeProcessRunner {
         ? lineBuffer.subarray(0, lineBuffer.byteLength - 1)
         : lineBuffer;
       if (normalized.byteLength === 0) return true;
+      if (!receivedInitialLine) {
+        receivedInitialLine = true;
+        releaseTimers();
+      }
       try {
         handlers.onLine(normalized.toString("utf8"));
         return true;
@@ -298,7 +303,6 @@ export class SafeProcessRunner {
 
     child.stdout?.on("data", (chunk: Buffer) => {
       if (settled) return;
-      releaseTimers();
       pending = pending.byteLength === 0 ? chunk : Buffer.concat([pending, chunk]);
       let newline = pending.indexOf(0x0a);
       while (newline >= 0) {
