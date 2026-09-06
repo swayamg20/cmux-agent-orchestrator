@@ -14,7 +14,7 @@ Use Obsidian's interface font and native text sizes. Establish hierarchy through
 
 ## Layout
 
-One `ItemView` uses three clear modes instead of stacking every concern into one control panel. Work contains compact attention and the durable board. Agent runs contains confidently detected, untracked Claude and Codex executions with one visible `Track in board` action; Focus and Attach remain in a secondary menu. cmux owns the exact workspace, pane, and surface hierarchy. The board always renders Backlog, Active, Review, Parked, and Done—even when empty. Session rows reveal evidence and bounded previews inline only when requested.
+One `ItemView` uses three clear modes instead of stacking every concern into one control panel. Work contains compact attention and the durable board. Agent runs contains the complete confidently detected Claude and Codex run inventory: linked runs open their task, while unlinked runs expose one visible `Track in board` action; Focus, Attach, and Detach remain in a secondary menu. cmux owns the exact workspace, pane, and surface hierarchy. The board always renders Backlog, Active, Review, Parked, and Done—even when empty. Session rows reveal evidence and bounded previews inline only when requested.
 
 Use a 4 px spacing base with compact operational rhythm. Components adapt to their pane width using container queries where supported and conservative media-query fallbacks.
 

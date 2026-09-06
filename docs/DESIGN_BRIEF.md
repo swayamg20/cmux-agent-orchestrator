@@ -13,7 +13,7 @@ Recognize the session or task that needs human judgment and focus its exact exis
 - Restrained, host-theme-adaptive color strategy.
 - Scene: a focused developer scans Obsidian on a large desktop display while multiple background agents run; healthy work stays quiet and exceptions are immediately legible.
 - Anchors: Obsidian for host-native behavior, Linear for compact task scanning, Activity Monitor for understandable runtime hierarchy, and Raycast for explicit actions.
-- Approved visual direction: one restrained native ItemView with three purposeful modes—Work, Agent runs, and cmux—so durable work, untracked executions, and raw terminal topology never compete in one stacked control panel.
+- Approved visual direction: one restrained native ItemView with three purposeful modes—Work, Agent runs, and cmux—so durable work, the complete detected run inventory, and raw terminal topology never compete in one stacked control panel.
 
 ## Scope
 
@@ -21,7 +21,7 @@ Production-ready desktop plugin surface covering Work attention and the durable 
 
 ## Layout strategy
 
-The header establishes connection health and refresh without dominating. A compact native tab bar separates the modes. Work keeps attention above the five-column board; Agent runs gives untracked executions a dedicated scan-and-track list; cmux reserves the full canvas for filters and exact runtime inspection.
+The header establishes connection health and refresh without dominating. A compact native tab bar separates the modes. Work keeps attention above the five-column board; Agent runs gives linked and unlinked executions a dedicated scan-and-coordinate list; cmux reserves the full canvas for filters and exact runtime inspection.
 
 ## Key states
 

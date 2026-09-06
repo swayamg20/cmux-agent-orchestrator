@@ -54,6 +54,7 @@ Verify manually:
 - Off mode creates no workflow proposal. Suggest mode shows an explanation with Apply and Dismiss, persists dismissal across reload, and never moves the card without Apply.
 - Backlog-to-Active and Review-to-Active proposals remain manual in every mode. Parked and Done never receive an automatic proposal.
 - A notification-backed or partial-evidence finished turn remains a suggestion in Safe auto mode. Only fresh, high-confidence structured finished-turn evidence may apply Active to Review automatically, and the card shows a recent Safe auto marker afterward.
+- When one task has several exact linked runs, fresh Working evidence from any sibling run keeps an Active-to-Review change manual even if another run has safely finished.
 - Missing, idle, waiting, failed, stale, and State unknown sessions do not mutate workflow. No runtime evidence moves a task to Done.
 - Focus in cmux targets a user-approved development surface and sends no text.
 - Disabling and re-enabling the plugin leaves all cmux sessions running.

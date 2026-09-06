@@ -17,10 +17,16 @@ All notable changes to this project will be documented in this file.
 
 - Persist schema-v5 machine-scoped workflow proposal dismissals while keeping proposal evidence, event payloads, and recent-change markers memory-only.
 - Fall back to startup plus manual Refresh when cmux live events are unsupported or the event stream stops, without polling.
+- Keep every detected Claude and Codex run visible in Agent runs, with linked runs opening their Work task and unlinked runs retaining explicit tracking actions.
+- Rediscover the Codex executable for each metadata operation so conversation titles recover after a CLI upgrade or executable-path replacement.
 
 ### Fixed
 
 - Allow a bounded five-second command window so a cold password-mode cmux socket handshake does not fail at the previous three-second edge.
+- Require a complete first cmux event frame before enabling automatic updates, so a partial startup write cannot masquerade as a healthy stream.
+- Keep Active-to-Review automatic changes fail-closed when another exact run attached to the same task still has fresh Working evidence.
+- Preserve the current workflow proposal when automation is cancelled and immediately rescheduled, instead of letting stale cleanup discard the new generation.
+- Keep hidden mode panels out of layout and dismiss the conversation-title loading notice cleanly when metadata loading succeeds or fails.
 
 ### Security
 

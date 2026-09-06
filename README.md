@@ -16,7 +16,7 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 
 ### Agent runs
 
-![Detected Claude and Codex runs ready to track on the work board](screenshots/agent-runs.png)
+![Detected Claude and Codex runs, including linked and unlinked work](screenshots/agent-runs.png)
 
 ### cmux
 
@@ -25,7 +25,7 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 ## What the current build provides
 
 - One native Obsidian `ItemView`, opened from the ribbon or command palette.
-- Three focused native modes: Work for attention and the durable board, Agent runs for untracked Claude/Codex executions, and cmux for the exact terminal tree.
+- Three focused native modes: Work for attention and the durable board, Agent runs for the complete detected Claude/Codex run inventory, and cmux for the exact terminal tree.
 - All five workflow columns are always visible, including in a brand-new vault with no task notes.
 - Canonical workspace, pane, and surface UUIDs from cmux JSON output.
 - Conservative Claude, Codex, shell, and unknown detection with evidence and confidence.
@@ -57,7 +57,7 @@ cmux Agent Orchestrator does not host a PTY, autonomously resume providers, send
 
 Agent evidence and workflow state are deliberately independent. Runtime evidence feeds a pure proposal policy; it does not directly own Markdown workflow. A quiet, missing, errored, idle, stale, unknown, or ended session never moves a task, and no evidence can move a task to Done.
 
-Workflow automation is configurable as Off, Suggest, or Safe auto, with Suggest as the default. Backlog to Active for an exact attached run and Review to Active for credible resumed work are suggestions only. Active to Review is also normally a suggestion; Safe auto may apply it only when a completed turn has fresh, high-confidence structured provider evidence. Parked and Done are always protected. Every write revalidates the current task, exact session binding, evidence, source health, settings, and proposal before using a compare-and-set workflow update.
+Workflow automation is configurable as Off, Suggest, or Safe auto, with Suggest as the default. Backlog to Active for an exact attached run and Review to Active for credible resumed work are suggestions only. Active to Review is also normally a suggestion; Safe auto may apply it only when a completed turn has fresh, high-confidence structured provider evidence. If another exact run attached to the same task still has fresh Working evidence, the Review change remains a manual suggestion. Parked and Done are always protected. Every write revalidates the current task, exact session binding, evidence, source health, settings, and proposal before using a compare-and-set workflow update.
 
 Exact, uniquely resolved Claude and Codex sessions become one neutral Active Markdown task and Work card by default. Identity is deduplicated by provider plus canonical session ID, so a refresh or reload cannot create a second task for the same run. If that exact provider conversation later appears on one new surface after its complete previous cmux target has disappeared, the existing binding moves to the new target without creating another task or run. If a different exact provider session reuses the same cmux surface, it does not inherit the previous task; automatic tracking creates a separate task and run while retaining the earlier task and history. The plugin refuses a move while the old target still exists or when either the saved binding or new identity is ambiguous. Conversation titles remain memory-only and appear on the live card; they are never copied into an automatically created note. Ambiguous, heuristic-only, duplicate, shell, and unknown sessions remain in Agent runs for manual review. Turning automatic tracking off stops new automatic tasks, and manually detaching a run prevents later refreshes from silently recreating it. If an explicit attachment races with background tracking, the user's attachment wins. Neither automatic nor manual tracking messages, resumes, interrupts, or otherwise controls the provider.
 
