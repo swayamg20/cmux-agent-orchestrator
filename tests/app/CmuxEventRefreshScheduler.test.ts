@@ -85,4 +85,42 @@ describe("CmuxEventRefreshScheduler", () => {
     await current.scheduler.flushNow();
     expect(current.refreshAll).not.toHaveBeenCalled();
   });
+
+  it("reports a refresh failure and remains usable for the next event", async () => {
+    const current = harness();
+    current.refreshTopology.mockRejectedValueOnce(new Error("simulated refresh failure"));
+
+    current.scheduler.request("topology");
+    await current.scheduler.flushNow();
+
+    expect(current.onError).toHaveBeenCalledOnce();
+    expect(current.onError).toHaveBeenCalledWith(expect.objectContaining({
+      message: "simulated refresh failure"
+    }));
+
+    current.scheduler.request("notifications");
+    await current.scheduler.flushNow();
+    expect(current.refreshNotifications).toHaveBeenCalledOnce();
+    current.scheduler.dispose();
+  });
+
+  it("suppresses in-flight errors and queued follow-up work after disposal", async () => {
+    let rejectRefresh!: (error: Error) => void;
+    const inFlight = new Promise<void>((_resolve, reject) => {
+      rejectRefresh = reject;
+    });
+    const current = harness();
+    current.refreshTopology.mockImplementationOnce(() => inFlight);
+    current.scheduler.request("topology");
+    const pending = current.scheduler.flushNow();
+    await Promise.resolve();
+
+    current.scheduler.request("notifications");
+    current.scheduler.dispose();
+    rejectRefresh(new Error("late failure"));
+    await pending;
+
+    expect(current.onError).not.toHaveBeenCalled();
+    expect(current.refreshNotifications).not.toHaveBeenCalled();
+  });
 });
