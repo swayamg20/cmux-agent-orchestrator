@@ -6811,6 +6811,97 @@ describe("AgentCockpitController workflow automation", () => {
     controller.dispose();
   });
 
+  it("does not apply Safe auto after the exact binding is durably detached", async () => {
+    let gateWorkflowWrite = false;
+    let markWorkflowWriteStarted!: () => void;
+    const workflowWriteStarted = new Promise<void>((resolve) => {
+      markWorkflowWriteStarted = resolve;
+    });
+    let releaseWorkflowWrite!: () => void;
+    const workflowWriteGate = new Promise<void>((resolve) => {
+      releaseWorkflowWrite = resolve;
+    });
+    const memory = memoryTaskApp({
+      beforeFrontmatter: async () => {
+        if (!gateWorkflowWrite) return;
+        gateWorkflowWrite = false;
+        markWorkflowWriteStarted();
+        await workflowWriteGate;
+      }
+    });
+    let persisted: unknown = {
+      settings: { autoTrackAgentRuns: true, workflowAutomation: "safe-auto" }
+    };
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    let lifecycleState: "working" | "done" = "working";
+    const lifecycleResolver: ProviderSessionResolver = {
+      resolve: (currentSnapshot, signal) =>
+        exactCodexLifecycleResolver(lifecycleState, "hook").resolve(currentSnapshot, signal),
+      dispose: () => undefined
+    };
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(Date.now() - 1_000)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      lifecycleResolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+    const task = controller.store.getState().tasks[0]!;
+    const internal = controller as unknown as { bindings: BindingRepository };
+    const detacher = internal.bindings as BindingRepository & {
+      detachIfUnchanged: BindingRepository["detachIfUnchanged"];
+    };
+    const detachIfUnchanged = detacher.detachIfUnchanged.bind(detacher);
+    let markBindingDetached!: () => void;
+    const bindingDetached = new Promise<void>((resolve) => {
+      markBindingDetached = resolve;
+    });
+    let releaseDetachReturn!: () => void;
+    const detachReturnGate = new Promise<void>((resolve) => {
+      releaseDetachReturn = resolve;
+    });
+    detacher.detachIfUnchanged = async (expected, canMutate) => {
+      const detached = await detachIfUnchanged(expected, canMutate);
+      if (detached) markBindingDetached();
+      await detachReturnGate;
+      return detached;
+    };
+
+    gateWorkflowWrite = true;
+    lifecycleState = "done";
+    await controller.refreshNow();
+    await workflowWriteStarted;
+
+    const detachment = controller.detachTask(session);
+    await bindingDetached;
+    expect(internal.bindings.list()).toEqual([]);
+    expect(controller.store.getState().bindings).toHaveLength(1);
+
+    releaseWorkflowWrite();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, workflowStatus: "active" }
+    ]);
+
+    releaseDetachReturn();
+    await detachment;
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, workflowStatus: "active" }
+    ]);
+    expect(persisted).toBeDefined();
+    controller.dispose();
+  });
+
   it("keeps notification-only completion evidence as a suggestion in safe-auto mode", async () => {
     const observedAt = Date.now() - 1_000;
     const transport: CmuxTransport = {

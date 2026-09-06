@@ -149,14 +149,23 @@ export class AgentCockpitController {
       }
     });
     this.workflowAutomation = new WorkflowAutomationReconciler({
-      getAuthority: () => ({
-        ready: !this.disposed && this.pendingSettingsUpdates === 0,
-        mode: this.settings?.workflowAutomation ?? "off",
-        repository: this.taskRepository,
-        taskFolder: this.settings?.taskFolder ?? null,
-        tasks: this.store.getState().tasks,
-        proposals: this.buildCurrentWorkflowProposals()
-      }),
+      getAuthority: () => {
+        const state = this.store.getState();
+        return {
+          ready: !this.disposed && this.pendingSettingsUpdates === 0,
+          mode: this.settings?.workflowAutomation ?? "off",
+          repository: this.taskRepository,
+          taskFolder: this.settings?.taskFolder ?? null,
+          tasks: state.tasks,
+          proposals: this.buildCurrentWorkflowProposals({
+            connection: state.connection,
+            sessions: state.sessions,
+            tasks: state.tasks,
+            bindings: this.bindings.list(),
+            health: state.health
+          })
+        };
+      },
       publishTasks: async (repository, taskFolder, proposal, automatic) => {
         await this.waitForSettingsUpdates();
         if (
