@@ -86,6 +86,14 @@ npm run check
 
 Maintainers should follow the complete [release procedure](docs/RELEASING.md), including the normal macOS launch and vault-local safety checks, before creating a tag.
 
+## Project documentation
+
+- [Product principles](PRODUCT.md)
+- [Design system](DESIGN.md)
+- [Detailed design brief](docs/DESIGN_BRIEF.md)
+- [Security model](SECURITY.md)
+- [Release procedure](docs/RELEASING.md)
+
 ## Storage
 
 Markdown task notes default to `Agent Cockpit/Tasks/` and contain durable fields only. The pre-release folder and frontmatter marker remain stable so existing task notes continue to load after the public rename:
