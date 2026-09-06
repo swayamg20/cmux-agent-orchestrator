@@ -3,7 +3,7 @@ import { CmuxEventRefreshScheduler } from "../../src/app/CmuxEventRefreshSchedul
 
 function harness() {
   const refreshAll = vi.fn(async () => undefined);
-  const refreshTopology = vi.fn(async () => undefined);
+  const refreshTopology = vi.fn<() => Promise<void>>(async () => undefined);
   const refreshNotifications = vi.fn(async () => undefined);
   const refreshLifecycle = vi.fn(async () => undefined);
   const onError = vi.fn();
