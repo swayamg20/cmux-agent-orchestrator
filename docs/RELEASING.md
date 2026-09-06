@@ -21,7 +21,7 @@ RELEASE_VERSION="$(node -p "require('./manifest.json').version")"
 npm run validate:release -- --tag "$RELEASE_VERSION"
 ```
 
-The live smoke tests are read-only. They resolve current cmux topology, notifications, canonical UUIDs, three bounded lines from one selected surface, bounded local provider-title metadata, and exact automatic provider-to-surface identity where local evidence permits. The automatic-tracking smoke persists its generated task Markdown and binding data only to in-memory doubles, supplies blank terminal previews, and fails if focus is attempted. The deterministic suite covers modern cmux event decoding, burst coalescing, restart/replay/sequence gaps, unsupported-command fallback, and workflow-policy races. The smoke tests do not send terminal input, resume a conversation, modify provider files, or write to a real vault.
+The live smoke tests are read-only. They resolve current cmux topology, notifications, canonical UUIDs, three bounded lines from one selected surface, bounded local provider-title metadata, and exact automatic provider-to-surface identity where local evidence permits. The automatic-tracking smoke persists its generated task Markdown and binding data only to in-memory doubles, supplies blank terminal previews, and fails if focus is attempted. The deterministic suite covers modern cmux acknowledgement and heartbeat liveness, event decoding, burst coalescing, restart/replay/sequence gaps, unsupported-command fallback, and workflow-policy races. The smoke tests do not send terminal input, resume a conversation, modify provider files, or write to a real vault.
 
 ## 3. Vault-local verification
 
@@ -35,7 +35,7 @@ Verify manually:
 
 - Obsidian loads the plugin without console errors.
 - The connection state is `cmux connected` after a normal macOS launch.
-- On a cmux build that advertises live events, the connection tooltip reports automatic updates and a controlled topology change appears without pressing Refresh. On a legacy build, it reports that Refresh is manual and starts no polling process.
+- On a cmux build that advertises live events, the connection tooltip reports automatic updates only after the protocol acknowledgement, a controlled topology change appears without pressing Refresh, and stopping the event child returns the tooltip to manual Refresh. On a legacy build, it reports that Refresh is manual and starts no polling process.
 - Work, Agent runs, and cmux sections render in both light and dark themes.
 - Keyboard focus, hover states, horizontal board scrolling, and narrow-window layout remain usable.
 - The live workspace, pane, and surface tree matches cmux.

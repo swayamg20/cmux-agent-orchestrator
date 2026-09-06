@@ -32,7 +32,7 @@ The header establishes connection health and refresh without dominating. A compa
 - Conversation title resolving, automatically exact, unmatched with explicit cmux-title fallback, picker loading/empty, manual override, metadata unavailable, changed match, and duplicate assignment rejected.
 - Automatic task pending, created, already represented, disabled, detached, ambiguous, duplicate provider session, partial note write, and recoverable binding failure.
 - Workflow proposal suggested, applying, dismissed, stale, safely auto-applied, protected, and write rejected after revalidation.
-- Live event updates available, legacy manual-refresh fallback, coalesced burst, stream stopped, and gap-triggered resync.
+- Live event acknowledgement pending, updates available, heartbeat stalled, legacy manual-refresh fallback, coalesced burst, stream stopped, and gap-triggered resync.
 - Focus resolving, succeeded, stale target, ambiguous target, command failure, and unverifiable postcondition.
 
 ## Interaction model

@@ -40,7 +40,7 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 - Orphan sessions and stale bindings.
 - Configurable stale-working attention for structured lifecycle evidence, without changing task workflow.
 - Review attention and workflow suggestions when credible evidence says an agent turn finished; only fresh high-confidence structured evidence can auto-apply Active to Review in Safe auto mode.
-- Event-driven refreshes on cmux builds that expose `events.stream`, with startup plus manual Refresh on older builds.
+- Event-driven refreshes on cmux builds that expose `events.stream`, enabled only after a valid acknowledgement and guarded by the advertised heartbeat interval, with startup plus manual Refresh on older or stalled streams.
 - Clear cmux disconnected, blocked, malformed-output, timeout, and output-limit states.
 - One-time GUI onboarding for normal Finder, Dock, and Spotlight launches when cmux rejects external clients.
 
