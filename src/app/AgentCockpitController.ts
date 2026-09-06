@@ -1031,8 +1031,21 @@ export class AgentCockpitController {
 
   private startCmuxEventUpdates(client: CmuxClient, clientGeneration: number): void {
     this.cmuxEventUpdates = "manual";
+    let failed = false;
     try {
       const stop = client.subscribeEvents({
+        onReady: () => {
+          if (
+            failed ||
+            this.disposed ||
+            clientGeneration !== this.clientGeneration ||
+            client !== this.client
+          ) {
+            return;
+          }
+          this.cmuxEventUpdates = "live";
+          this.publishConnectedMessage();
+        },
         onSignal: (signal) => {
           if (
             this.disposed ||
@@ -1044,6 +1057,7 @@ export class AgentCockpitController {
           this.eventRefresh.request(signal.scope);
         },
         onError: () => {
+          failed = true;
           if (
             this.disposed ||
             clientGeneration !== this.clientGeneration ||
@@ -1051,14 +1065,19 @@ export class AgentCockpitController {
           ) {
             return;
           }
+          const activeStop = this.stopCmuxEvents;
           this.stopCmuxEvents = null;
+          activeStop?.();
           this.cmuxEventUpdates = "manual";
           this.publishConnectedMessage();
         }
       });
       if (stop === null) return;
+      if (failed) {
+        stop();
+        return;
+      }
       this.stopCmuxEvents = stop;
-      this.cmuxEventUpdates = "live";
     } catch {
       this.stopCmuxEvents = null;
       this.cmuxEventUpdates = "manual";

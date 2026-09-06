@@ -9,6 +9,7 @@ import {
 } from "./decoders";
 import { ProcessExecutionError, SafeProcessRunner } from "./SafeProcessRunner";
 import type { ProcessLineStream } from "./SafeProcessRunner";
+import { clearTimeout as cancelTimer, setTimeout as startTimer } from "node:timers";
 import { PRODUCT_NAME } from "../identity";
 import type { CmuxEventObserver, CmuxTransport, PreviewRequest } from "./CmuxTransport";
 import { CmuxEventCursor } from "./CmuxEventCursor";
@@ -29,6 +30,7 @@ const READ_SCREEN_RAW_LIMIT = 96 * 1024;
 const DIRECTORY_REFRESH_MS = 30_000;
 const EVENT_STREAM_STARTUP_TIMEOUT_MS = 5_000;
 const EVENT_STREAM_LINE_LIMIT = 64 * 1024;
+const EVENT_STREAM_MISSED_HEARTBEATS = 3;
 const REQUIRED_METHODS = [
   "system.tree",
   "workspace.list",
@@ -38,17 +40,32 @@ const REQUIRED_METHODS = [
   "notification.list"
 ] as const;
 
+export interface CmuxEventTimerHandle {
+  unref(): void;
+}
+
+export interface CmuxEventTimerScheduler {
+  set(callback: () => void, delayMs: number): CmuxEventTimerHandle;
+  clear(handle: CmuxEventTimerHandle): void;
+}
+
+const nodeEventTimers: CmuxEventTimerScheduler = {
+  set: (callback, delayMs) => startTimer(callback, delayMs),
+  clear: (handle) => cancelTimer(handle as ReturnType<typeof setTimeout>)
+};
+
 export class CliCmuxTransport implements CmuxTransport {
   private workspaceDirectories = new Map<string, string | null>();
   private directoryRefreshGeneration = 0;
   private nextDirectoryRefreshAt = 0;
   private eventsSupported = false;
-  private eventStream: ProcessLineStream | null = null;
+  private stopEventStream: (() => void) | null = null;
 
   constructor(
     private readonly binaryPath: string,
     private readonly runner = new SafeProcessRunner(),
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly eventTimers: CmuxEventTimerScheduler = nodeEventTimers
   ) {}
 
   async probe(signal?: AbortSignal): Promise<CmuxProbe> {
@@ -119,20 +136,43 @@ export class CliCmuxTransport implements CmuxTransport {
 
   subscribeEvents(observer: CmuxEventObserver): (() => void) | null {
     if (!this.eventsSupported) return null;
-    this.eventStream?.dispose();
+    this.stopEventStream?.();
     const cursor = new CmuxEventCursor();
     let active = true;
+    let ready = false;
+    let heartbeatIntervalSeconds: number | null = null;
+    let idleTimer: CmuxEventTimerHandle | null = null;
     let stream: ProcessLineStream | null = null;
+    const clearIdleTimer = (): void => {
+      if (idleTimer === null) return;
+      this.eventTimers.clear(idleTimer);
+      idleTimer = null;
+    };
     const stop = (): void => {
       if (!active) return;
       active = false;
+      clearIdleTimer();
       stream?.dispose();
-      if (this.eventStream === stream) this.eventStream = null;
+      if (this.stopEventStream === stop) this.stopEventStream = null;
     };
     const fail = (error: unknown): void => {
       if (!active) return;
       stop();
       observer.onError(eventStreamError(error));
+    };
+    const armIdleTimer = (): void => {
+      if (heartbeatIntervalSeconds === null) return;
+      clearIdleTimer();
+      const timeoutMs = heartbeatIntervalSeconds * EVENT_STREAM_MISSED_HEARTBEATS * 1_000;
+      idleTimer = this.eventTimers.set(() => {
+        fail(
+          new CmuxError(
+            "timeout",
+            "cmux event streaming stopped producing frames before its heartbeat deadline."
+          )
+        );
+      }, timeoutMs);
+      idleTimer.unref();
     };
     stream = this.runner.streamLines(
       this.binaryPath,
@@ -146,8 +186,18 @@ export class CliCmuxTransport implements CmuxTransport {
         onLine: (line) => {
           if (!active) return;
           try {
-            const signal = cursor.accept(line);
-            if (signal !== null) observer.onSignal(signal);
+            const update = cursor.accept(line);
+            if (update.frameType === "ack") {
+              heartbeatIntervalSeconds = update.heartbeatIntervalSeconds;
+              armIdleTimer();
+              if (!ready) {
+                ready = true;
+                observer.onReady();
+              }
+            } else {
+              armIdleTimer();
+            }
+            if (update.signal !== null) observer.onSignal(update.signal);
           } catch (error) {
             fail(error);
           }
@@ -159,7 +209,7 @@ export class CliCmuxTransport implements CmuxTransport {
       stream.dispose();
       return null;
     }
-    this.eventStream = stream;
+    this.stopEventStream = stop;
     return stop;
   }
 
@@ -190,8 +240,8 @@ export class CliCmuxTransport implements CmuxTransport {
   }
 
   dispose(): void {
-    this.eventStream?.dispose();
-    this.eventStream = null;
+    this.stopEventStream?.();
+    this.stopEventStream = null;
     this.runner.dispose();
   }
 

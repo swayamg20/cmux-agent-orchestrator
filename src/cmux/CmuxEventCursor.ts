@@ -3,10 +3,33 @@ import { normalizeCanonicalUuid } from "../security/identifiers";
 
 type JsonRecord = Record<string, unknown>;
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const MISSED_HEARTBEAT_LIMIT = 3;
+const MAX_HEARTBEAT_INTERVAL_SECONDS = Math.floor(
+  MAX_TIMER_DELAY_MS / MISSED_HEARTBEAT_LIMIT / 1_000
+);
+
 type CmuxEventFrame =
-  | { type: "ack"; bootId: string; resumeGap: boolean }
+  | {
+      type: "ack";
+      bootId: string;
+      resumeGap: boolean;
+      heartbeatIntervalSeconds: number;
+    }
   | { type: "heartbeat"; bootId: string }
   | { type: "event"; bootId: string; seq: number; name: string; category: string };
+
+export type CmuxEventCursorUpdate =
+  | {
+      frameType: "ack";
+      heartbeatIntervalSeconds: number;
+      signal: CmuxEventSignal | null;
+    }
+  | {
+      frameType: "heartbeat" | "event";
+      heartbeatIntervalSeconds: null;
+      signal: CmuxEventSignal | null;
+    };
 
 /**
  * Reduces JSONL event envelopes to refresh signals while retaining only the
@@ -15,52 +38,73 @@ type CmuxEventFrame =
 export class CmuxEventCursor {
   private bootId: string | null = null;
   private lastSeq: number | null = null;
+  private acknowledged = false;
 
-  accept(line: string): CmuxEventSignal | null {
+  accept(line: string): CmuxEventCursorUpdate {
     const frame = decodeCmuxEventFrame(line);
     if (frame.type === "ack") {
       const bootChanged = this.bootId !== null && this.bootId !== frame.bootId;
       this.bootId = frame.bootId;
+      this.acknowledged = true;
       if (bootChanged || frame.resumeGap) this.lastSeq = null;
-      if (bootChanged) return resyncSignal(frame.bootId, null, "boot-changed");
-      if (frame.resumeGap) return resyncSignal(frame.bootId, null, "resume-gap");
-      return null;
+      const signal = bootChanged
+        ? resyncSignal(frame.bootId, null, "boot-changed")
+        : frame.resumeGap
+          ? resyncSignal(frame.bootId, null, "resume-gap")
+          : null;
+      return {
+        frameType: "ack",
+        heartbeatIntervalSeconds: frame.heartbeatIntervalSeconds,
+        signal
+      };
+    }
+
+    if (!this.acknowledged) {
+      throw new CmuxError(
+        "malformed-output",
+        "cmux event stream emitted a frame before its acknowledgement."
+      );
     }
 
     if (frame.type === "heartbeat") {
+      let signal: CmuxEventSignal | null = null;
       if (this.bootId !== null && this.bootId !== frame.bootId) {
         this.bootId = frame.bootId;
         this.lastSeq = null;
-        return resyncSignal(frame.bootId, null, "boot-changed");
+        signal = resyncSignal(frame.bootId, null, "boot-changed");
+      } else {
+        this.bootId = frame.bootId;
       }
-      this.bootId = frame.bootId;
-      return null;
+      return { frameType: "heartbeat", heartbeatIntervalSeconds: null, signal };
     }
 
+    let signal: CmuxEventSignal | null;
     if (this.bootId !== null && this.bootId !== frame.bootId) {
       this.bootId = frame.bootId;
       this.lastSeq = frame.seq;
-      return resyncSignal(frame.bootId, frame.seq, "boot-changed");
-    }
-    this.bootId = frame.bootId;
-
-    if (this.lastSeq !== null) {
-      if (frame.seq === this.lastSeq) return null;
-      if (frame.seq !== this.lastSeq + 1) {
+      signal = resyncSignal(frame.bootId, frame.seq, "boot-changed");
+    } else {
+      this.bootId = frame.bootId;
+      if (this.lastSeq !== null && frame.seq === this.lastSeq) {
+        signal = null;
+      } else if (this.lastSeq !== null && frame.seq !== this.lastSeq + 1) {
         this.lastSeq = frame.seq;
-        return resyncSignal(frame.bootId, frame.seq, "sequence-gap");
+        signal = resyncSignal(frame.bootId, frame.seq, "sequence-gap");
+      } else {
+        this.lastSeq = frame.seq;
+        const scope = refreshScope(frame.category);
+        signal = scope === null
+          ? null
+          : {
+              scope,
+              bootId: frame.bootId,
+              seq: frame.seq,
+              name: frame.name,
+              reason: "change"
+            };
       }
     }
-    this.lastSeq = frame.seq;
-    const scope = refreshScope(frame.category);
-    if (scope === null) return null;
-    return {
-      scope,
-      bootId: frame.bootId,
-      seq: frame.seq,
-      name: frame.name,
-      reason: "change"
-    };
+    return { frameType: "event", heartbeatIntervalSeconds: null, signal };
   }
 }
 
@@ -81,7 +125,12 @@ function decodeCmuxEventFrame(line: string): CmuxEventFrame {
     return {
       type: "ack",
       bootId,
-      resumeGap: resume?.gap === true
+      resumeGap: resume?.gap === true,
+      heartbeatIntervalSeconds: positiveSafeInteger(
+        root.heartbeat_interval_seconds,
+        "cmux event frame.heartbeat_interval_seconds",
+        MAX_HEARTBEAT_INTERVAL_SECONDS
+      )
     };
   }
   if (root.type === "heartbeat") return { type: "heartbeat", bootId };
@@ -118,6 +167,21 @@ function canonicalUuid(value: unknown, label: string): string {
 function nonNegativeSafeInteger(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw new CmuxError("malformed-output", `${label} must be a non-negative safe integer.`);
+  }
+  return value;
+}
+
+function positiveSafeInteger(value: unknown, label: string, maximum: number): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value <= 0 ||
+    value > maximum
+  ) {
+    throw new CmuxError(
+      "malformed-output",
+      `${label} must be a positive safe integer no greater than ${String(maximum)}.`
+    );
   }
   return value;
 }

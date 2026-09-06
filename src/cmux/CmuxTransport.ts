@@ -15,6 +15,7 @@ export interface PreviewRequest {
 }
 
 export interface CmuxEventObserver {
+  onReady(): void;
   onSignal(signal: CmuxEventSignal): void;
   onError(error: unknown): void;
 }

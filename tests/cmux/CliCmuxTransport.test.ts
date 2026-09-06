@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { CliCmuxTransport } from "../../src/cmux/CliCmuxTransport";
+import { describe, expect, it, vi } from "vitest";
+import {
+  CliCmuxTransport,
+  type CmuxEventTimerHandle,
+  type CmuxEventTimerScheduler
+} from "../../src/cmux/CliCmuxTransport";
 import {
   ProcessExecutionError,
   type ProcessLineStream,
@@ -146,6 +150,36 @@ class EventStreamRunner extends SafeProcessRunner {
     this.argumentsSeen.push([...args]);
     this.handlers = handlers;
     return { dispose: () => { this.streamDisposed = true; } };
+  }
+}
+
+class EventTimerHarness implements CmuxEventTimerScheduler {
+  private pending: {
+    handle: CmuxEventTimerHandle;
+    callback: () => void;
+    delayMs: number;
+  } | null = null;
+  readonly cleared: CmuxEventTimerHandle[] = [];
+
+  set(callback: () => void, delayMs: number): CmuxEventTimerHandle {
+    const handle = { unref: () => undefined };
+    this.pending = { handle, callback, delayMs };
+    return handle;
+  }
+
+  clear(handle: CmuxEventTimerHandle): void {
+    this.cleared.push(handle);
+    if (this.pending?.handle === handle) this.pending = null;
+  }
+
+  currentDelayMs(): number | null {
+    return this.pending?.delayMs ?? null;
+  }
+
+  fire(): void {
+    const pending = this.pending;
+    this.pending = null;
+    pending?.callback();
   }
 }
 
@@ -306,12 +340,15 @@ describe("CliCmuxTransport event streaming", () => {
     const transport = new CliCmuxTransport("/path/to/cmux", runner);
     await transport.probe();
     const signals: unknown[] = [];
+    const onReady = vi.fn();
     const stop = transport.subscribeEvents({
+      onReady,
       onSignal: (signal) => signals.push(signal),
       onError: (error) => { throw error; }
     });
 
     expect(stop).not.toBeNull();
+    expect(onReady).not.toHaveBeenCalled();
     expect(runner.argumentsSeen.at(-1)).toEqual(["events", "--reconnect"]);
     runner.handlers?.onLine(
       JSON.stringify({
@@ -319,9 +356,11 @@ describe("CliCmuxTransport event streaming", () => {
         protocol: "cmux-events",
         version: 1,
         boot_id: "11111111-1111-4111-8111-111111111111",
+        heartbeat_interval_seconds: 15,
         resume: { gap: false }
       })
     );
+    expect(onReady).toHaveBeenCalledOnce();
     runner.handlers?.onLine(
       JSON.stringify({
         type: "event",
@@ -349,12 +388,66 @@ describe("CliCmuxTransport event streaming", () => {
     transport.dispose();
   });
 
+  it("stops and reports a silent stream after three advertised heartbeat intervals", async () => {
+    const runner = new EventStreamRunner();
+    const timers = new EventTimerHarness();
+    const transport = new CliCmuxTransport("/path/to/cmux", runner, Date.now, timers);
+    await transport.probe();
+    const onReady = vi.fn();
+    const errors: unknown[] = [];
+    transport.subscribeEvents({
+      onReady,
+      onSignal: () => undefined,
+      onError: (error) => errors.push(error)
+    });
+
+    runner.handlers?.onLine(
+      JSON.stringify({
+        type: "ack",
+        protocol: "cmux-events",
+        version: 1,
+        boot_id: "11111111-1111-4111-8111-111111111111",
+        heartbeat_interval_seconds: 15,
+        resume: { gap: false }
+      })
+    );
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(timers.currentDelayMs()).toBe(45_000);
+
+    runner.handlers?.onLine(
+      JSON.stringify({
+        type: "heartbeat",
+        protocol: "cmux-events",
+        version: 1,
+        boot_id: "11111111-1111-4111-8111-111111111111"
+      })
+    );
+    expect(errors).toEqual([]);
+    expect(timers.cleared).toHaveLength(1);
+    expect(timers.currentDelayMs()).toBe(45_000);
+    timers.fire();
+
+    expect(runner.streamDisposed).toBe(true);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      code: "timeout",
+      message: "cmux event streaming stopped producing frames before its heartbeat deadline."
+    });
+    timers.fire();
+    expect(errors).toHaveLength(1);
+    transport.dispose();
+  });
+
   it("keeps event streaming disabled when the capability is absent", async () => {
     const runner = new PasswordModeRunner();
     const transport = new CliCmuxTransport("/path/to/cmux", runner);
     await transport.probe();
     expect(
-      transport.subscribeEvents({ onSignal: () => undefined, onError: () => undefined })
+      transport.subscribeEvents({
+        onReady: () => undefined,
+        onSignal: () => undefined,
+        onError: () => undefined
+      })
     ).toBeNull();
     transport.dispose();
   });

@@ -6574,13 +6574,17 @@ describe("AgentCockpitController event-driven refresh", () => {
     await controller.initialize();
     await controller.waitForBackgroundWork();
     expect(controller.store.getState().connection.message).toContain(
+      "Live cmux events are unavailable; use Refresh after changes."
+    );
+    const currentObserver = observer as CmuxEventObserver | null;
+    expect(currentObserver).not.toBeNull();
+    currentObserver?.onReady();
+    expect(controller.store.getState().connection.message).toContain(
       "Changes refresh automatically from cmux events."
     );
     snapshotSource.mockClear();
     notificationSource.mockClear();
 
-    const currentObserver = observer as CmuxEventObserver | null;
-    expect(currentObserver).not.toBeNull();
     currentObserver?.onSignal({
       scope: "topology",
       bootId: "11111111-1111-4111-8111-111111111111",
@@ -6647,6 +6651,7 @@ describe("AgentCockpitController event-driven refresh", () => {
       }),
       subscribeEvents: (next) => {
         observer = next;
+        next.onReady();
         return () => undefined;
       }
     };
@@ -6700,6 +6705,7 @@ describe("AgentCockpitController event-driven refresh", () => {
       ...connectedTransport(Date.now()),
       subscribeEvents: (next) => {
         observer = next;
+        next.onReady();
         return () => undefined;
       }
     };
@@ -6716,6 +6722,9 @@ describe("AgentCockpitController event-driven refresh", () => {
     );
 
     await controller.initialize();
+    expect(controller.store.getState().connection.message).toContain(
+      "Changes refresh automatically from cmux events."
+    );
     const currentObserver = observer as CmuxEventObserver | null;
     currentObserver?.onError(new Error("stream ended"));
     expect(controller.store.getState().connection).toMatchObject({
