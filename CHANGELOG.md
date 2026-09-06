@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-06
+
+### Added
+
+- Add Off, Suggest, and Safe auto workflow-automation modes, defaulting to explained suggestions with explicit Apply and Dismiss actions.
+- Suggest guarded Backlog-to-Active, Active-to-Review, and Review-to-Active transitions from exact task/session bindings and credible fresh evidence.
+- Allow Safe auto to apply only a fresh, high-confidence structured Active-to-Review proposal, with a visible recent-change marker.
+- Feature-detect cmux live events and coalesce relevant topology, notification, and lifecycle signals into authoritative snapshot refreshes.
+
+### Changed
+
+- Persist schema-v5 machine-scoped workflow proposal dismissals while keeping proposal evidence, event payloads, and recent-change markers memory-only.
+- Fall back to startup plus manual Refresh when cmux live events are unsupported or the event stream stops, without polling.
+- Keep every detected Claude and Codex run visible in Agent runs, with linked runs opening their Work task and unlinked runs retaining explicit tracking actions.
+- Rediscover the Codex executable for each metadata operation so conversation titles recover after a CLI upgrade or executable-path replacement.
+
+### Fixed
+
+- Allow a bounded five-second command window so a cold password-mode cmux socket handshake does not fail at the previous three-second edge.
+- Require a valid cmux event acknowledgement before enabling automatic updates and stop a silent stream after three advertised heartbeat intervals, so a partial or stalled stream cannot masquerade as healthy.
+- Keep Active-to-Review automatic changes fail-closed when another exact run attached to the same task still has fresh Working evidence.
+- Preserve the current workflow proposal when automation is cancelled and immediately rescheduled, instead of letting stale cleanup discard the new generation.
+- Keep hidden mode panels out of layout and dismiss the conversation-title loading notice cleanly when metadata loading succeeds or fails.
+
+### Security
+
+- Revalidate settings, task revision, workflow, exact binding, evidence freshness, source health, and dismissal state immediately before every automated workflow write.
+- Protect Parked and Done from automation, prohibit automatic completion, and require compare-and-set task updates so stale proposals cannot overwrite a newer human decision.
+- Strictly bound cmux JSONL event frames and stderr, retain only an in-memory boot/sequence cursor, and force full resynchronization after restart, replay, or sequence gaps.
+
 ## [0.3.0] - 2026-09-05
 
 ### Added

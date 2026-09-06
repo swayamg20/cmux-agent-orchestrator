@@ -1,9 +1,10 @@
 import type { CockpitState } from "../state/types";
 import { WORKFLOW_LABELS } from "../state/types";
 import { renderTaskCard } from "../components/TaskCard";
+import type { WorkflowProposalActions } from "../components/WorkflowProposalNotice";
 import { WORKFLOW_STATUSES, type TaskRecord, type WorkflowStatus } from "../tasks/TaskSchema";
 
-export interface KanbanPanelActions {
+export interface KanbanPanelActions extends WorkflowProposalActions {
   createTask(): void;
   openTask(task: TaskRecord): void;
   moveTask(task: TaskRecord, status: WorkflowStatus): Promise<boolean>;
@@ -67,9 +68,17 @@ export function renderKanbanPanel(
     }
     for (const task of tasks) {
       const sessions = state.sessions.filter((candidate) => candidate.linkedTaskId === task.taskId);
-      renderTaskCard(taskList, task, sessions, {
+      const proposal = state.workflowProposals.find(
+        (candidate) => candidate.taskId === task.taskId
+      ) ?? null;
+      const recentChange = state.recentWorkflowChanges.find(
+        (candidate) => candidate.taskId === task.taskId
+      ) ?? null;
+      renderTaskCard(taskList, task, sessions, proposal, recentChange, {
         open: (selectedTask) => actions.openTask(selectedTask),
-        move: (selectedTask, nextStatus) => actions.moveTask(selectedTask, nextStatus)
+        move: (selectedTask, nextStatus) => actions.moveTask(selectedTask, nextStatus),
+        apply: (candidate) => actions.apply(candidate),
+        dismiss: (candidate) => actions.dismiss(candidate)
       });
     }
   }

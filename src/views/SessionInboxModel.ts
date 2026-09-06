@@ -12,10 +12,7 @@ export interface SessionInboxSelection {
   total: number;
 }
 
-/**
- * Returns detected, unlinked agent runs for manual review. Attention-bearing
- * runs are kept at the front of the inbox.
- */
+/** Returns every detected agent run. Attention-bearing runs stay at the front. */
 export function selectSessionInbox(
   source: SessionInboxSource,
   limit: number | null = DEFAULT_SESSION_INBOX_LIMIT
@@ -29,7 +26,6 @@ export function selectSessionInbox(
   const sessions = source.sessions
     .filter(
       (session) =>
-        session.linkedTaskId === null &&
         (session.provider.provider === "claude" || session.provider.provider === "codex")
     )
     .sort((left, right) => {

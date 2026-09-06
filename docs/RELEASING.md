@@ -21,7 +21,7 @@ RELEASE_VERSION="$(node -p "require('./manifest.json').version")"
 npm run validate:release -- --tag "$RELEASE_VERSION"
 ```
 
-The live smoke tests are read-only. They resolve current cmux topology, notifications, canonical UUIDs, three bounded lines from one selected surface, bounded local provider-title metadata, and exact automatic provider-to-surface identity where local evidence permits. The automatic-tracking smoke persists its generated task Markdown and binding data only to in-memory doubles, supplies blank terminal previews, and fails if focus is attempted. The smoke tests do not send terminal input, resume a conversation, modify provider files, or write to a real vault.
+The live smoke tests are read-only. They resolve current cmux topology, notifications, canonical UUIDs, three bounded lines from one selected surface, bounded local provider-title metadata, and exact automatic provider-to-surface identity where local evidence permits. The automatic-tracking smoke persists its generated task Markdown and binding data only to in-memory doubles, supplies blank terminal previews, and fails if focus is attempted. The deterministic suite covers modern cmux acknowledgement and heartbeat liveness, event decoding, burst coalescing, restart/replay/sequence gaps, unsupported-command fallback, and workflow-policy races. The smoke tests do not send terminal input, resume a conversation, modify provider files, or write to a real vault.
 
 ## 3. Vault-local verification
 
@@ -35,6 +35,7 @@ Verify manually:
 
 - Obsidian loads the plugin without console errors.
 - The connection state is `cmux connected` after a normal macOS launch.
+- On a cmux build that advertises live events, the connection tooltip reports automatic updates only after the protocol acknowledgement, a controlled topology change appears without pressing Refresh, and stopping the event child returns the tooltip to manual Refresh. On a legacy build, it reports that Refresh is manual and starts no polling process.
 - Work, Agent runs, and cmux sections render in both light and dark themes.
 - Keyboard focus, hover states, horizontal board scrolling, and narrow-window layout remain usable.
 - The live workspace, pane, and surface tree matches cmux.
@@ -50,7 +51,11 @@ Verify manually:
 - Moving a task changes workflow only.
 - A rejected workflow move returns its selector to the persisted workflow state instead of displaying an unsaved value.
 - With structured lifecycle evidence available, lowering the stale-working threshold and saving settings can surface an aged Working session in Attention without moving its task; Idle and State unknown sessions remain unflagged.
-- A structured or notification-backed finished turn appears in Attention for review without moving its task to Review or Done.
+- Off mode creates no workflow proposal. Suggest mode shows an explanation with Apply and Dismiss, persists dismissal across reload, and never moves the card without Apply.
+- Backlog-to-Active and Review-to-Active proposals remain manual in every mode. Parked and Done never receive an automatic proposal.
+- A notification-backed or partial-evidence finished turn remains a suggestion in Safe auto mode. Only fresh, high-confidence structured finished-turn evidence may apply Active to Review automatically, and the card shows a recent Safe auto marker afterward.
+- When one task has several exact linked runs, fresh Working evidence from any sibling run keeps an Active-to-Review change manual even if another run has safely finished.
+- Missing, idle, waiting, failed, stale, and State unknown sessions do not mutate workflow. No runtime evidence moves a task to Done.
 - Focus in cmux targets a user-approved development surface and sends no text.
 - Disabling and re-enabling the plugin leaves all cmux sessions running.
 

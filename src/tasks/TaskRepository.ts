@@ -392,6 +392,40 @@ export class TaskRepository {
     });
   }
 
+  async updateWorkflowIfCurrent(
+    task: TaskRecord,
+    workflowStatus: WorkflowStatus,
+    canMutate: MutationGuard
+  ): Promise<boolean> {
+    assertWorkflowTransition(task.workflowStatus, workflowStatus);
+    const taskFolder = this.taskFolder;
+    return this.enqueueMutation(async () => {
+      if (!canMutate()) return false;
+      const latest = this.resolveExactTask(task, taskFolder);
+      if (!canMutate()) return false;
+      const updatedAt = new Date().toISOString();
+      let cancelled = false;
+      await this.app.fileManager.processFrontMatter(latest.file, (frontmatter: Record<string, unknown>) => {
+        if (!canMutate()) {
+          cancelled = true;
+          return;
+        }
+        this.assertExactTaskFile(task.file, taskFolder);
+        if (!frontmatterTaskIdMatches(frontmatter["task-id"], task.taskId)) {
+          throw new Error("Task identity changed before the update.");
+        }
+        if (workflowStatusFromFrontmatter(frontmatter["workflow-status"]) !== task.workflowStatus) {
+          throw new Error("Task workflow changed before the update. Refresh and try again.");
+        }
+        frontmatter["workflow-status"] = workflowStatus;
+        frontmatter["updated-at"] = updatedAt;
+      });
+      if (cancelled) return false;
+      this.rememberRecentTask(taskFolder, { ...latest, workflowStatus, updatedAt });
+      return true;
+    });
+  }
+
   async incrementRunCount(task: TaskRecord): Promise<number> {
     const taskFolder = this.taskFolder;
     return this.enqueueMutation(() => this.incrementRunCountInFolder(task, taskFolder));

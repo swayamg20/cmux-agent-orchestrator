@@ -33,6 +33,12 @@ export interface ProviderSessionMapping {
   matchedAt: string;
 }
 
+export interface WorkflowProposalDismissal {
+  proposalId: string;
+  taskId: string;
+  dismissedAt: string;
+}
+
 export type NewBindingRecord = Omit<BindingRecord, "bindingId" | "runId"> & {
   taskRunCountBaseline?: number;
 };
@@ -62,4 +68,5 @@ export interface MachineBindings {
   bindings: BindingRecord[];
   runs: AgentRunRecord[];
   providerSessions: ProviderSessionMapping[];
+  workflowDismissals: WorkflowProposalDismissal[];
 }

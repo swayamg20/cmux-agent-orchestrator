@@ -82,6 +82,15 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
             )
           },
           {
+            name: "Workflow automation",
+            desc: "Choose whether runtime evidence only suggests task moves or safely applies high-confidence Active to Review transitions.",
+            aliases: ["workflow suggestions", "safe auto", "automatic review"],
+            render: (setting) => renderWithDraft(
+              setting,
+              (loaded) => this.addWorkflowAutomationDropdown(setting, loaded)
+            )
+          },
+          {
             name: "Preview lines",
             desc: PREVIEW_LINES_DESCRIPTION,
             aliases: ["terminal preview", "screen lines"],
@@ -148,6 +157,15 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
         .setName("Automatically track agent runs")
         .setDesc(
           "Create one active Markdown task for each newly discovered, exact Claude or Codex session. Ambiguous sessions remain available for manual tracking."
+        ),
+      draft
+    );
+
+    this.addWorkflowAutomationDropdown(
+      new Setting(this.containerEl)
+        .setName("Workflow automation")
+        .setDesc(
+          "Suggest is the default. Safe auto only moves active tasks to review when fresh, high-confidence structured provider evidence reports a completed turn. Parked and done are never changed automatically."
         ),
       draft
     );
@@ -220,6 +238,23 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
       toggle.setValue(draft.autoTrackAgentRuns).onChange((value) => {
         draft.autoTrackAgentRuns = value;
       })
+    );
+  }
+
+  private addWorkflowAutomationDropdown(setting: Setting, draft: AgentCockpitSettings): void {
+    setting.addDropdown((dropdown) =>
+      dropdown
+        .addOptions({
+          off: "Off",
+          suggest: "Suggest",
+          "safe-auto": "Safe auto"
+        })
+        .setValue(draft.workflowAutomation)
+        .onChange((value) => {
+          if (value === "off" || value === "suggest" || value === "safe-auto") {
+            draft.workflowAutomation = value;
+          }
+        })
     );
   }
 

@@ -4,7 +4,7 @@ import { AgentCockpitController } from "../../src/app/AgentCockpitController";
 import { BindingRepository } from "../../src/bindings/BindingRepository";
 import type { ProviderSessionMapping } from "../../src/bindings/types";
 import { CmuxClient } from "../../src/cmux/CmuxClient";
-import type { CmuxTransport } from "../../src/cmux/CmuxTransport";
+import type { CmuxEventObserver, CmuxTransport } from "../../src/cmux/CmuxTransport";
 import {
   CmuxError,
   type CmuxNotification,
@@ -96,6 +96,37 @@ function exactCodexResolverResult(observedAt: number): ProviderIdentityResolutio
 function exactCodexResolver(): ProviderSessionResolver {
   return {
     resolve: async (currentSnapshot) => exactCodexResolverResult(currentSnapshot.observedAt),
+    dispose: () => undefined
+  };
+}
+
+function exactCodexLifecycleResolver(
+  state: "working" | "blocked" | "idle" | "done" | "unknown" | "failed",
+  source: "detected" | "socket" | "hook" = "hook"
+): ProviderSessionResolver {
+  return {
+    resolve: async (currentSnapshot) => {
+      const resolved = exactCodexResolverResult(currentSnapshot.observedAt);
+      return {
+        ...resolved,
+        checkedAt: Date.now(),
+        nativeLifecycleAvailable: source === "socket" || source === "hook",
+        lifecycle: [
+          {
+            workspaceId: "22222222-2222-4222-8222-222222222222",
+            paneId: "33333333-3333-4333-8333-333333333333",
+            surfaceId: "44444444-4444-4444-8444-444444444444",
+            state,
+            source,
+            provider: "codex",
+            providerSessionId: "55555555-5555-4555-8555-555555555555",
+            observedAt: Date.now(),
+            occurredAt: Date.now(),
+            explanation: `Codex lifecycle state is ${state}.`
+          }
+        ]
+      };
+    },
     dispose: () => undefined
   };
 }
@@ -1088,7 +1119,8 @@ describe("AgentCockpitController connection failures", () => {
     expect(controller.store.getState().connection).toMatchObject({
       status: "connected",
       accessMode: "password",
-      message: "Connected through cmux Password mode. The socket password remains owned by cmux."
+      message:
+        "Connected through cmux Password mode. The socket password remains owned by cmux. Live cmux events are unavailable; use Refresh after changes."
     });
     expect(controller.store.getState().sessions).toHaveLength(1);
     expect(controller.store.getState().sessions[0]?.provider.provider).toBe("codex");
@@ -4829,7 +4861,7 @@ describe("AgentCockpitController connection failures", () => {
     const task = await taskRepository.create({ title: "Do not trust future run data" });
     const plugin = {
       loadData: async () => ({
-        schemaVersion: 5,
+        schemaVersion: 6,
         settings: { autoTrackAgentRuns: false },
         machines: {
           "11111111111111111111": {
@@ -4982,7 +5014,7 @@ describe("AgentCockpitController connection failures", () => {
 
     await controller.initialize();
     persisted = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       settings: { autoTrackAgentRuns: false },
       machines: {
         "11111111111111111111": {
@@ -5862,6 +5894,66 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("dismisses the conversation loading notice before reporting a metadata failure", async () => {
+    const currentSnapshot = snapshot(5_393);
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces[0]!.title = "Codex";
+    const source: ProviderSessionSource = {
+      provider: "codex",
+      list: async () => {
+        throw new Error("metadata source unavailable");
+      },
+      get: async () => null,
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(5_393),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const resolver: ProviderSessionResolver = {
+      resolve: async (current) => ({
+        checkedAt: current.observedAt + 1,
+        nativeLifecycleAvailable: false,
+        issues: [],
+        mappings: [],
+        lifecycle: []
+      }),
+      dispose: () => undefined
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([source]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+    const notices = (Notice as unknown as {
+      instances: Array<{ hidden: boolean; message: unknown }>;
+    }).instances;
+    const noticeStart = notices.length;
+
+    await controller.showConversationPicker(session);
+
+    const created = notices.slice(noticeStart);
+    expect(created).toHaveLength(2);
+    expect(created[0]).toMatchObject({
+      hidden: true,
+      message: "Loading local Codex conversation titles..."
+    });
+    expect(created[1]).toMatchObject({
+      hidden: false,
+      message: "metadata source unavailable"
+    });
+    controller.dispose();
+  });
+
   it("revalidates a selected provider conversation before persisting its match", async () => {
     let persisted: unknown;
     const get = vi.fn(async () => null);
@@ -6438,5 +6530,540 @@ describe("AgentCockpitController connection failures", () => {
     expect(memory.markdownWrites).toHaveLength(1);
     expect(controller.store.getState().tasks).toHaveLength(1);
     controller.dispose();
+  });
+});
+
+describe("AgentCockpitController event-driven refresh", () => {
+  it("coalesces modern cmux event bursts into one authoritative refresh", async () => {
+    let observer: CmuxEventObserver | null = null;
+    let stopped = false;
+    const snapshotSource = vi.fn(async () => snapshot(Date.now()));
+    const notificationSource = vi.fn(async () => [] as CmuxNotification[]);
+    const transport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      probe: async () => ({
+        binaryPath: "/cmux",
+        versionText: "cmux modern",
+        capabilities: {
+          version: 2,
+          protocol: "cmux-socket",
+          accessMode: "password",
+          methods: new Set(["events.stream"])
+        },
+        latencyMs: 1
+      }),
+      snapshot: snapshotSource,
+      notifications: notificationSource,
+      subscribeEvents: (next) => {
+        observer = next;
+        return () => { stopped = true; };
+      }
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().connection.message).toContain(
+      "Live cmux events are unavailable; use Refresh after changes."
+    );
+    const currentObserver = observer as CmuxEventObserver | null;
+    expect(currentObserver).not.toBeNull();
+    currentObserver?.onReady();
+    expect(controller.store.getState().connection.message).toContain(
+      "Changes refresh automatically from cmux events."
+    );
+    snapshotSource.mockClear();
+    notificationSource.mockClear();
+
+    currentObserver?.onSignal({
+      scope: "topology",
+      bootId: "11111111-1111-4111-8111-111111111111",
+      seq: 1,
+      name: "surface.created",
+      reason: "change"
+    });
+    currentObserver?.onSignal({
+      scope: "notifications",
+      bootId: "11111111-1111-4111-8111-111111111111",
+      seq: 2,
+      name: "notification.created",
+      reason: "change"
+    });
+    await controller.waitForBackgroundWork();
+
+    expect(snapshotSource).toHaveBeenCalledOnce();
+    expect(notificationSource).toHaveBeenCalledOnce();
+    controller.dispose();
+    expect(stopped).toBe(true);
+  });
+
+  it("re-resolves lifecycle evidence and safely moves an exact run to Review", async () => {
+    let observer: CmuxEventObserver | null = null;
+    let lifecycleState: "working" | "done" = "working";
+    const resolver: ProviderSessionResolver = {
+      resolve: async (currentSnapshot) => {
+        const resolved = exactCodexResolverResult(currentSnapshot.observedAt);
+        const observedAt = Date.now();
+        return {
+          ...resolved,
+          checkedAt: observedAt,
+          nativeLifecycleAvailable: true,
+          lifecycle: [
+            {
+              workspaceId: "22222222-2222-4222-8222-222222222222",
+              paneId: "33333333-3333-4333-8333-333333333333",
+              surfaceId: "44444444-4444-4444-8444-444444444444",
+              state: lifecycleState,
+              source: "hook",
+              provider: "codex",
+              providerSessionId: "55555555-5555-4555-8555-555555555555",
+              observedAt,
+              occurredAt: observedAt,
+              explanation: `Codex lifecycle state is ${lifecycleState}.`
+            }
+          ]
+        };
+      },
+      dispose: () => undefined
+    };
+    const transport: CmuxTransport = {
+      ...connectedTransport(Date.now() - 1_000),
+      probe: async () => ({
+        binaryPath: "/cmux",
+        versionText: "cmux modern",
+        capabilities: {
+          version: 2,
+          protocol: "cmux-socket",
+          accessMode: "password",
+          methods: new Set(["events.stream"])
+        },
+        latencyMs: 1
+      }),
+      subscribeEvents: (next) => {
+        observer = next;
+        next.onReady();
+        return () => undefined;
+      }
+    };
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "safe-auto" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      resolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().tasks).toMatchObject([
+      { workflowStatus: "active" }
+    ]);
+
+    lifecycleState = "done";
+    const currentObserver = observer as CmuxEventObserver | null;
+    currentObserver?.onSignal({
+      scope: "lifecycle",
+      bootId: "11111111-1111-4111-8111-111111111111",
+      seq: 1,
+      name: "agent.turn_finished",
+      reason: "change"
+    });
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().tasks).toMatchObject([
+      { workflowStatus: "review" }
+    ]);
+    expect(controller.store.getState().workflowProposals).toEqual([]);
+    expect(controller.store.getState().recentWorkflowChanges).toMatchObject([
+      {
+        from: "active",
+        to: "review"
+      }
+    ]);
+    controller.dispose();
+  });
+
+  it("falls back to manual Refresh when a claimed event stream stops", async () => {
+    let observer: CmuxEventObserver | null = null;
+    const transport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      subscribeEvents: (next) => {
+        observer = next;
+        next.onReady();
+        return () => undefined;
+      }
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    expect(controller.store.getState().connection.message).toContain(
+      "Changes refresh automatically from cmux events."
+    );
+    const currentObserver = observer as CmuxEventObserver | null;
+    currentObserver?.onError(new Error("stream ended"));
+    expect(controller.store.getState().connection).toMatchObject({
+      status: "connected"
+    });
+    expect(controller.store.getState().connection.message).toContain(
+      "Live cmux events are unavailable; use Refresh after changes."
+    );
+    controller.dispose();
+  });
+});
+
+describe("AgentCockpitController workflow automation", () => {
+  it("publishes a review suggestion and applies it only after explicit approval", async () => {
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "suggest" }
+      }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const observedAt = Date.now() - 1_000;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(observedAt)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done")
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    const task = controller.store.getState().tasks[0]!;
+    const proposal = controller.store.getState().workflowProposals[0]!;
+    expect(task.workflowStatus).toBe("active");
+    expect(proposal).toMatchObject({
+      taskId: task.taskId,
+      from: "active",
+      to: "review",
+      reason: "turn-finished",
+      applyAutomatically: false
+    });
+
+    await expect(controller.applyWorkflowProposal(proposal)).resolves.toBe(true);
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("review");
+    expect(controller.store.getState().workflowProposals).toEqual([]);
+    expect(controller.store.getState().recentWorkflowChanges).toEqual([]);
+    expect(persisted).toBeDefined();
+    controller.dispose();
+  });
+
+  it("automatically moves Active to Review only for fresh structured high-confidence evidence", async () => {
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "safe-auto" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(Date.now() - 1_000)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done", "hook")
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().tasks).toMatchObject([
+      { workflowStatus: "review" }
+    ]);
+    expect(controller.store.getState().workflowProposals).toEqual([]);
+    expect(controller.store.getState().recentWorkflowChanges).toMatchObject([
+      {
+        taskId: controller.store.getState().tasks[0]?.taskId,
+        from: "active",
+        to: "review"
+      }
+    ]);
+    controller.dispose();
+  });
+
+  it("does not apply Safe auto after the exact binding is durably detached", async () => {
+    let gateWorkflowWrite = false;
+    let markWorkflowWriteStarted!: () => void;
+    const workflowWriteStarted = new Promise<void>((resolve) => {
+      markWorkflowWriteStarted = resolve;
+    });
+    let releaseWorkflowWrite!: () => void;
+    const workflowWriteGate = new Promise<void>((resolve) => {
+      releaseWorkflowWrite = resolve;
+    });
+    const memory = memoryTaskApp({
+      beforeFrontmatter: async () => {
+        if (!gateWorkflowWrite) return;
+        gateWorkflowWrite = false;
+        markWorkflowWriteStarted();
+        await workflowWriteGate;
+      }
+    });
+    let persisted: unknown = {
+      settings: { autoTrackAgentRuns: true, workflowAutomation: "safe-auto" }
+    };
+    const plugin = {
+      loadData: async () => structuredClone(persisted),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    let lifecycleState: "working" | "done" = "working";
+    const lifecycleResolver: ProviderSessionResolver = {
+      resolve: (currentSnapshot, signal) =>
+        exactCodexLifecycleResolver(lifecycleState, "hook").resolve(currentSnapshot, signal),
+      dispose: () => undefined
+    };
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(Date.now() - 1_000)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      lifecycleResolver
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+    const task = controller.store.getState().tasks[0]!;
+    const internal = controller as unknown as { bindings: BindingRepository };
+    const detacher = internal.bindings as BindingRepository & {
+      detachIfUnchanged: BindingRepository["detachIfUnchanged"];
+    };
+    const detachIfUnchanged = detacher.detachIfUnchanged.bind(detacher);
+    let markBindingDetached!: () => void;
+    const bindingDetached = new Promise<void>((resolve) => {
+      markBindingDetached = resolve;
+    });
+    let releaseDetachReturn!: () => void;
+    const detachReturnGate = new Promise<void>((resolve) => {
+      releaseDetachReturn = resolve;
+    });
+    detacher.detachIfUnchanged = async (expected, canMutate) => {
+      const detached = await detachIfUnchanged(expected, canMutate);
+      if (detached) markBindingDetached();
+      await detachReturnGate;
+      return detached;
+    };
+
+    gateWorkflowWrite = true;
+    lifecycleState = "done";
+    await controller.refreshNow();
+    await workflowWriteStarted;
+
+    const detachment = controller.detachTask(session);
+    await bindingDetached;
+    expect(internal.bindings.list()).toEqual([]);
+    expect(controller.store.getState().bindings).toHaveLength(1);
+
+    releaseWorkflowWrite();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, workflowStatus: "active" }
+    ]);
+
+    releaseDetachReturn();
+    await detachment;
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, workflowStatus: "active" }
+    ]);
+    expect(persisted).toBeDefined();
+    controller.dispose();
+  });
+
+  it("keeps notification-only completion evidence as a suggestion in safe-auto mode", async () => {
+    const observedAt = Date.now() - 1_000;
+    const transport: CmuxTransport = {
+      ...connectedTransport(observedAt),
+      notifications: async () => [
+        {
+          id: "notification-1",
+          workspaceId: "22222222-2222-4222-8222-222222222222",
+          surfaceId: "44444444-4444-4444-8444-444444444444",
+          title: "Implementation complete",
+          subtitle: "",
+          body: "Ready for review",
+          isRead: false
+        }
+      ]
+    };
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "safe-auto" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver()
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().tasks).toMatchObject([
+      { workflowStatus: "active" }
+    ]);
+    expect(controller.store.getState().workflowProposals).toMatchObject([
+      {
+        from: "active",
+        to: "review",
+        source: "cmux-notification",
+        applyAutomatically: false
+      }
+    ]);
+    controller.dispose();
+  });
+
+  it("persists a dismissal and rejects the now-stale proposal", async () => {
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "suggest" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(Date.now() - 1_000)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done")
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const proposal = controller.store.getState().workflowProposals[0]!;
+
+    await expect(controller.dismissWorkflowProposal(proposal)).resolves.toBe(true);
+    expect(controller.store.getState().workflowProposals).toEqual([]);
+    const internal = controller as unknown as { bindings: BindingRepository };
+    expect(internal.bindings.listWorkflowDismissals()).toMatchObject([
+      { proposalId: proposal.id, taskId: proposal.taskId }
+    ]);
+    await expect(controller.applyWorkflowProposal(proposal)).resolves.toBe(false);
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("active");
+    controller.dispose();
+  });
+
+  it("rejects a proposal after the task workflow changes", async () => {
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "suggest" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(Date.now() - 1_000)),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done")
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const task = controller.store.getState().tasks[0]!;
+    const proposal = controller.store.getState().workflowProposals[0]!;
+
+    await expect(controller.updateWorkflow(task, "parked")).resolves.toBe(true);
+    await expect(controller.applyWorkflowProposal(proposal)).resolves.toBe(false);
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("parked");
+    expect(controller.store.getState().workflowProposals).toEqual([]);
+    controller.dispose();
+  });
+
+  it("persists workflow modes and recomputes their runtime behavior", async () => {
+    let persisted: unknown = {
+      settings: { autoTrackAgentRuns: true, workflowAutomation: "off" }
+    };
+    const plugin = {
+      loadData: async () => persisted,
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const memory = memoryTaskApp();
+    const createController = (): AgentCockpitController =>
+      new AgentCockpitController(
+        memory.app,
+        plugin,
+        async () => new CmuxClient(connectedTransport(Date.now() - 1_000)),
+        new ProviderMetadataService([emptyCodexMetadataSource()]),
+        exactCodexLifecycleResolver("done")
+      );
+    const controller = createController();
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().tasks).toMatchObject([
+      { workflowStatus: "active" }
+    ]);
+    expect(controller.store.getState().workflowProposals).toEqual([]);
+
+    await controller.updateSettings({
+      ...controller.getSettings(),
+      workflowAutomation: "suggest"
+    });
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().tasks).toMatchObject([
+      { workflowStatus: "active" }
+    ]);
+    expect(controller.store.getState().workflowProposals).toMatchObject([
+      { from: "active", to: "review", applyAutomatically: false }
+    ]);
+
+    await controller.updateSettings({
+      ...controller.getSettings(),
+      workflowAutomation: "safe-auto"
+    });
+    await controller.waitForBackgroundWork();
+    expect(controller.store.getState().tasks).toMatchObject([
+      { workflowStatus: "review" }
+    ]);
+    expect(controller.store.getState().workflowProposals).toEqual([]);
+    controller.dispose();
+
+    const reloaded = createController();
+    await reloaded.initialize();
+    await reloaded.waitForBackgroundWork();
+    expect(reloaded.getSettings().workflowAutomation).toBe("safe-auto");
+    expect(reloaded.store.getState().tasks).toMatchObject([
+      { workflowStatus: "review" }
+    ]);
+    reloaded.dispose();
   });
 });

@@ -3,8 +3,12 @@ import type { CockpitState } from "../state/types";
 import type { SessionCardActions } from "../components/SessionCard";
 import { renderSessionCard } from "../components/SessionCard";
 import type { TaskRecord } from "../tasks/TaskSchema";
+import {
+  renderWorkflowProposalNotice,
+  type WorkflowProposalActions
+} from "../components/WorkflowProposalNotice";
 
-export interface AttentionPanelActions extends SessionCardActions {
+export interface AttentionPanelActions extends SessionCardActions, WorkflowProposalActions {
   openTask(task: TaskRecord): void;
 }
 
@@ -62,6 +66,14 @@ export function renderNeedsAttentionPanel(
         actions,
         variant: "attention"
       });
+      const proposal = state.workflowProposals.find(
+        (candidate) =>
+          candidate.taskId === item.task?.taskId &&
+          candidate.sessionKey === item.session?.key
+      );
+      if (proposal !== undefined) {
+        renderWorkflowProposalNotice(list, proposal, actions, "attention");
+      }
       continue;
     }
     const row = list.createDiv({ cls: "agent-cockpit-task-attention-row" });

@@ -1,11 +1,17 @@
-import type { LiveSession } from "../state/types";
+import type { AppliedWorkflowChange, LiveSession } from "../state/types";
 import type { TaskRecord, WorkflowStatus } from "../tasks/TaskSchema";
 import { WORKFLOW_STATUSES } from "../tasks/TaskSchema";
 import { WORKFLOW_LABELS } from "../state/types";
 import { formatRelativeTime, providerLabel, repositoryLabel } from "./SessionCard";
 import { renderRuntimeBadge } from "./StatusBadge";
+import {
+  renderAppliedWorkflowChange,
+  renderWorkflowProposalNotice,
+  type WorkflowProposalActions
+} from "./WorkflowProposalNotice";
+import type { WorkflowProposal } from "../workflow/WorkflowAutomationPolicy";
 
-export interface TaskCardActions {
+export interface TaskCardActions extends WorkflowProposalActions {
   open(task: TaskRecord): void;
   move(task: TaskRecord, status: WorkflowStatus): Promise<boolean>;
 }
@@ -14,6 +20,8 @@ export function renderTaskCard(
   container: HTMLElement,
   task: TaskRecord,
   sessions: readonly LiveSession[],
+  proposal: WorkflowProposal | null,
+  recentChange: AppliedWorkflowChange | null,
   actions: TaskCardActions
 ): HTMLElement {
   const card = container.createDiv({ cls: "agent-cockpit-task-card", attr: { draggable: "true" } });
@@ -85,6 +93,12 @@ export function renderTaskCard(
     }
   } else {
     card.createDiv({ cls: "agent-cockpit-task-runtime agent-cockpit-muted", text: "No live session" });
+  }
+
+  if (proposal !== null) {
+    renderWorkflowProposalNotice(card, proposal, actions, "task");
+  } else if (recentChange !== null) {
+    renderAppliedWorkflowChange(card, recentChange);
   }
 
   const workflowLabel = card.createEl("label", { cls: "agent-cockpit-workflow-control" });

@@ -50,6 +50,7 @@ describe("AgentCockpitSettingsTab", () => {
           { name: "cmux binary" },
           { name: "Task folder" },
           { name: "Automatically track agent runs" },
+          { name: "Workflow automation" },
           {
             name: "Preview lines",
             desc: "Number of lines shown when a session is expanded or its preview is explicitly refreshed. Preview text stays in memory and is never persisted."

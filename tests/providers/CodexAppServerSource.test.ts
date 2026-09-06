@@ -43,6 +43,25 @@ function appServerChild(): ChildProcessWithoutNullStreams {
   }) as unknown as ChildProcessWithoutNullStreams;
 }
 
+function respondingAppServerChild(): ChildProcessWithoutNullStreams {
+  const child = appServerChild();
+  const stdout = child.stdout as PassThrough;
+  let buffer = "";
+  child.stdin.on("data", (chunk: Buffer) => {
+    buffer += chunk.toString("utf8");
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      const message = JSON.parse(line) as { id?: number };
+      if (message.id === 1) stdout.write('{"id":1,"result":{}}\n');
+      if (message.id === 2) stdout.write('{"id":2,"result":{"data":[]}}\n');
+      newline = buffer.indexOf("\n");
+    }
+  });
+  return child;
+}
+
 const fixture = (): Promise<string> =>
   readFile(fileURLToPath(new URL("../fixtures/providers/codex-thread-list.json", import.meta.url)), "utf8");
 
@@ -103,8 +122,7 @@ describe("CodexAppServerSource", () => {
 
   it("does not start an app-server after disposal while binary discovery is pending", async () => {
     const discovery = deferred<string>();
-    const client = new CodexAppServerClient();
-    (client as unknown as { binaryPath: Promise<string> | null }).binaryPath = discovery.promise;
+    const client = new CodexAppServerClient(() => discovery.promise);
 
     const request = client.request("thread/list", {});
     client.dispose();
@@ -120,9 +138,7 @@ describe("CodexAppServerSource", () => {
     vi.stubEnv("CMUX_SOCKET_PASSWORD", "test-only-password");
     vi.stubEnv("CMUX_SURFACE_ID", "44444444-4444-4444-8444-444444444444");
     vi.stubEnv("CODEX_HOME", "/tmp/test-codex-home");
-    const client = new CodexAppServerClient();
-    (client as unknown as { binaryPath: Promise<string> | null }).binaryPath =
-      Promise.resolve("/opt/homebrew/bin/codex");
+    const client = new CodexAppServerClient(async () => "/opt/homebrew/bin/codex");
 
     try {
       const request = client.request("thread/list", { cwd: "/repository" });
@@ -154,9 +170,7 @@ describe("CodexAppServerSource", () => {
     const writes: string[] = [];
     child.stdin.on("data", (chunk: Buffer) => writes.push(chunk.toString("utf8")));
     spawnMock.mockReturnValueOnce(child);
-    const client = new CodexAppServerClient();
-    (client as unknown as { binaryPath: Promise<string> | null }).binaryPath =
-      Promise.resolve("/opt/homebrew/bin/codex");
+    const client = new CodexAppServerClient(async () => "/opt/homebrew/bin/codex");
 
     const request = client.request("thread/list", { cwd: "/repository" });
     await vi.waitFor(() => expect(writes).toHaveLength(1));
@@ -178,5 +192,30 @@ describe("CodexAppServerSource", () => {
 
     expect(outcome).toContain("disposed");
     expect(writes).toHaveLength(writesAtDisposal);
+  });
+
+  it("rediscovers the executable between metadata operations", async () => {
+    const firstChild = respondingAppServerChild();
+    const secondChild = respondingAppServerChild();
+    const spawnCalls = spawnMock.mock.calls.length;
+    spawnMock.mockReturnValueOnce(firstChild).mockReturnValueOnce(secondChild);
+    const discover = vi.fn()
+      .mockResolvedValueOnce("/opt/homebrew/Caskroom/codex/old/bin/codex")
+      .mockResolvedValueOnce("/opt/homebrew/Caskroom/codex/current/bin/codex");
+    const client = new CodexAppServerClient(discover);
+
+    try {
+      await client.request("thread/list", { cwd: "/repository" });
+      await client.request("thread/list", { cwd: "/repository" });
+
+      expect(discover).toHaveBeenCalledTimes(2);
+      const calls = spawnMock.mock.calls as Array<[unknown, ...unknown[]]>;
+      expect(calls.slice(spawnCalls, spawnCalls + 2).map((call) => call[0])).toEqual([
+        "/opt/homebrew/Caskroom/codex/old/bin/codex",
+        "/opt/homebrew/Caskroom/codex/current/bin/codex"
+      ]);
+    } finally {
+      client.dispose();
+    }
   });
 });

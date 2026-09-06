@@ -8,8 +8,11 @@ import {
   decodeWorkspaceDirectories
 } from "./decoders";
 import { ProcessExecutionError, SafeProcessRunner } from "./SafeProcessRunner";
+import type { ProcessLineStream } from "./SafeProcessRunner";
+import { clearTimeout as cancelTimer, setTimeout as startTimer } from "node:timers";
 import { PRODUCT_NAME } from "../identity";
-import type { CmuxTransport, PreviewRequest } from "./CmuxTransport";
+import type { CmuxEventObserver, CmuxTransport, PreviewRequest } from "./CmuxTransport";
+import { CmuxEventCursor } from "./CmuxEventCursor";
 import {
   CmuxError,
   type CmuxAgentRecord,
@@ -20,11 +23,14 @@ import {
   type CmuxTarget
 } from "./types";
 
-const DEFAULT_TIMEOUT_MS = 3_000;
+const DEFAULT_TIMEOUT_MS = 5_000;
 const JSON_OUTPUT_LIMIT = 512 * 1024;
 const STDERR_LIMIT = 64 * 1024;
 const READ_SCREEN_RAW_LIMIT = 96 * 1024;
 const DIRECTORY_REFRESH_MS = 30_000;
+const EVENT_STREAM_STARTUP_TIMEOUT_MS = 5_000;
+const EVENT_STREAM_LINE_LIMIT = 64 * 1024;
+const EVENT_STREAM_MISSED_HEARTBEATS = 3;
 const REQUIRED_METHODS = [
   "system.tree",
   "workspace.list",
@@ -34,18 +40,36 @@ const REQUIRED_METHODS = [
   "notification.list"
 ] as const;
 
+export interface CmuxEventTimerHandle {
+  unref(): void;
+}
+
+export interface CmuxEventTimerScheduler {
+  set(callback: () => void, delayMs: number): CmuxEventTimerHandle;
+  clear(handle: CmuxEventTimerHandle): void;
+}
+
+const nodeEventTimers: CmuxEventTimerScheduler = {
+  set: (callback, delayMs) => startTimer(callback, delayMs),
+  clear: (handle) => cancelTimer(handle as ReturnType<typeof setTimeout>)
+};
+
 export class CliCmuxTransport implements CmuxTransport {
   private workspaceDirectories = new Map<string, string | null>();
   private directoryRefreshGeneration = 0;
   private nextDirectoryRefreshAt = 0;
+  private eventsSupported = false;
+  private stopEventStream: (() => void) | null = null;
 
   constructor(
     private readonly binaryPath: string,
     private readonly runner = new SafeProcessRunner(),
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly eventTimers: CmuxEventTimerScheduler = nodeEventTimers
   ) {}
 
   async probe(signal?: AbortSignal): Promise<CmuxProbe> {
+    this.eventsSupported = false;
     const startedAt = this.now();
     const version = await this.run(cmuxCommands.version(), 32 * 1024, signal);
     if (!/^cmux\s+\d+\.\d+\.\d+/m.test(version.stdout.trim())) {
@@ -63,6 +87,7 @@ export class CliCmuxTransport implements CmuxTransport {
         `This cmux build is missing required capabilities: ${missingMethods.join(", ")}.`
       );
     }
+    this.eventsSupported = capabilities.methods.has("events.stream");
     return {
       binaryPath: this.binaryPath,
       versionText: version.stdout.trim(),
@@ -109,6 +134,85 @@ export class CliCmuxTransport implements CmuxTransport {
     }
   }
 
+  subscribeEvents(observer: CmuxEventObserver): (() => void) | null {
+    if (!this.eventsSupported) return null;
+    this.stopEventStream?.();
+    const cursor = new CmuxEventCursor();
+    let active = true;
+    let ready = false;
+    let heartbeatIntervalSeconds: number | null = null;
+    let idleTimer: CmuxEventTimerHandle | null = null;
+    let stream: ProcessLineStream | null = null;
+    const clearIdleTimer = (): void => {
+      if (idleTimer === null) return;
+      this.eventTimers.clear(idleTimer);
+      idleTimer = null;
+    };
+    const stop = (): void => {
+      if (!active) return;
+      active = false;
+      clearIdleTimer();
+      stream?.dispose();
+      if (this.stopEventStream === stop) this.stopEventStream = null;
+    };
+    const fail = (error: unknown): void => {
+      if (!active) return;
+      stop();
+      observer.onError(eventStreamError(error));
+    };
+    const armIdleTimer = (): void => {
+      if (heartbeatIntervalSeconds === null) return;
+      clearIdleTimer();
+      const timeoutMs = heartbeatIntervalSeconds * EVENT_STREAM_MISSED_HEARTBEATS * 1_000;
+      idleTimer = this.eventTimers.set(() => {
+        fail(
+          new CmuxError(
+            "timeout",
+            "cmux event streaming stopped producing frames before its heartbeat deadline."
+          )
+        );
+      }, timeoutMs);
+      idleTimer.unref();
+    };
+    stream = this.runner.streamLines(
+      this.binaryPath,
+      cmuxCommands.events(),
+      {
+        startupTimeoutMs: EVENT_STREAM_STARTUP_TIMEOUT_MS,
+        maxLineBytes: EVENT_STREAM_LINE_LIMIT,
+        maxStderrBytes: STDERR_LIMIT
+      },
+      {
+        onLine: (line) => {
+          if (!active) return;
+          try {
+            const update = cursor.accept(line);
+            if (update.frameType === "ack") {
+              heartbeatIntervalSeconds = update.heartbeatIntervalSeconds;
+              armIdleTimer();
+              if (!ready) {
+                ready = true;
+                observer.onReady();
+              }
+            } else {
+              armIdleTimer();
+            }
+            if (update.signal !== null) observer.onSignal(update.signal);
+          } catch (error) {
+            fail(error);
+          }
+        },
+        onError: (error) => fail(error)
+      }
+    );
+    if (!active) {
+      stream.dispose();
+      return null;
+    }
+    this.stopEventStream = stop;
+    return stop;
+  }
+
   async readPreview(target: CmuxTarget, request: PreviewRequest): Promise<CmuxPreview> {
     const result = await this.run(
       cmuxCommands.readScreen(target, request.lines),
@@ -136,6 +240,8 @@ export class CliCmuxTransport implements CmuxTransport {
   }
 
   dispose(): void {
+    this.stopEventStream?.();
+    this.stopEventStream = null;
     this.runner.dispose();
   }
 
@@ -198,6 +304,28 @@ export class CliCmuxTransport implements CmuxTransport {
       throw new CmuxError("process-failed", error.stderr.trim() || error.message, error);
     }
   }
+}
+
+function eventStreamError(error: unknown): CmuxError {
+  if (error instanceof CmuxError) return error;
+  if (error instanceof ProcessExecutionError) {
+    if (error.originalError instanceof CmuxError) return error.originalError;
+    if (error.reason === "timeout") {
+      return new CmuxError("timeout", "cmux did not start its event stream before the timeout.", error);
+    }
+    if (error.reason === "output-limit") {
+      return new CmuxError("output-limit", `cmux event data exceeded ${PRODUCT_NAME}'s safety limit.`, error);
+    }
+    if (error.reason === "aborted") {
+      return new CmuxError("aborted", "cmux event streaming was cancelled.", error);
+    }
+    return new CmuxError(
+      "process-failed",
+      error.stderr.trim() || "cmux event streaming stopped unexpectedly.",
+      error
+    );
+  }
+  return new CmuxError("process-failed", "cmux event streaming failed unexpectedly.", error);
 }
 
 function isUnsupportedListAgents(error: unknown): boolean {

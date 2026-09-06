@@ -1,9 +1,14 @@
 import { normalizePath } from "obsidian";
+import {
+  WORKFLOW_AUTOMATION_MODES,
+  type WorkflowAutomationMode
+} from "../workflow/WorkflowAutomationPolicy";
 
 export interface AgentCockpitSettings {
   cmuxBinaryPath: string;
   taskFolder: string;
   autoTrackAgentRuns: boolean;
+  workflowAutomation: WorkflowAutomationMode;
   previewLines: number;
   previewMaxBytes: number;
   staleAfterMs: number;
@@ -13,6 +18,7 @@ export const DEFAULT_SETTINGS: AgentCockpitSettings = {
   cmuxBinaryPath: "",
   taskFolder: "Agent Cockpit/Tasks",
   autoTrackAgentRuns: true,
+  workflowAutomation: "suggest",
   previewLines: 60,
   previewMaxBytes: 16 * 1024,
   staleAfterMs: 30 * 60 * 1000
@@ -49,6 +55,11 @@ export function parseSettings(value: unknown): AgentCockpitSettings {
       typeof raw.autoTrackAgentRuns === "boolean"
         ? raw.autoTrackAgentRuns
         : DEFAULT_SETTINGS.autoTrackAgentRuns,
+    workflowAutomation: WORKFLOW_AUTOMATION_MODES.includes(
+      raw.workflowAutomation as WorkflowAutomationMode
+    )
+      ? (raw.workflowAutomation as WorkflowAutomationMode)
+      : DEFAULT_SETTINGS.workflowAutomation,
     previewLines: finiteInRange(raw.previewLines, DEFAULT_SETTINGS.previewLines, 1, 80),
     previewMaxBytes: finiteInRange(raw.previewMaxBytes, DEFAULT_SETTINGS.previewMaxBytes, 4_096, 65_536),
     staleAfterMs: finiteInRange(raw.staleAfterMs, DEFAULT_SETTINGS.staleAfterMs, 5 * 60_000, 24 * 60 * 60_000)

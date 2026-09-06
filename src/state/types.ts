@@ -3,6 +3,7 @@ import type { AgentRunRecord, BindingRecord } from "../bindings/types";
 import type { ActivityKind, EvidenceSource } from "../evidence/types";
 import type { SessionConversation } from "../providers/types";
 import type { TaskRecord, WorkflowStatus } from "../tasks/TaskSchema";
+import type { WorkflowProposal } from "../workflow/WorkflowAutomationPolicy";
 
 export type ProviderKind = "claude" | "codex" | "shell" | "unknown";
 export type Confidence = "low" | "medium" | "high";
@@ -122,6 +123,16 @@ export interface CockpitHealth {
   lifecycle: SourceHealth;
 }
 
+export interface AppliedWorkflowChange {
+  proposalId: string;
+  taskId: string;
+  taskUpdatedAt: string;
+  from: WorkflowStatus;
+  to: WorkflowStatus;
+  explanation: string;
+  appliedAt: number;
+}
+
 export interface CockpitState {
   connection: ConnectionState;
   snapshot: CmuxSnapshot | null;
@@ -131,6 +142,8 @@ export interface CockpitState {
   bindings: BindingRecord[];
   runs: AgentRunRecord[];
   attention: AttentionItem[];
+  workflowProposals: WorkflowProposal[];
+  recentWorkflowChanges: AppliedWorkflowChange[];
   health: CockpitHealth;
   filters: SessionFilters;
   refreshing: boolean;
@@ -163,6 +176,8 @@ export const INITIAL_COCKPIT_STATE: CockpitState = {
   bindings: [],
   runs: [],
   attention: [],
+  workflowProposals: [],
+  recentWorkflowChanges: [],
   health: {
     topology: {
       status: "unavailable",

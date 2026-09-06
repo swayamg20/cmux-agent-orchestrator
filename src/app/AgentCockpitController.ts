@@ -44,6 +44,7 @@ import {
 } from "../settings/AgentCockpitSettings";
 import { CockpitStore } from "../state/CockpitStore";
 import type {
+  AppliedWorkflowChange,
   ConnectionState,
   LiveSession,
   SessionFilters,
@@ -65,6 +66,10 @@ import {
   selectAutomaticTrackCandidates,
   type AutomaticTrackCandidate
 } from "../tracking/AutomaticTaskTracking";
+import type { WorkflowProposal } from "../workflow/WorkflowAutomationPolicy";
+import { WorkflowAutomationReconciler } from "../workflow/WorkflowAutomationReconciler";
+import { buildWorkflowProposals } from "../workflow/WorkflowProposalEngine";
+import { CmuxEventRefreshScheduler } from "./CmuxEventRefreshScheduler";
 import { RefreshCoordinator, type RefreshResult } from "./RefreshCoordinator";
 
 export type CmuxClientFactory = (explicitBinaryPath: string) => Promise<CmuxClient>;
@@ -94,6 +99,7 @@ export class AgentCockpitController {
   private readonly providerClassifier = new ProviderClassifier(this.detector, this.previewScheduler);
   private readonly evidence = new CmuxEvidenceService(this.detector);
   private readonly refreshCoordinator = new RefreshCoordinator();
+  private readonly eventRefresh: CmuxEventRefreshScheduler;
   private classificationWork: Promise<void> = Promise.resolve();
   private metadataWork: Promise<void> = Promise.resolve();
   private identityWork: Promise<void> = Promise.resolve();
@@ -102,6 +108,7 @@ export class AgentCockpitController {
   private pendingSettingsUpdates = 0;
   private automaticTrackingGeneration = 0;
   private readonly reportedAutomaticTrackingIssues = new Map<string, string>();
+  private readonly workflowAutomation: WorkflowAutomationReconciler;
   private readonly openModals = new Set<Modal>();
   private readonly conversationPickerLoads = new Set<string>();
   private automaticTrackingPass: AutomaticTrackingPass | null = null;
@@ -112,6 +119,8 @@ export class AgentCockpitController {
   private suppressedProviderSurfaceIds = new Set<string>();
   private suppressedProviderSessionKeys = new Set<string>();
   private client: CmuxClient | null = null;
+  private stopCmuxEvents: (() => void) | null = null;
+  private cmuxEventUpdates: "unknown" | "live" | "manual" = "unknown";
   private clientGeneration = 0;
   private refreshStateGeneration = 0;
   private topologyRefreshGeneration = 0;
@@ -130,6 +139,73 @@ export class AgentCockpitController {
     private readonly providerSessionResolver: ProviderSessionResolver = NOOP_PROVIDER_SESSION_RESOLVER
   ) {
     this.bindings = new BindingRepository(plugin);
+    this.eventRefresh = new CmuxEventRefreshScheduler({
+      refreshAll: () => this.refreshNow(),
+      refreshTopology: () => this.refreshTopology(),
+      refreshNotifications: () => this.refreshNotifications(),
+      refreshLifecycle: () => this.refreshLifecycleFromCurrentSnapshot(),
+      onError: (error) => {
+        if (!this.disposed) this.handleError(error, false);
+      }
+    });
+    this.workflowAutomation = new WorkflowAutomationReconciler({
+      getAuthority: () => {
+        const state = this.store.getState();
+        return {
+          ready: !this.disposed && this.pendingSettingsUpdates === 0,
+          mode: this.settings?.workflowAutomation ?? "off",
+          repository: this.taskRepository,
+          taskFolder: this.settings?.taskFolder ?? null,
+          tasks: state.tasks,
+          proposals: this.buildCurrentWorkflowProposals({
+            connection: state.connection,
+            sessions: state.sessions,
+            tasks: state.tasks,
+            bindings: this.bindings.list(),
+            health: state.health
+          })
+        };
+      },
+      publishTasks: async (repository, taskFolder, proposal, automatic) => {
+        await this.waitForSettingsUpdates();
+        if (
+          this.disposed ||
+          this.taskRepository !== repository ||
+          this.settings?.taskFolder !== taskFolder
+        ) {
+          return;
+        }
+        const tasks = repository.list();
+        this.store.update((state) => {
+          if (!automatic) return { tasks };
+          const updatedTask = tasks.find((task) => task.taskId === proposal.taskId);
+          if (updatedTask === undefined) return { tasks };
+          return {
+            tasks,
+            recentWorkflowChanges: [
+              {
+                proposalId: proposal.id,
+                taskId: proposal.taskId,
+                taskUpdatedAt: updatedTask.updatedAt,
+                from: proposal.from,
+                to: proposal.to,
+                explanation: proposal.explanation,
+                appliedAt: Date.now()
+              },
+              ...state.recentWorkflowChanges.filter(
+                (change) => change.proposalId !== proposal.id
+              )
+            ].slice(0, 100)
+          };
+        });
+        this.recomputeSessions();
+      },
+      onAutomaticError: (_proposal, error) => {
+        if (!this.disposed) {
+          new Notice(`Workflow automation could not apply a suggestion: ${readableError(error)}`);
+        }
+      }
+    });
   }
 
   async initialize(): Promise<void> {
@@ -268,9 +344,11 @@ export class AgentCockpitController {
   }
 
   async waitForBackgroundWork(): Promise<void> {
+    await this.eventRefresh.waitForIdle();
     await this.identityWork;
     await Promise.all([this.classificationWork, this.metadataWork]);
     await this.automaticTrackingWork;
+    await this.workflowAutomation.waitForIdle();
   }
 
   async loadPreview(session: LiveSession): Promise<void> {
@@ -412,11 +490,11 @@ export class AgentCockpitController {
     ]);
     if (this.conversationPickerLoads.has(loadKey)) return;
     this.conversationPickerLoads.add(loadKey);
+    const loadingNotice = new Notice(
+      `Loading local ${session.provider.provider === "claude" ? "Claude" : "Codex"} conversation titles...`,
+      0
+    );
     try {
-      new Notice(
-        `Loading local ${session.provider.provider === "claude" ? "Claude" : "Codex"} conversation titles...`,
-        2_500
-      );
       const conversations = await this.providerMetadata.list(
         session.provider.provider,
         session.currentDirectory
@@ -447,8 +525,10 @@ export class AgentCockpitController {
       );
     } catch (error) {
       if (this.disposed) return;
+      loadingNotice.hide();
       new Notice(readableError(error));
     } finally {
+      loadingNotice.hide();
       this.conversationPickerLoads.delete(loadKey);
     }
   }
@@ -632,6 +712,42 @@ export class AgentCockpitController {
     }
   }
 
+  async applyWorkflowProposal(proposal: WorkflowProposal): Promise<boolean> {
+    if (this.disposed) return false;
+    try {
+      const applied = await this.workflowAutomation.apply(proposal);
+      if (!applied && !this.disposed) {
+        new Notice("That workflow suggestion is no longer current.");
+      }
+      return applied;
+    } catch (error) {
+      if (!this.disposed) new Notice(readableError(error));
+      return false;
+    }
+  }
+
+  async dismissWorkflowProposal(proposal: WorkflowProposal): Promise<boolean> {
+    if (this.disposed) return false;
+    try {
+      const current = this.currentWorkflowProposal(proposal.id);
+      if (current === null || current.taskId !== proposal.taskId) {
+        new Notice("That workflow suggestion is no longer current.");
+        return false;
+      }
+      await this.bindings.dismissWorkflowProposal({
+        proposalId: current.id,
+        taskId: current.taskId,
+        dismissedAt: new Date().toISOString()
+      });
+      if (this.disposed) return false;
+      this.recomputeSessions();
+      return true;
+    } catch (error) {
+      if (!this.disposed) new Notice(readableError(error));
+      return false;
+    }
+  }
+
   async reloadTasks(
     invalidations: readonly TaskInvalidationEvidence[] = [],
     renames: readonly TaskRenameEvidence[] = []
@@ -731,6 +847,7 @@ export class AgentCockpitController {
     const parsed = parseSettings({ ...next, cmuxBinaryPath: validateBinarySetting(next.cmuxBinaryPath) });
     this.pendingSettingsUpdates += 1;
     this.cancelAutomaticTaskTracking();
+    this.workflowAutomation.cancel();
     const operation = this.settingsUpdateWork
       .catch(() => undefined)
       .then(() => this.applySettingsUpdate(parsed));
@@ -742,8 +859,11 @@ export class AgentCockpitController {
       await operation;
     } finally {
       this.pendingSettingsUpdates -= 1;
-      if (this.pendingSettingsUpdates === 0 && this.settings?.autoTrackAgentRuns === true) {
-        this.scheduleAutomaticTaskTracking();
+      if (this.pendingSettingsUpdates === 0) {
+        if (this.settings?.autoTrackAgentRuns === true) {
+          this.scheduleAutomaticTaskTracking();
+        }
+        this.workflowAutomation.schedule(this.store.getState().workflowProposals);
       }
     }
   }
@@ -776,6 +896,7 @@ export class AgentCockpitController {
     if (this.disposed || this.store.getState().refreshing) return;
     this.refreshCoordinator.dispose();
     this.cancelIdentityResolution();
+    this.workflowAutomation.cancel();
     this.automaticProviderMappings = [];
     this.suppressedProviderSurfaceIds.clear();
     this.suppressedProviderSessionKeys.clear();
@@ -805,6 +926,9 @@ export class AgentCockpitController {
     this.clientGeneration += 1;
     this.refreshStateGeneration += 1;
     this.cancelAutomaticTaskTracking();
+    this.workflowAutomation.cancel();
+    this.stopCmuxEventUpdates();
+    this.eventRefresh.dispose();
     this.refreshCoordinator.dispose();
     this.previewScheduler.dispose();
     this.cancelIdentityResolution();
@@ -820,6 +944,7 @@ export class AgentCockpitController {
     this.evidence.clear();
     this.providerClassifier.clear();
     this.reportedAutomaticTrackingIssues.clear();
+    this.workflowAutomation.dispose();
     this.automaticTrackingPass = null;
     this.store.clear();
   }
@@ -851,6 +976,9 @@ export class AgentCockpitController {
 
   private async connect(): Promise<void> {
     if (this.disposed) return;
+    this.workflowAutomation.cancel();
+    this.stopCmuxEventUpdates();
+    this.eventRefresh.cancelPending();
     const clientGeneration = ++this.clientGeneration;
     this.client?.dispose();
     this.client = null;
@@ -862,7 +990,8 @@ export class AgentCockpitController {
         status: "connecting",
         message: "Connecting to cmux...",
         checkedAt: Date.now()
-      }
+      },
+      workflowProposals: []
     });
     let candidate: CmuxClient | null = null;
     try {
@@ -878,11 +1007,12 @@ export class AgentCockpitController {
       }
       this.client = candidate;
       this.focusAction = new FocusSessionAction(candidate);
+      this.startCmuxEventUpdates(candidate, clientGeneration);
       const checkedAt = Date.now();
       this.store.update((state) => ({
         connection: {
           status: "connected",
-          message: connectionMessage(probe.capabilities.accessMode),
+          message: this.connectedMessage(probe.capabilities.accessMode),
           versionText: probe.versionText,
           accessMode: probe.capabilities.accessMode,
           binaryPath: probe.binaryPath,
@@ -906,6 +1036,93 @@ export class AgentCockpitController {
       this.focusAction = null;
       this.handleError(error);
     }
+  }
+
+  private startCmuxEventUpdates(client: CmuxClient, clientGeneration: number): void {
+    this.cmuxEventUpdates = "manual";
+    let failed = false;
+    try {
+      const stop = client.subscribeEvents({
+        onReady: () => {
+          if (
+            failed ||
+            this.disposed ||
+            clientGeneration !== this.clientGeneration ||
+            client !== this.client
+          ) {
+            return;
+          }
+          this.cmuxEventUpdates = "live";
+          this.publishConnectedMessage();
+        },
+        onSignal: (signal) => {
+          if (
+            this.disposed ||
+            clientGeneration !== this.clientGeneration ||
+            client !== this.client
+          ) {
+            return;
+          }
+          this.eventRefresh.request(signal.scope);
+        },
+        onError: () => {
+          failed = true;
+          if (
+            this.disposed ||
+            clientGeneration !== this.clientGeneration ||
+            client !== this.client
+          ) {
+            return;
+          }
+          const activeStop = this.stopCmuxEvents;
+          this.stopCmuxEvents = null;
+          activeStop?.();
+          this.cmuxEventUpdates = "manual";
+          this.publishConnectedMessage();
+        }
+      });
+      if (stop === null) return;
+      if (failed) {
+        stop();
+        return;
+      }
+      this.stopCmuxEvents = stop;
+    } catch {
+      this.stopCmuxEvents = null;
+      this.cmuxEventUpdates = "manual";
+    }
+  }
+
+  private stopCmuxEventUpdates(): void {
+    this.stopCmuxEvents?.();
+    this.stopCmuxEvents = null;
+    this.cmuxEventUpdates = "unknown";
+  }
+
+  private connectedMessage(accessMode: string | null): string {
+    const base = connectionMessage(accessMode);
+    return this.cmuxEventUpdates === "live"
+      ? `${base} Changes refresh automatically from cmux events.`
+      : `${base} Live cmux events are unavailable; use Refresh after changes.`;
+  }
+
+  private publishConnectedMessage(): void {
+    this.store.update((state) => {
+      if (state.connection.status !== "connected") return {};
+      return {
+        connection: {
+          ...state.connection,
+          message: this.connectedMessage(state.connection.accessMode)
+        }
+      };
+    });
+  }
+
+  private async refreshLifecycleFromCurrentSnapshot(): Promise<void> {
+    const snapshot = this.store.getState().snapshot;
+    if (this.disposed || this.client === null || snapshot === null) return;
+    this.scheduleProviderIdentityResolution(snapshot);
+    await this.identityWork;
   }
 
   private resetHeuristicProviderEvidence(): void {
@@ -945,6 +1162,7 @@ export class AgentCockpitController {
     // the prior snapshot may finish creating a note, but it must not bind a
     // provider session after this point without being selected again.
     this.cancelAutomaticTaskTracking();
+    this.workflowAutomation.cancel();
     this.identityResolvedGeneration = null;
     const checkedAt = snapshot.observedAt;
     this.automaticProviderMappings = [];
@@ -956,7 +1174,7 @@ export class AgentCockpitController {
       connection: {
         ...state.connection,
         status: "connected",
-        message: connectionMessage(state.connection.accessMode),
+        message: this.connectedMessage(state.connection.accessMode),
         checkedAt
       },
       health: {
@@ -996,6 +1214,7 @@ export class AgentCockpitController {
     // enough to authorize automatic durable bindings.
     this.cancelIdentityResolution();
     this.cancelAutomaticTaskTracking();
+    this.workflowAutomation.cancel();
     this.automaticProviderMappings = [];
     this.suppressedProviderSurfaceIds.clear();
     this.suppressedProviderSessionKeys.clear();
@@ -1013,6 +1232,7 @@ export class AgentCockpitController {
           state.health.lifecycle.lastSuccessAt !== null
         )
       },
+      workflowProposals: [],
       error: message
     }));
   }
@@ -1033,14 +1253,24 @@ export class AgentCockpitController {
       },
       error: `Notifications unavailable: ${message}`
     }));
+    this.recomputeSessions();
   }
 
   private recomputeSessions(): void {
     if (this.disposed) return;
     const state = this.store.getState();
     const snapshot = state.snapshot;
+    const recentWorkflowChanges = currentWorkflowChanges(
+      state.recentWorkflowChanges,
+      state.tasks
+    );
     if (snapshot === null) {
-      this.store.update({ sessions: [], attention: [] });
+      this.store.update({
+        sessions: [],
+        attention: [],
+        workflowProposals: [],
+        recentWorkflowChanges
+      });
       return;
     }
     this.syncCurrentEvidence(snapshot, state.notifications);
@@ -1083,7 +1313,43 @@ export class AgentCockpitController {
       Date.now(),
       this.settings?.staleAfterMs ?? DEFAULT_SETTINGS.staleAfterMs
     );
-    this.store.update({ sessions, attention });
+    const workflowProposals = this.buildCurrentWorkflowProposals({
+      connection: state.connection,
+      sessions,
+      tasks: state.tasks,
+      bindings: state.bindings,
+      health: state.health
+    });
+    this.store.update({ sessions, attention, workflowProposals, recentWorkflowChanges });
+    this.workflowAutomation.schedule(workflowProposals);
+  }
+
+  private buildCurrentWorkflowProposals(
+    state: Pick<
+      ReturnType<CockpitStore["getState"]>,
+      "connection" | "sessions" | "tasks" | "bindings" | "health"
+    > = this.store.getState()
+  ): WorkflowProposal[] {
+    return buildWorkflowProposals({
+      tasks: state.tasks,
+      sessions: state.sessions,
+      bindings: state.bindings,
+      dismissals: this.bindings.listWorkflowDismissals(),
+      mode: this.settings?.workflowAutomation ?? "off",
+      now: Date.now(),
+      health: {
+        connected: state.connection.status === "connected",
+        topologyFresh: state.health.topology.status === "fresh",
+        lifecycleFresh: state.health.lifecycle.status === "fresh",
+        notificationsFresh: state.health.notifications.status === "fresh"
+      }
+    });
+  }
+
+  private currentWorkflowProposal(proposalId: string): WorkflowProposal | null {
+    return this.buildCurrentWorkflowProposals().find(
+      (candidate) => candidate.id === proposalId
+    ) ?? null;
   }
 
   private syncCurrentEvidence(
@@ -1614,6 +1880,7 @@ export class AgentCockpitController {
             )
           }
         }));
+        this.recomputeSessions();
       })
       .finally(() => {
         if (this.identityAbortController === controller) this.identityAbortController = null;
@@ -1989,6 +2256,21 @@ export class AgentCockpitController {
     if (this.taskRepository === null) throw new Error("Task repository is not initialized.");
     return this.taskRepository;
   }
+}
+
+function currentWorkflowChanges(
+  changes: readonly AppliedWorkflowChange[],
+  tasks: readonly TaskRecord[]
+): AppliedWorkflowChange[] {
+  const tasksById = new Map(tasks.map((task) => [task.taskId, task] as const));
+  return changes.filter((change) => {
+    const task = tasksById.get(change.taskId);
+    return (
+      task !== undefined &&
+      task.workflowStatus === change.to &&
+      task.updatedAt === change.taskUpdatedAt
+    );
+  });
 }
 
 function providerSurfaceIdentities(snapshot: CmuxSnapshot): ProviderSurfaceIdentity[] {

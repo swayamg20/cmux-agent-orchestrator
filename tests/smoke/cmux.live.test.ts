@@ -12,7 +12,7 @@ live("installed cmux read-only smoke", () => {
     const client = await CmuxClient.create("/Applications/cmux.app/Contents/Resources/bin/cmux");
     try {
       const probe = await client.probe();
-      expect(probe.versionText).toMatch(/^cmux 0\.62\.2\b/);
+      expect(probe.versionText).toMatch(/^cmux \d+\.\d+\.\d+\b/);
       expect(probe.capabilities.protocol).toBe("cmux-socket");
 
       const [snapshot, notifications, focused] = await Promise.all([
@@ -54,5 +54,5 @@ live("installed cmux read-only smoke", () => {
     } finally {
       client.dispose();
     }
-  });
+  }, 25_000);
 });

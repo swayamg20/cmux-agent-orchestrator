@@ -3,12 +3,19 @@ import type { SessionCardActions } from "../components/SessionCard";
 import { providerLabel, repositoryLabel, sessionDisplayTitle } from "../components/SessionCard";
 import { renderRuntimeBadge } from "../components/StatusBadge";
 import type { CockpitState, LiveSession } from "../state/types";
+import type { TaskRecord } from "../tasks/TaskSchema";
 import { DEFAULT_SESSION_INBOX_LIMIT, selectSessionInbox } from "./SessionInboxModel";
 
 export interface SessionInboxActions
   extends Pick<
     SessionCardActions,
-    "focus" | "attachTask" | "createTask" | "chooseConversation" | "forgetConversation"
+    | "focus"
+    | "openTask"
+    | "attachTask"
+    | "createTask"
+    | "detachTask"
+    | "chooseConversation"
+    | "forgetConversation"
   > {
   setShowAll(showAll: boolean): void;
 }
@@ -31,10 +38,10 @@ export function renderSessionInbox(
   titleLine.createSpan({
     cls: "agent-cockpit-count",
     text: String(selection.total),
-    attr: { "aria-label": `${selection.total} untracked agent runs` }
+    attr: { "aria-label": `${selection.total} detected agent runs` }
   });
   title.createEl("p", {
-    text: "Unlinked Claude and Codex runs stay here for manual review. Exact sessions are added to the work board automatically when enabled."
+    text: "Every detected Claude and Codex run stays visible here. Tracked runs are also represented on the work board."
   });
 
   if (selection.total === 0) {
@@ -42,21 +49,24 @@ export function renderSessionInbox(
     const icon = empty.createSpan({ attr: { "aria-hidden": "true" } });
     setIcon(icon, "check-check");
     empty.createSpan({
-      text: hasDetectedAgentRun(state.sessions)
-        ? "Every confidently detected Claude or Codex run is represented on the work board."
-        : "No unassigned Claude or Codex runs are confidently detected right now."
+      text: "No Claude or Codex runs are confidently detected right now."
     });
     return;
   }
 
   const list = panel.createDiv({ cls: "agent-cockpit-inbox-list" });
-  for (const session of selection.sessions) renderInboxRow(list, session, actions);
+  for (const session of selection.sessions) {
+    const task = session.linkedTaskId === null
+      ? null
+      : state.tasks.find((candidate) => candidate.taskId === session.linkedTaskId) ?? null;
+    renderInboxRow(list, session, task, actions);
+  }
 
   if (selection.total > DEFAULT_SESSION_INBOX_LIMIT) {
     const footer = panel.createDiv({ cls: "agent-cockpit-inbox-footer" });
     footer.createSpan({
       text: showAll
-        ? `${selection.total} untracked runs shown`
+        ? `${selection.total} agent runs shown`
         : `${selection.total - selection.sessions.length} more runs hidden`
     });
     const show = footer.createEl("button", {
@@ -67,7 +77,12 @@ export function renderSessionInbox(
   }
 }
 
-function renderInboxRow(container: HTMLElement, session: LiveSession, actions: SessionInboxActions): void {
+function renderInboxRow(
+  container: HTMLElement,
+  session: LiveSession,
+  task: TaskRecord | null,
+  actions: SessionInboxActions
+): void {
   const row = container.createDiv({ cls: "agent-cockpit-inbox-row" });
   const providerIcon = row.createSpan({ cls: "agent-cockpit-inbox-icon", attr: { "aria-hidden": "true" } });
   setIcon(providerIcon, session.provider.provider === "claude" ? "sparkles" : "square-terminal");
@@ -79,21 +94,25 @@ function renderInboxRow(container: HTMLElement, session: LiveSession, actions: S
   });
   identity.createDiv({
     cls: "agent-cockpit-session-meta",
-    text: `${providerLabel(session.provider.provider)} · ${repositoryLabel(session.currentDirectory)} · ${session.workspaceTitle}${session.conversation ? "" : " · cmux title fallback"}`
+    text: `${providerLabel(session.provider.provider)} · ${repositoryLabel(session.currentDirectory)} · ${session.workspaceTitle}${task ? ` · Tracked: ${task.title}` : " · Untracked"}${session.conversation ? "" : " · cmux title fallback"}`
   });
 
   const runtime = row.createDiv({ cls: "agent-cockpit-inbox-runtime" });
   renderRuntimeBadge(runtime, session.assessment);
 
   const rowActions = row.createDiv({ cls: "agent-cockpit-inbox-actions" });
-  inboxButton(
-    rowActions,
-    "file-plus-2",
-    "Track in board",
-    "Create a durable Markdown task and attach this run",
-    () => actions.createTask(session)
-  );
-  renderMoreButton(rowActions, session, actions);
+  if (task) {
+    inboxButton(rowActions, "file-text", "Open task", "Open the linked Markdown task", () => actions.openTask(task));
+  } else {
+    inboxButton(
+      rowActions,
+      "file-plus-2",
+      "Track in board",
+      "Create a durable Markdown task and attach this run",
+      () => actions.createTask(session)
+    );
+  }
+  renderMoreButton(rowActions, session, task, actions);
 }
 
 function inboxButton(
@@ -113,7 +132,12 @@ function inboxButton(
   button.addEventListener("click", onClick);
 }
 
-function renderMoreButton(container: HTMLElement, session: LiveSession, actions: SessionInboxActions): void {
+function renderMoreButton(
+  container: HTMLElement,
+  session: LiveSession,
+  task: TaskRecord | null,
+  actions: SessionInboxActions
+): void {
   const button = container.createEl("button", {
     cls: "agent-cockpit-icon-button",
     attr: { type: "button", title: "More run actions", "aria-label": "More run actions" }
@@ -127,12 +151,21 @@ function renderMoreButton(container: HTMLElement, session: LiveSession, actions:
         .setIcon("terminal")
         .onClick(() => actions.focus(session))
     );
-    menu.addItem((item) =>
-      item
-        .setTitle("Attach to existing task")
-        .setIcon("link")
-        .onClick(() => actions.attachTask(session))
-    );
+    if (task) {
+      menu.addItem((item) =>
+        item
+          .setTitle("Detach from task")
+          .setIcon("unlink")
+          .onClick(() => actions.detachTask(session))
+      );
+    } else {
+      menu.addItem((item) =>
+        item
+          .setTitle("Attach to existing task")
+          .setIcon("link")
+          .onClick(() => actions.attachTask(session))
+      );
+    }
     if (session.provider.provider === "claude" || session.provider.provider === "codex") {
       menu.addItem((item) =>
         item
@@ -156,10 +189,4 @@ function renderMoreButton(container: HTMLElement, session: LiveSession, actions:
     const bounds = button.getBoundingClientRect();
     menu.showAtPosition({ x: bounds.right, y: bounds.bottom, left: true }, button.ownerDocument);
   });
-}
-
-function hasDetectedAgentRun(sessions: readonly LiveSession[]): boolean {
-  return sessions.some(
-    (session) => session.provider.provider === "claude" || session.provider.provider === "codex"
-  );
 }
