@@ -131,6 +131,23 @@ describe("WorkflowAutomationReconciler", () => {
     expect(update).toHaveBeenCalledOnce();
   });
 
+  it("does not let canceled work suppress an identical current-generation proposal", async () => {
+    const update = vi.fn(async (
+      _task: TaskRecord,
+      _to: WorkflowStatus,
+      canMutate: () => boolean
+    ) => canMutate());
+    const { reconciler, publishTasks } = harness(update);
+
+    reconciler.schedule([proposal()]);
+    reconciler.cancel();
+    reconciler.schedule([proposal()]);
+    await reconciler.waitForIdle();
+
+    expect(update).toHaveBeenCalledOnce();
+    expect(publishTasks).toHaveBeenCalledOnce();
+  });
+
   it("rechecks authority inside the repository compare-and-set guard", async () => {
     let authority!: WorkflowAutomationAuthority;
     const update = vi.fn(async (

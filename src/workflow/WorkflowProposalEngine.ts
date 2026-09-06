@@ -26,6 +26,8 @@ export interface WorkflowEvidenceHealth {
   notificationsFresh: boolean;
 }
 
+const SAFE_AUTO_CONFLICT_MAX_AGE_MS = 5 * 60_000;
+
 export function buildWorkflowProposals(input: WorkflowProposalInput): WorkflowProposal[] {
   if (input.mode === "off" || !input.health.connected || !input.health.topologyFresh) return [];
   const dismissed = new Set(input.dismissals.map((candidate) => candidate.proposalId));
@@ -48,7 +50,18 @@ export function buildWorkflowProposals(input: WorkflowProposalInput): WorkflowPr
       .filter((proposal) => !dismissed.has(proposal.id))
       .sort(compareProposals);
     const selected = candidates[0];
-    if (selected !== undefined) proposals.push(selected);
+    if (selected !== undefined) {
+      proposals.push(
+        selected.applyAutomatically &&
+          hasFreshExactWorkingSibling(task, selected, input.sessions, input.bindings, input.health, input.now)
+          ? {
+              ...selected,
+              applyAutomatically: false,
+              explanation: `${selected.explanation} Another exact run is still working, so this change needs review.`
+            }
+          : selected
+      );
+    }
   }
 
   return proposals.sort(
@@ -59,6 +72,28 @@ export function buildWorkflowProposals(input: WorkflowProposalInput): WorkflowPr
   );
 }
 
+function hasFreshExactWorkingSibling(
+  task: TaskRecord,
+  proposal: WorkflowProposal,
+  sessions: readonly LiveSession[],
+  bindings: readonly BindingRecord[],
+  health: WorkflowEvidenceHealth,
+  now: number
+): boolean {
+  return sessions.some((session) => {
+    const assessment = session.assessment;
+    return (
+      session.key !== proposal.sessionKey &&
+      session.linkedTaskId === task.taskId &&
+      hasExactBinding(task, session, bindings) &&
+      assessment.surfacePresence === "present" &&
+      assessment.executionPhase === "working" &&
+      evidenceHealthIsFresh(assessment.source, health) &&
+      timestampIsFresh(assessment.updatedAt, now, SAFE_AUTO_CONFLICT_MAX_AGE_MS)
+    );
+  });
+}
+
 function evidenceSourceIsFresh(
   proposal: WorkflowProposal,
   health: WorkflowEvidenceHealth
@@ -67,6 +102,24 @@ function evidenceSourceIsFresh(
   if (proposal.source === "provider-lifecycle") return health.lifecycleFresh;
   if (proposal.source === "cmux-notification") return health.notificationsFresh;
   return false;
+}
+
+function evidenceHealthIsFresh(
+  source: LiveSession["assessment"]["source"],
+  health: WorkflowEvidenceHealth
+): boolean {
+  if (source === "provider-lifecycle") return health.lifecycleFresh;
+  if (source === "cmux-notification") return health.notificationsFresh;
+  return source !== "none" && health.topologyFresh;
+}
+
+function timestampIsFresh(observedAt: number, now: number, maxAgeMs: number): boolean {
+  return (
+    Number.isFinite(observedAt) &&
+    Number.isFinite(now) &&
+    observedAt <= now &&
+    now - observedAt <= maxAgeMs
+  );
 }
 
 function hasExactBinding(

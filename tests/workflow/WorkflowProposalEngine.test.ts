@@ -84,6 +84,30 @@ function binding(overrides: Partial<BindingRecord> = {}): BindingRecord {
   };
 }
 
+function exactWorkingSibling(): { session: LiveSession; binding: BindingRecord } {
+  const working = session();
+  working.key = "workspace:pane:working-surface";
+  working.surfaceId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  working.provider = {
+    ...working.provider,
+    sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+  };
+  working.assessment = {
+    ...working.assessment,
+    executionPhase: "working",
+    primaryEvidenceId: "evidence-working"
+  };
+  return {
+    session: working,
+    binding: binding({
+      bindingId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      runId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      surfaceId: working.surfaceId,
+      providerSessionId: working.provider.sessionId
+    })
+  };
+}
+
 describe("WorkflowProposalEngine", () => {
   it("builds one proposal for an exact task, surface, and provider-session binding", () => {
     expect(
@@ -180,6 +204,49 @@ describe("WorkflowProposalEngine", () => {
 
     expect(proposals).toHaveLength(1);
     expect(proposals[0]?.sessionKey).toBe("workspace:pane:surface");
+  });
+
+  it("does not auto-apply Review while another exact linked run is still working", () => {
+    const working = exactWorkingSibling();
+
+    const proposals = buildWorkflowProposals({
+      tasks: [task()],
+      sessions: [session(), working.session],
+      bindings: [binding(), working.binding],
+      dismissals: [],
+      mode: "safe-auto",
+      now: NOW,
+      health: FRESH_HEALTH
+    });
+
+    expect(proposals).toMatchObject([
+      {
+        sessionKey: "workspace:pane:surface",
+        to: "review",
+        applyAutomatically: false
+      }
+    ]);
+    expect(proposals[0]?.explanation).toContain("Another exact run is still working");
+  });
+
+  it("ignores stale contradictory work when deciding whether Safe auto remains valid", () => {
+    const working = exactWorkingSibling();
+    working.session.assessment = {
+      ...working.session.assessment,
+      updatedAt: NOW - 5 * 60_000 - 1
+    };
+
+    expect(
+      buildWorkflowProposals({
+        tasks: [task()],
+        sessions: [session(), working.session],
+        bindings: [binding(), working.binding],
+        dismissals: [],
+        mode: "safe-auto",
+        now: NOW,
+        health: FRESH_HEALTH
+      })
+    ).toMatchObject([{ to: "review", applyAutomatically: true }]);
   });
 
   it("removes proposals when their connection or source health becomes stale", () => {

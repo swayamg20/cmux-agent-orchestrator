@@ -70,10 +70,13 @@ export class WorkflowAutomationReconciler {
     const generation = this.generation;
     const candidates = proposals.filter(
       (proposal) =>
-        proposal.applyAutomatically && !this.pendingProposalIds.has(proposal.id)
+        proposal.applyAutomatically &&
+        !this.pendingProposalIds.has(pendingProposalKey(generation, proposal.id))
     );
     if (candidates.length === 0) return;
-    for (const proposal of candidates) this.pendingProposalIds.add(proposal.id);
+    for (const proposal of candidates) {
+      this.pendingProposalIds.add(pendingProposalKey(generation, proposal.id));
+    }
 
     this.work = this.work
       .catch(() => undefined)
@@ -85,7 +88,7 @@ export class WorkflowAutomationReconciler {
           } catch (error) {
             this.reportAutomaticError(proposal, error);
           } finally {
-            this.pendingProposalIds.delete(proposal.id);
+            this.pendingProposalIds.delete(pendingProposalKey(generation, proposal.id));
           }
         }
       });
@@ -145,6 +148,10 @@ export class WorkflowAutomationReconciler {
     this.reportedIssues.set(proposal.id, message);
     this.dependencies.onAutomaticError(proposal, error);
   }
+}
+
+function pendingProposalKey(generation: number, proposalId: string): string {
+  return `${generation}:${proposalId}`;
 }
 
 function findProposal(
