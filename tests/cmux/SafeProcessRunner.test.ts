@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { SafeProcessRunner } from "../../src/cmux/SafeProcessRunner";
 
@@ -133,7 +134,7 @@ describe("SafeProcessRunner", () => {
 
     const result = await Promise.race([
       outcome,
-      new Promise<string>((resolve) => setTimeout(() => resolve("still-running"), 500))
+      delay(500, "still-running")
     ]);
     stream.dispose();
     runner.dispose();
