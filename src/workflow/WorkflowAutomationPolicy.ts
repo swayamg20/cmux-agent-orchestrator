@@ -92,13 +92,21 @@ export function evaluateWorkflowProposal(
     assessment.executionPhase === "working" &&
     supportsWorkingSuggestion(session)
   ) {
+    const safeAutomaticEvidence =
+      mode === "safe-auto" &&
+      assessment.coverage === "structured" &&
+      assessment.confidence === "high" &&
+      assessment.primaryEvidenceId !== null &&
+      isFresh(assessment.updatedAt, now, SAFE_AUTO_MAX_AGE_MS);
     return proposal({
       task,
       session,
       to: "active",
       reason: "work-resumed",
-      explanation: "The attached agent appears to be working again after this task entered Review.",
-      applyAutomatically: false
+      explanation: safeAutomaticEvidence
+        ? "The provider reported fresh, high-confidence structured work after this task entered Review."
+        : "The attached agent appears to be working again after this task entered Review.",
+      applyAutomatically: safeAutomaticEvidence
     });
   }
 

@@ -4,6 +4,7 @@ import {
   decodeAgents,
   decodeFocusedTarget,
   decodeNotifications,
+  decodeSessionAgents,
   decodeTree,
   decodeWorkspaceDirectories
 } from "./decoders";
@@ -87,7 +88,8 @@ export class CliCmuxTransport implements CmuxTransport {
         `This cmux build is missing required capabilities: ${missingMethods.join(", ")}.`
       );
     }
-    this.eventsSupported = capabilities.methods.has("events.stream");
+    this.eventsSupported =
+      capabilities.methods.has("events.stream") || (await this.probeEventsCommand(signal));
     return {
       binaryPath: this.binaryPath,
       versionText: version.stdout.trim(),
@@ -129,7 +131,13 @@ export class CliCmuxTransport implements CmuxTransport {
       const result = await this.run(cmuxCommands.listAgents(), JSON_OUTPUT_LIMIT, signal);
       return decodeAgents(result.stdout);
     } catch (error) {
-      if (isUnsupportedListAgents(error)) return null;
+      if (!isUnsupportedCommand(error, "list-agents")) throw error;
+    }
+    try {
+      const result = await this.run(cmuxCommands.sessions(), JSON_OUTPUT_LIMIT, signal);
+      return decodeSessionAgents(result.stdout);
+    } catch (error) {
+      if (isUnsupportedCommand(error, "sessions")) return null;
       throw error;
     }
   }
@@ -245,6 +253,17 @@ export class CliCmuxTransport implements CmuxTransport {
     this.runner.dispose();
   }
 
+  private async probeEventsCommand(signal?: AbortSignal): Promise<boolean> {
+    try {
+      await this.run(cmuxCommands.eventsHelp(), 32 * 1024, signal);
+      return true;
+    } catch (error) {
+      if (isUnsupportedCommand(error, "events")) return false;
+      if (error instanceof CmuxError && error.code === "aborted") throw error;
+      return false;
+    }
+  }
+
   private async run(args: readonly string[], maxStdoutBytes: number, signal?: AbortSignal) {
     try {
       return await this.runner.run(this.binaryPath, args, {
@@ -328,12 +347,19 @@ function eventStreamError(error: unknown): CmuxError {
   return new CmuxError("process-failed", "cmux event streaming failed unexpectedly.", error);
 }
 
-function isUnsupportedListAgents(error: unknown): boolean {
+function isUnsupportedCommand(error: unknown, command: string): boolean {
   if (!(error instanceof CmuxError) || !(error.originalError instanceof ProcessExecutionError)) {
     return false;
   }
   const output = `${error.originalError.stderr}\n${error.originalError.stdout}`.toLowerCase();
-  return output.includes("unknown command: list-agents") || output.includes("unknown command 'list-agents'");
+  const normalizedCommand = command.toLowerCase();
+  return (
+    output.includes(`unknown command: ${normalizedCommand}`) ||
+    output.includes(`unknown command '${normalizedCommand}'`) ||
+    output.includes(`unknown command "${normalizedCommand}"`) ||
+    output.includes(`unrecognized command '${normalizedCommand}'`) ||
+    output.includes(`unrecognized command "${normalizedCommand}"`)
+  );
 }
 
 export function truncateUtf8(value: string, maxBytes: number): { text: string; truncated: boolean } {

@@ -115,14 +115,28 @@ describe("WorkflowAutomationPolicy", () => {
     });
   });
 
-  it("suggests but never auto-applies Review to Active when work resumes", () => {
+  it("auto-applies Review to Active only for fresh structured work in Safe auto", () => {
     const working = session({ executionPhase: "working" });
     expect(evaluate("review", "safe-auto", working)).toMatchObject({
       from: "review",
       to: "active",
       reason: "work-resumed",
+      applyAutomatically: true
+    });
+    expect(evaluate("review", "suggest", working)).toMatchObject({
+      to: "active",
       applyAutomatically: false
     });
+    expect(
+      evaluate("review", "safe-auto", session({
+        executionPhase: "working",
+        coverage: "partial",
+        source: "cmux-notification"
+      }))
+    ).toMatchObject({ to: "active", applyAutomatically: false });
+    expect(
+      evaluate("review", "safe-auto", working, true, NOW + 6 * 60_000)
+    ).toMatchObject({ to: "active", applyAutomatically: false });
   });
 
   it.each(["parked", "done"] as const)("protects manually controlled %s tasks", (status) => {

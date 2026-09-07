@@ -261,6 +261,173 @@ export function decodeAgents(text: string): CmuxAgentRecord[] {
   });
 }
 
+const CMUX_SESSION_ROW_LIMIT = 2_048;
+
+interface DecodedSessionAgent {
+  record: CmuxAgentRecord;
+  workspaceId: string;
+  activeForSurface: boolean;
+  activeForWorkspace: boolean;
+}
+
+/**
+ * Decode the current `cmux sessions --json` shape into the same bounded
+ * lifecycle contract used by the legacy `list-agents` command.
+ *
+ * `sessions` may retain multiple generations for one surface. Only the most
+ * authoritative/current row is published, and exact ties with conflicting
+ * identity or state are rejected instead of guessed.
+ */
+export function decodeSessionAgents(text: string): CmuxAgentRecord[] {
+  const root = record(parseJson(text, "cmux sessions"), "cmux sessions");
+  const sessions = array(root.sessions, "cmux sessions.sessions");
+  if (sessions.length > CMUX_SESSION_ROW_LIMIT) {
+    throw new CmuxError(
+      "malformed-output",
+      `cmux sessions.sessions exceeds the ${CMUX_SESSION_ROW_LIMIT} row safety limit.`
+    );
+  }
+
+  const selected = new Map<string, DecodedSessionAgent>();
+  for (const [index, rawSession] of sessions.entries()) {
+    const label = `cmux sessions.sessions[${index}]`;
+    const session = record(rawSession, label);
+    const agent = nullableString(session.agent)?.toLowerCase();
+    if (agent !== "claude" && agent !== "codex") continue;
+    if (
+      session.surface_id === null ||
+      session.surface_id === undefined ||
+      session.workspace_id === null ||
+      session.workspace_id === undefined ||
+      session.session_id === null ||
+      session.session_id === undefined
+    ) {
+      continue;
+    }
+    if (session.default_visible === false || session.stored_pid_exists === false) continue;
+
+    const surfaceId = canonicalUuid(session.surface_id, `${label}.surface_id`);
+    const workspaceId = canonicalUuid(session.workspace_id, `${label}.workspace_id`);
+    const sessionId = canonicalUuid(session.session_id, `${label}.session_id`);
+    const updatedAtUnix = finiteNumber(session.updated_at_unix, `${label}.updated_at_unix`);
+    if (updatedAtUnix < 0 || updatedAtUnix > Number.MAX_SAFE_INTEGER / 1_000) {
+      throw new CmuxError(
+        "malformed-output",
+        `${label}.updated_at_unix is outside the supported timestamp range.`
+      );
+    }
+    const activePromptTurnId = nullableCanonicalUuid(
+      session.active_prompt_turn_id,
+      `${label}.active_prompt_turn_id`
+    );
+    const lastPromptTurnId = nullableCanonicalUuid(
+      session.last_prompt_turn_id,
+      `${label}.last_prompt_turn_id`
+    );
+    const lifecycle = string(session.agent_lifecycle, `${label}.agent_lifecycle`);
+    const runtimeStatus = nullableString(session.runtime_status);
+    const candidate: DecodedSessionAgent = {
+      record: {
+        surfaceId,
+        state: decodeSessionAgentState(
+          lifecycle,
+          runtimeStatus,
+          activePromptTurnId,
+          lastPromptTurnId
+        ),
+        source: "hook",
+        sessionId,
+        updatedAt: Math.round(updatedAtUnix * 1_000)
+      },
+      workspaceId,
+      activeForSurface: boolean(session.active_for_surface),
+      activeForWorkspace: boolean(session.active_for_workspace)
+    };
+    const current = selected.get(surfaceId);
+    if (current === undefined || compareSessionAuthority(candidate, current) > 0) {
+      selected.set(surfaceId, candidate);
+      continue;
+    }
+    if (
+      compareSessionAuthority(candidate, current) === 0 &&
+      !sameSessionAgent(candidate, current)
+    ) {
+      throw new CmuxError(
+        "malformed-output",
+        `cmux sessions contains conflicting equally-current rows for surface ${surfaceId}.`
+      );
+    }
+  }
+  return [...selected.values()].map(({ record: decoded }) => decoded);
+}
+
+function decodeSessionAgentState(
+  lifecycle: string,
+  runtimeStatus: string | null,
+  activePromptTurnId: string | null,
+  lastPromptTurnId: string | null
+): CmuxAgentState {
+  const normalizedLifecycle = normalizeSessionState(lifecycle);
+  const normalizedRuntime = runtimeStatus === null ? null : normalizeSessionState(runtimeStatus);
+  if (
+    normalizedRuntime !== null &&
+    normalizedLifecycle !== "unknown" &&
+    normalizedRuntime !== "unknown" &&
+    normalizedLifecycle !== normalizedRuntime
+  ) {
+    return "unknown";
+  }
+  if (normalizedLifecycle === "working") {
+    return activePromptTurnId === null ? "unknown" : "working";
+  }
+  if (normalizedLifecycle === "idle") {
+    if (activePromptTurnId !== null) return "unknown";
+    return lastPromptTurnId === null ? "idle" : "done";
+  }
+  return normalizedLifecycle;
+}
+
+function normalizeSessionState(value: string): CmuxAgentState {
+  switch (value.toLowerCase().replace(/[\s_]+/g, "-")) {
+    case "running":
+    case "working":
+      return "working";
+    case "blocked":
+    case "needs-input":
+    case "waiting":
+      return "blocked";
+    case "idle":
+    case "stopped":
+      return "idle";
+    case "done":
+    case "completed":
+      return "done";
+    default:
+      return "unknown";
+  }
+}
+
+function compareSessionAuthority(
+  left: DecodedSessionAgent,
+  right: DecodedSessionAgent
+): number {
+  return (
+    Number(left.activeForSurface) - Number(right.activeForSurface) ||
+    Number(left.activeForWorkspace) - Number(right.activeForWorkspace) ||
+    left.record.updatedAt - right.record.updatedAt
+  );
+}
+
+function sameSessionAgent(left: DecodedSessionAgent, right: DecodedSessionAgent): boolean {
+  return (
+    left.workspaceId === right.workspaceId &&
+    left.record.sessionId === right.record.sessionId &&
+    left.record.state === right.record.state &&
+    left.record.source === right.record.source &&
+    left.record.updatedAt === right.record.updatedAt
+  );
+}
+
 function decodeAgentState(value: unknown, label: string): CmuxAgentState {
   if (value === "working" || value === "blocked" || value === "idle" || value === "done" || value === "unknown") {
     return value;

@@ -42,6 +42,14 @@ export const cmuxCommands = {
     return ["--json", "--id-format", "uuids", "list-agents"];
   },
 
+  sessions(): readonly string[] {
+    return ["sessions", "--json"];
+  },
+
+  eventsHelp(): readonly string[] {
+    return ["events", "--help"];
+  },
+
   events(): readonly string[] {
     // Deliberately subscribe without category filters. cmux sequence numbers
     // are global, so receiving every envelope is required for reliable gap

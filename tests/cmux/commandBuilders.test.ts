@@ -22,6 +22,8 @@ describe("cmux command construction", () => {
       "uuids",
       "list-agents"
     ]);
+    expect(cmuxCommands.sessions()).toEqual(["sessions", "--json"]);
+    expect(cmuxCommands.eventsHelp()).toEqual(["events", "--help"]);
     expect(cmuxCommands.identifyFocused()).toEqual([
       "--json",
       "--id-format",

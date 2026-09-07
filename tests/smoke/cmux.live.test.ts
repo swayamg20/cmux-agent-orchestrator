@@ -15,10 +15,11 @@ live("installed cmux read-only smoke", () => {
       expect(probe.versionText).toMatch(/^cmux \d+\.\d+\.\d+\b/);
       expect(probe.capabilities.protocol).toBe("cmux-socket");
 
-      const [snapshot, notifications, focused] = await Promise.all([
+      const [snapshot, notifications, focused, agents] = await Promise.all([
         client.snapshot(),
         client.notifications(),
-        client.focusedTarget()
+        client.focusedTarget(),
+        client.agents()
       ]);
       const workspaces = snapshot.windows.flatMap((window) => window.workspaces);
       const sessions = workspaces.flatMap((workspace) =>
@@ -32,6 +33,14 @@ live("installed cmux read-only smoke", () => {
         isCanonicalUuid(workspace.id) && isCanonicalUuid(pane.id) && isCanonicalUuid(surface.id)
       )).toBe(true);
       expect(Array.isArray(notifications)).toBe(true);
+      expect(agents).not.toBeNull();
+      expect(
+        agents?.every(
+          (agent) =>
+            isCanonicalUuid(agent.surfaceId) &&
+            (agent.sessionId === null || isCanonicalUuid(agent.sessionId))
+        )
+      ).toBe(true);
       expect(focused).not.toBeNull();
       expect(
         focused !== null &&

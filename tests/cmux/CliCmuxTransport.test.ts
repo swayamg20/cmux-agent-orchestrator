@@ -69,6 +69,15 @@ class PasswordModeRunner extends SafeProcessRunner {
   ): Promise<ProcessResult> {
     this.argumentsSeen.push([...args]);
     this.timeoutBudgetsSeen.push(options.timeoutMs);
+    if (args.includes("events")) {
+      throw new ProcessExecutionError(
+        "exit",
+        "Process exited with code 1.",
+        1,
+        "",
+        "Error: Unknown command: events"
+      );
+    }
     if (this.argumentsSeen.length === 1) {
       return {
         stdout: "cmux 0.62.2 (77) [test]",
@@ -99,14 +108,57 @@ class PasswordModeRunner extends SafeProcessRunner {
 }
 
 class UnsupportedAgentCommandRunner extends SafeProcessRunner {
-  override async run(): Promise<ProcessResult> {
+  override async run(_executable: string, args: readonly string[]): Promise<ProcessResult> {
+    const command = args.includes("sessions") ? "sessions" : "list-agents";
     throw new ProcessExecutionError(
       "exit",
       "Process exited with code 1.",
       1,
       "",
-      "Error: Unknown command: list-agents"
+      `Error: Unknown command: ${command}`
     );
+  }
+}
+
+class CurrentSessionCommandRunner extends SafeProcessRunner {
+  readonly argumentsSeen: string[][] = [];
+
+  override async run(_executable: string, args: readonly string[]): Promise<ProcessResult> {
+    this.argumentsSeen.push([...args]);
+    if (args.includes("list-agents")) {
+      throw new ProcessExecutionError(
+        "exit",
+        "Process exited with code 1.",
+        1,
+        "",
+        "Error: Unknown command: list-agents"
+      );
+    }
+    if (args.includes("sessions")) {
+      return {
+        stdout: JSON.stringify({
+          sessions: [{
+            agent: "codex",
+            agent_lifecycle: "running",
+            runtime_status: "running",
+            active_prompt_turn_id: "81111111-1111-4111-8111-111111111111",
+            last_prompt_turn_id: "81111111-1111-4111-8111-111111111111",
+            active_for_surface: false,
+            active_for_workspace: false,
+            default_visible: true,
+            stored_pid_exists: true,
+            session_id: "55555555-5555-4555-8555-555555555555",
+            surface_id: "44444444-4444-4444-8444-444444444444",
+            workspace_id: "22222222-2222-4222-8222-222222222222",
+            updated_at_unix: 1788381000.123
+          }]
+        }),
+        stderr: "",
+        exitCode: 0,
+        durationMs: 1
+      };
+    }
+    throw new Error(`Unexpected cmux command: ${args.join(" ")}`);
   }
 }
 
@@ -150,6 +202,39 @@ class EventStreamRunner extends SafeProcessRunner {
     this.argumentsSeen.push([...args]);
     this.handlers = handlers;
     return { dispose: () => { this.streamDisposed = true; } };
+  }
+}
+
+class HelpDetectedEventStreamRunner extends EventStreamRunner {
+  override async run(_executable: string, args: readonly string[]): Promise<ProcessResult> {
+    this.argumentsSeen.push([...args]);
+    if (args.includes("--version")) {
+      return { stdout: "cmux 0.64.22", stderr: "", exitCode: 0, durationMs: 1 };
+    }
+    if (args.includes("capabilities")) {
+      return {
+        stdout: JSON.stringify({
+          version: 2,
+          protocol: "cmux-socket",
+          access_mode: "automation",
+          methods: [
+            "system.tree",
+            "workspace.list",
+            "surface.read_text",
+            "surface.focus",
+            "system.identify",
+            "notification.list"
+          ]
+        }),
+        stderr: "",
+        exitCode: 0,
+        durationMs: 1
+      };
+    }
+    if (args.join(" ") === "events --help") {
+      return { stdout: "Usage: cmux events [options]", stderr: "", exitCode: 0, durationMs: 1 };
+    }
+    throw new Error(`Unexpected cmux command: ${args.join(" ")}`);
   }
 }
 
@@ -254,6 +339,24 @@ describe("CliCmuxTransport error classification", () => {
     transport.dispose();
   });
 
+  it("falls back from legacy list-agents to current cmux sessions", async () => {
+    const runner = new CurrentSessionCommandRunner();
+    const transport = new CliCmuxTransport("/path/to/cmux", runner);
+
+    await expect(transport.agents()).resolves.toEqual([{
+      surfaceId: "44444444-4444-4444-8444-444444444444",
+      state: "working",
+      source: "hook",
+      sessionId: "55555555-5555-4555-8555-555555555555",
+      updatedAt: 1788381000123
+    }]);
+    expect(runner.argumentsSeen).toEqual([
+      ["--json", "--id-format", "uuids", "list-agents"],
+      ["sessions", "--json"]
+    ]);
+    transport.dispose();
+  });
+
   it("maps the installed cmux socket-write rejection to access-blocked", async () => {
     const transport = new CliCmuxTransport("/Applications/cmux.app/Contents/Resources/bin/cmux", new FailedSocketWriteRunner());
 
@@ -300,7 +403,7 @@ describe("CliCmuxTransport error classification", () => {
     );
 
     await transport.probe();
-    expect(runner.timeoutBudgetsSeen).toEqual([5_000, 5_000]);
+    expect(runner.timeoutBudgetsSeen).toEqual([5_000, 5_000, 5_000]);
     transport.dispose();
   });
 });
@@ -449,6 +552,22 @@ describe("CliCmuxTransport event streaming", () => {
         onError: () => undefined
       })
     ).toBeNull();
+    transport.dispose();
+  });
+
+  it("feature-detects the current events command when the legacy method token is absent", async () => {
+    const runner = new HelpDetectedEventStreamRunner();
+    const transport = new CliCmuxTransport("/path/to/cmux", runner);
+    await transport.probe();
+
+    expect(
+      transport.subscribeEvents({
+        onReady: () => undefined,
+        onSignal: () => undefined,
+        onError: () => undefined
+      })
+    ).not.toBeNull();
+    expect(runner.argumentsSeen).toContainEqual(["events", "--help"]);
     transport.dispose();
   });
 });
