@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Add a dedicated reusable Work board tab with task/context search, live-run filtering, independently scrolling columns, responsive controls, and preserved keyboard focus/scroll position.
+- Add an explicit bulk-review flow for Active tasks without present linked runs. Selected tasks move to Parked only after fresh topology, current task state, and live-session absence are revalidated before each write.
+- Decode the current bounded `cmux sessions --json` lifecycle shape when `list-agents` is unavailable, including conservative generation selection and conflict rejection.
+
+### Changed
+
+- Keep the primary Work mode compact with Attention and workflow totals, opening detailed planning in the dedicated board.
+- Feature-detect the current cmux `events` command even when capabilities do not advertise `events.stream`.
+- Allow Safe auto to return Review tasks to Active only from fresh, high-confidence structured Working evidence; Suggest remains the default and Backlog, Parked, and Done remain protected.
+
+### Fixed
+
+- Restore structured lifecycle state on current cmux releases that replaced `list-agents` with `sessions --json`, without breaking snapshot-only legacy builds.
+- Keep board filtering, selection, and high-volume task lists inside bounded horizontal and per-column scrollers instead of extending the whole Obsidian page.
+
+### Security
+
+- Fail closed on missing, stale, conflicting, or unsupported lifecycle data, and revalidate every explicit bulk Park write against the latest in-memory authority and compare-and-set task revision.
+
 ## [0.4.0] - 2026-09-06
 
 ### Added

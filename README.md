@@ -2,7 +2,7 @@
 
 cmux Agent Orchestrator is a desktop-only Obsidian community plugin for coordinating Claude Code and Codex CLI sessions that already run inside cmux. It is a human-in-the-loop orchestration layer: Obsidian owns durable work context, cmux remains the terminal and process owner, and each provider retains its own session state.
 
-The repository targets Obsidian 1.10 and newer. It supports the installed cmux 0.62.2 snapshot command surface and feature-detects structured agent metadata and live events on newer cmux builds. It has no runtime npm dependencies, telemetry, hosted service, or external network requirement.
+The repository targets Obsidian 1.10 and newer. It feature-detects both the legacy cmux 0.62.2 snapshot-only command surface and the current `sessions --json` plus live-events command surface. It has no runtime npm dependencies, telemetry, hosted service, or external network requirement.
 
 ## Install
 
@@ -24,9 +24,10 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 
 ## What the current build provides
 
-- One native Obsidian `ItemView`, opened from the ribbon or command palette.
-- Three focused native modes: Work for attention and the durable board, Agent runs for the complete detected Claude/Codex run inventory, and cmux for the exact terminal tree.
-- All five workflow columns are always visible, including in a brand-new vault with no task notes.
+- A compact native orchestrator view plus a dedicated native Work board, both opened from the command palette and reused instead of duplicated.
+- Three focused orchestrator modes: Work for attention and a workflow summary, Agent runs for the complete detected Claude/Codex run inventory, and cmux for the exact terminal tree.
+- A full-height board with independently scrolling columns, task/context search, live-run filtering, and all five workflow columns even in a brand-new vault.
+- Explicit bulk review for Active tasks without a live run. Parking remains a user-selected workflow action and revalidates fresh cmux topology, task state, and live-session absence before every write.
 - Canonical workspace, pane, and surface UUIDs from cmux JSON output.
 - Conservative Claude, Codex, shell, and unknown detection with evidence and confidence.
 - Automatic provider conversation titles when an exact surface/process/session correlation is provable, with a manual picker fallback.
@@ -39,8 +40,8 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 - Machine-scoped task, run-history, surface, provider-conversation, and proposal-dismissal records in schema-v5 plugin data.
 - Orphan sessions and stale bindings.
 - Configurable stale-working attention for structured lifecycle evidence, without changing task workflow.
-- Review attention and workflow suggestions when credible evidence says an agent turn finished; only fresh high-confidence structured evidence can auto-apply Active to Review in Safe auto mode.
-- Event-driven refreshes on cmux builds that expose `events.stream`, enabled only after a valid acknowledgement and guarded by the advertised heartbeat interval, with startup plus manual Refresh on older or stalled streams.
+- Review attention and workflow suggestions when credible evidence says an agent turn finished; only fresh high-confidence structured evidence can auto-apply Active to Review or resumed Review work back to Active in Safe auto mode.
+- Event-driven refreshes when cmux advertises `events.stream` or exposes the current `events` command, enabled only after a valid acknowledgement and guarded by the advertised heartbeat interval, with startup plus manual Refresh on older or stalled streams.
 - Clear cmux disconnected, blocked, malformed-output, timeout, and output-limit states.
 - One-time GUI onboarding for normal Finder, Dock, and Spotlight launches when cmux rejects external clients.
 
@@ -55,9 +56,9 @@ cmux Agent Orchestrator does not host a PTY, autonomously resume providers, send
 | cmux Agent Orchestrator | Runtime observations, task associations, human-directed coordination, and narrow explicit actions |
 | Markdown notes | Human-owned goals, criteria, context, decisions, run summaries, and outcomes |
 
-Agent evidence and workflow state are deliberately independent. Runtime evidence feeds a pure proposal policy; it does not directly own Markdown workflow. A quiet, missing, errored, idle, stale, unknown, or ended session never moves a task, and no evidence can move a task to Done.
+Agent evidence and workflow state are deliberately independent. Runtime evidence feeds a pure proposal policy; it does not directly own Markdown workflow. Quiet, missing, errored, idle, stale, unknown, or ended evidence never authorizes an automatic move, and no evidence can move a task to Done. The separate no-live review flow can park a user-selected Active task only after a fresh connected snapshot proves that no linked surface is present.
 
-Workflow automation is configurable as Off, Suggest, or Safe auto, with Suggest as the default. Backlog to Active for an exact attached run and Review to Active for credible resumed work are suggestions only. Active to Review is also normally a suggestion; Safe auto may apply it only when a completed turn has fresh, high-confidence structured provider evidence. If another exact run attached to the same task still has fresh Working evidence, the Review change remains a manual suggestion. Parked and Done are always protected. Every write revalidates the current task, exact session binding, evidence, source health, settings, and proposal before using a compare-and-set workflow update.
+Workflow automation is configurable as Off, Suggest, or Safe auto, with Suggest as the default. Backlog to Active for an exact attached run remains suggestion-only. Active to Review and Review to Active are also normally suggestions; Safe auto may apply either direction only when the latest relevant provider state is fresh, high-confidence, structured evidence. If another exact run attached to the same task still has fresh Working evidence, an Active-to-Review change remains manual. Parked and Done are always protected. Every write revalidates the current task, exact session binding, evidence, source health, settings, and proposal before using a compare-and-set workflow update.
 
 Exact, uniquely resolved Claude and Codex sessions become one neutral Active Markdown task and Work card by default. Identity is deduplicated by provider plus canonical session ID, so a refresh or reload cannot create a second task for the same run. If that exact provider conversation later appears on one new surface after its complete previous cmux target has disappeared, the existing binding moves to the new target without creating another task or run. If a different exact provider session reuses the same cmux surface, it does not inherit the previous task; automatic tracking creates a separate task and run while retaining the earlier task and history. The plugin refuses a move while the old target still exists or when either the saved binding or new identity is ambiguous. Conversation titles remain memory-only and appear on the live card; they are never copied into an automatically created note. Ambiguous, heuristic-only, duplicate, shell, and unknown sessions remain in Agent runs for manual review. Turning automatic tracking off stops new automatic tasks, and manually detaching a run prevents later refreshes from silently recreating it. If an explicit attachment races with background tracking, the user's attachment wins. Neither automatic nor manual tracking messages, resumes, interrupts, or otherwise controls the provider.
 
@@ -65,7 +66,7 @@ If a linked task note is moved outside the configured task folder or deleted, th
 
 Task-note content changes, moves, and deletions are observed only for the configured task tree and its containing folders. Unrelated vault paths are ignored, and these events do not trigger cmux or provider reads.
 
-`Track in board` remains available for manual cases: it opens a prefilled form, writes an Active durable task note, and attaches the exact cmux surface. The row's overflow menu provides Focus in cmux, Attach to existing task, and Choose provider conversation. A saved exact manual association takes precedence when it remains consistent with current evidence; the picker refuses a choice that contradicts a fresh exact cmux or provider-process identity. Moving any Work card changes workflow only and never controls the agent. Workflow proposals remain separate, explain their evidence, and can be applied or dismissed from Work.
+`Track in board` remains available for manual cases: it opens a prefilled form, writes an Active durable task note, and attaches the exact cmux surface. The row's overflow menu provides Focus in cmux, Attach to existing task, and Choose provider conversation. A saved exact manual association takes precedence when it remains consistent with current evidence; the picker refuses a choice that contradicts a fresh exact cmux or provider-process identity. Moving any board card changes workflow only and never controls the agent. Workflow proposals remain separate, explain their evidence, and can be applied or dismissed from Attention or the dedicated board.
 
 ## Build
 
@@ -75,7 +76,7 @@ Requirements:
 - Node.js 22.13 or newer
 - npm
 - Obsidian desktop 1.10 or newer
-- cmux 0.62.2 or a newer feature-compatible build; fixtures cover both legacy snapshots and modern structured metadata/events
+- cmux 0.62.2 or a current feature-compatible build; fixtures cover legacy snapshot-only output and current structured session/event output
 
 ```bash
 npm install
@@ -132,12 +133,14 @@ cmux --json --id-format uuids tree --all
 cmux --json --id-format uuids list-workspaces
 cmux --json --id-format uuids list-notifications
 cmux --json --id-format uuids list-agents
+cmux sessions --json
 cmux --json --id-format uuids identify --no-caller
+cmux events --help
 cmux events --reconnect
 cmux --id-format uuids read-screen --workspace <uuid> --surface <uuid> --lines <1..500>
 ```
 
-When `events.stream` is advertised, the plugin subscribes without category filters because cmux sequence numbers are global. It keeps only the current boot/sequence cursor in memory, reduces relevant window/workspace/pane/surface, notification, agent, and feed envelopes to content-free refresh signals, and immediately discards every raw payload. A boot change, replay gap, or sequence gap triggers a complete snapshot resync. If streaming is unsupported or stops, the plugin falls back to explicit Refresh without starting a polling loop.
+When `events.stream` is advertised or the current `events` command is feature-detected, the plugin subscribes without category filters because cmux sequence numbers are global. It keeps only the current boot/sequence cursor in memory, reduces relevant window/workspace/pane/surface, notification, agent, and feed envelopes to content-free refresh signals, and immediately discards every raw payload. A boot change, replay gap, or sequence gap triggers a complete snapshot resync. If streaming is unsupported or stops, the plugin falls back to explicit Refresh without starting a polling loop.
 
 Explicit user-initiated selection:
 
@@ -149,7 +152,7 @@ Focus refreshes the tree before the command, requires the exact workspace/pane/s
 
 ## Provider conversation titles
 
-Repository equality is not an identity signal, so the plugin never assigns a conversation title from CWD alone. On startup and every relevant topology or lifecycle refresh, it first feature-detects cmux's structured `list-agents` command. Newer cmux builds can supply a surface/session association and lifecycle state directly. The installed cmux 0.62.2 lacks that command, so macOS uses a bounded read-only correlation fallback:
+Repository equality is not an identity signal, so the plugin never assigns a conversation title from CWD alone. On startup and every relevant topology or lifecycle refresh, it feature-detects structured cmux lifecycle metadata: alternate/legacy builds may expose `list-agents`, while current builds expose `sessions --json`. Either accepted shape can supply a surface/session association and lifecycle state directly. If neither command is available, macOS uses a bounded read-only correlation fallback:
 
 1. Read fixed `ps` fields and consider only foreground processes whose executable basename is exactly `claude` or `codex`.
 2. Pipe that PID's environment from `/bin/ps` directly into fixed `/usr/bin/grep`; JavaScript receives only a canonical `CMUX_SURFACE_ID`, never the full environment.
@@ -172,8 +175,8 @@ These adapters sit behind a `ProviderSessionSource` interface because both local
 ## Refresh and performance
 
 - Startup probes cmux once, loads topology and notifications in parallel, then resolves provider identity in bounded background work. Explicit Refresh repeats those read-only observations.
-- On builds that advertise `events.stream`, cmux events schedule authoritative snapshot reads. A 100 ms coalescing window combines bursts; topology plus notification changes or any detected stream gap trigger one full refresh, while isolated notification or lifecycle changes use narrower reads.
-- After identity resolution, default-on automatic tracking serially creates at most one neutral task and binding for each newly observed exact provider session. It can also reconnect an existing binding after the old full cmux target disappears and the same provider session is proven uniquely on a new target. Relevant event-driven refreshes can schedule the same guarded reconciliation on newer cmux builds.
+- On builds that advertise `events.stream` or expose the current `events` command, cmux events schedule authoritative snapshot reads. A 100 ms coalescing window combines bursts; topology plus notification changes or any detected stream gap trigger one full refresh, while isolated notification or lifecycle changes use narrower reads.
+- After identity resolution, default-on automatic tracking serially creates at most one neutral task and binding for each newly observed exact provider session. It can also reconnect an existing binding after the old full cmux target disappears and the same provider session is proven uniquely on a new target. Relevant event-driven refreshes can schedule the same guarded reconciliation on cmux builds with acknowledged event support.
 - Global Refresh never reads terminal previews. Concurrent refresh requests coalesce, stale generations are ignored, and a notification failure does not discard a healthy topology snapshot.
 - There is no repeating topology, notification, lifecycle, provider, or preview timer. Older cmux builds refresh at startup or after an explicit Refresh only.
 - Stale-working attention is evaluated after an authoritative refresh or when settings are saved; it does not add a timer.
@@ -192,15 +195,15 @@ These adapters sit behind a `ProviderSessionSource` interface because both local
 Each session projects separate dimensions: surface presence, agent presence, execution phase, recent activity, evidence coverage, source, confidence, and explanation. This avoids compressing unrelated facts into a misleading single runtime badge.
 
 - In cmux 0.62.2, topology proves only that a canonical surface exists. Exact local process evidence can prove a provider/session attachment, and a PID-bound Claude registry status can add lifecycle evidence; a Codex writer lock alone does not prove a live turn.
-- When a newer cmux build exposes `list-agents`, its `working`, `blocked`, `idle`, `done`, and `unknown` states become structured execution evidence. `done` means provider output is ready for review, never that durable work is Done.
+- Structured lifecycle rows from current `sessions --json` or alternate `list-agents` builds become execution evidence only after bounded decoding and conflict checks. Current `running`, `idle`, active-turn, and last-turn fields are conservatively projected to `working`, `idle`, `turn-finished`, or `unknown`; a finished provider turn never means durable work is Done.
 - Unread cmux notifications can support medium-confidence `Needs input`, `Error reported`, or `Review output`.
-- Structured or notification-backed `Turn finished` evidence creates review attention and may create an Active-to-Review proposal. Notification/partial evidence remains suggestion-only; Safe auto requires fresh, high-confidence structured evidence.
+- Structured or notification-backed `Turn finished` evidence creates review attention and may create an Active-to-Review proposal. Fresh structured Working evidence may create a Review-to-Active proposal. Notification or partial evidence remains suggestion-only; Safe auto requires fresh, high-confidence structured evidence in either direction.
 - A changed on-demand preview records low-confidence recent activity such as reading, editing, or command output, but leaves execution phase `State unknown`.
 - Generic words such as `approval` or `confirm` in terminal prose never assert `Needs input`.
 - A missing linked surface creates an attention item but does not prove provider completion.
 - A session is marked potentially stale only when structured lifecycle evidence still reports Working and its newest proven activity exceeds the configured threshold. Idle, unknown, waiting, and failed sessions are never relabeled as stale and never authorize a workflow change.
 - Provider session IDs remain absent unless modern cmux metadata, exact local process correlation, a manual match, or an existing exact task binding proves the association.
-- Source health is independent: topology, notifications, and provider lifecycle each report fresh, stale, or unavailable. On cmux 0.62.2, native lifecycle is honestly unavailable even when conversation identity is resolved through local evidence.
+- Source health is independent: topology, notifications, and provider lifecycle each report fresh, stale, or unavailable. Native lifecycle is honestly unavailable when neither structured cmux lifecycle command nor exact provider lifecycle evidence can supply it, even if conversation identity is otherwise resolved.
 
 The in-memory evidence ledger is bounded to 32 entries per session and 2,048 total. The deterministic reducer ranks structured lifecycle evidence above notifications, preview heuristics, and surface presence. The reducer never changes Markdown; a separate proposal engine and guarded reconciler own the optional workflow action.
 
@@ -229,7 +232,7 @@ CMUX_AGENT_ORCHESTRATOR_LIVE_IDENTITY=1 npm test -- tests/smoke/automatic-identi
 CMUX_AGENT_ORCHESTRATOR_LIVE_TRACKING=1 npm test -- tests/smoke/automatic-tracking.live.test.ts
 ```
 
-The cmux smoke probes capabilities, reads topology and notifications, validates canonical UUIDs, and reads three lines from one selected terminal. The provider smoke performs local read-only title discovery for the repository running the test. The identity smoke verifies canonical, one-to-one process/session/surface mappings against the current machine. The tracking smoke runs that identity pipeline through the controller while keeping all generated task Markdown and plugin data in memory; it supplies blank previews and fails if the controller attempts to focus cmux. None of these tests sends input, resumes a conversation, changes provider data, or writes to a real vault.
+The cmux smoke probes capabilities and current command fallbacks, reads topology, notifications, and structured lifecycle rows when available, validates canonical UUIDs, and reads three lines from one selected terminal. The provider smoke performs local read-only title discovery for the repository running the test. The identity smoke verifies canonical, one-to-one process/session/surface mappings against the current machine. The tracking smoke runs that identity pipeline through the controller while keeping all generated task Markdown and plugin data in memory; it supplies blank previews and fails if the controller attempts to focus cmux. None of these tests sends input, resumes a conversation, changes provider data, or writes to a real vault.
 
 ## Normal-launch connection setup
 
@@ -272,7 +275,7 @@ src/
   bindings/     machine-scoped task/session mappings
   actions/      allowlist, validators, and exact focus action
   security/     shared canonical-identity validation
-  views/        unified ItemView, automatic run inbox, board, and cmux explorer
+  views/        orchestrator modes, compact Work summary, dedicated board, and cmux explorer
   components/   session/task rendering and native modals
   settings/     validated plugin settings
 tests/

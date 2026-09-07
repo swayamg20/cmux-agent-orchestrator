@@ -12,7 +12,7 @@ cmux Agent Orchestrator is for a developer operating many Claude Code and Codex 
 
 cmux Agent Orchestrator makes Obsidian a human-in-the-loop orchestration layer for existing cmux sessions. It projects bounded evidence about surfaces and agents, connects temporary executions to durable work items, and offers narrow explicit actions without becoming a terminal host, provider runtime, transcript store, or autonomous agent scheduler.
 
-Success means the user can launch Obsidian normally, open one native view, see what needs attention, understand the evidence behind each status, move between task workflow and live runtime context, and focus the exact existing cmux surface safely.
+Success means the user can launch Obsidian normally, scan one compact native orchestrator, open a dedicated board when planning, understand the evidence behind each status, move between task workflow and live runtime context, and focus the exact existing cmux surface safely.
 
 ## Brand Personality
 
@@ -31,7 +31,7 @@ Calm, precise, operational. The interface should feel like a quiet command desk 
 
 1. Attention before inventory: surface the few items requiring judgment before showing the full runtime tree.
 2. Evidence before confidence: every runtime label explains where it came from and how certain it is.
-3. Progressive disclosure: separate Work, Agent runs, and cmux into focused modes, then reveal terminal previews, canonical IDs, and diagnostics only inside the relevant mode and on request.
+3. Progressive disclosure: separate Work, Agent runs, and cmux into focused modes, move detailed planning into its own board tab, then reveal terminal previews, canonical IDs, and diagnostics only inside the relevant surface and on request.
 4. Task state is human-owned: runtime observations never silently complete durable work.
 5. Native over novel: use Obsidian conventions, theme variables, keyboard behavior, and interaction patterns wherever possible.
 6. Normal launch is mandatory: terminal-launched Obsidian is a development fallback, never the published user journey.
