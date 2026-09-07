@@ -6,7 +6,6 @@ import type { SessionCardActions } from "../components/SessionCard";
 import { renderConnectionBadge } from "../components/StatusBadge";
 import { PRODUCT_NAME } from "../identity";
 import type { CockpitState } from "../state/types";
-import { renderKanbanPanel } from "./KanbanPanel";
 import { renderNeedsAttentionPanel } from "./NeedsAttentionPanel";
 import {
   COCKPIT_SECTIONS,
@@ -16,6 +15,7 @@ import {
 import { renderSessionInbox } from "./SessionInbox";
 import { selectSessionInbox } from "./SessionInboxModel";
 import { renderSessionsPanel } from "./SessionsView";
+import { renderWorkOverview } from "./WorkOverview";
 
 export const AGENT_COCKPIT_VIEW_TYPE = "agent-cockpit-view";
 
@@ -34,7 +34,8 @@ export class AgentCockpitView extends ItemView {
 
   constructor(
     leaf: WorkspaceLeaf,
-    private readonly controller: AgentCockpitController
+    private readonly controller: AgentCockpitController,
+    private readonly openWorkBoard: () => Promise<void>
   ) {
     super(leaf);
     this.navigation = false;
@@ -131,12 +132,9 @@ export class AgentCockpitView extends ItemView {
         apply: (proposal) => this.controller.applyWorkflowProposal(proposal),
         dismiss: (proposal) => this.controller.dismissWorkflowProposal(proposal)
       });
-      renderKanbanPanel(panel, state, {
+      renderWorkOverview(panel, state, {
         createTask: () => this.controller.showCreateTask(null),
-        openTask: (task) => void this.controller.openTask(task),
-        moveTask: (task, status) => this.controller.updateWorkflow(task, status),
-        apply: (proposal) => this.controller.applyWorkflowProposal(proposal),
-        dismiss: (proposal) => this.controller.dismissWorkflowProposal(proposal)
+        openBoard: () => void this.openWorkBoard()
       });
     } else if (this.activeSection === "agents") {
       renderSessionInbox(panel, state, this.showAllInbox, {

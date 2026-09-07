@@ -74,6 +74,11 @@ import { RefreshCoordinator, type RefreshResult } from "./RefreshCoordinator";
 
 export type CmuxClientFactory = (explicitBinaryPath: string) => Promise<CmuxClient>;
 
+export interface BulkParkResult {
+  parked: number;
+  skipped: number;
+}
+
 interface AutomaticTrackingPass {
   messages: Set<string>;
   failedIssueKeys: Set<string>;
@@ -710,6 +715,82 @@ export class AgentCockpitController {
       if (!this.disposed) new Notice(readableError(error));
       return false;
     }
+  }
+
+  async parkTasksWithoutLiveSessions(taskIds: readonly string[]): Promise<BulkParkResult> {
+    if (this.disposed) return { parked: 0, skipped: taskIds.length };
+    await this.waitForSettingsUpdates();
+    if (this.disposed) return { parked: 0, skipped: taskIds.length };
+
+    const repository = this.requireTaskRepository();
+    const taskFolder = this.requireSettings().taskFolder;
+    const targets: string[] = [];
+    const seen = new Set<string>();
+    let skipped = 0;
+    for (const taskId of taskIds) {
+      const normalized = normalizeCanonicalUuid(taskId);
+      if (normalized === null || seen.has(normalized)) {
+        skipped += 1;
+        continue;
+      }
+      seen.add(normalized);
+      targets.push(normalized);
+    }
+
+    if (!this.canParkTaskWithoutLiveSession(repository, taskFolder)) {
+      const result = { parked: 0, skipped: skipped + targets.length };
+      new Notice("Refresh a connected cmux topology before parking tasks without a live run.");
+      return result;
+    }
+
+    let parked = 0;
+    for (let index = 0; index < targets.length; index += 1) {
+      const taskId = targets[index]!;
+      if (!this.canParkTaskWithoutLiveSession(repository, taskFolder)) {
+        skipped += targets.length - index;
+        break;
+      }
+      let task: TaskRecord;
+      try {
+        task = repository.findById(taskId);
+      } catch {
+        skipped += 1;
+        continue;
+      }
+      if (
+        task.workflowStatus !== "active" ||
+        !this.canParkTaskWithoutLiveSession(repository, taskFolder, task)
+      ) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        const moved = await repository.updateWorkflowIfCurrent(
+          task,
+          "parked",
+          () => this.canParkTaskWithoutLiveSession(repository, taskFolder, task)
+        );
+        if (moved) parked += 1;
+        else skipped += 1;
+      } catch {
+        skipped += 1;
+      }
+    }
+
+    await this.waitForSettingsUpdates();
+    if (
+      !this.disposed &&
+      this.taskRepository === repository &&
+      this.settings?.taskFolder === taskFolder
+    ) {
+      this.store.update({ tasks: repository.list() });
+      this.recomputeSessions();
+    }
+    if (!this.disposed) {
+      const parkedLabel = `${parked} ${parked === 1 ? "task" : "tasks"} parked`;
+      new Notice(skipped === 0 ? `${parkedLabel}.` : `${parkedLabel}; ${skipped} skipped because they could not be safely revalidated or written.`);
+    }
+    return { parked, skipped };
   }
 
   async applyWorkflowProposal(proposal: WorkflowProposal): Promise<boolean> {
@@ -2226,6 +2307,39 @@ export class AgentCockpitController {
       () => !this.disposed
     );
     return repaired ?? task.runCount;
+  }
+
+  private canParkTaskWithoutLiveSession(
+    repository: TaskRepository,
+    taskFolder: string,
+    task?: TaskRecord
+  ): boolean {
+    const state = this.store.getState();
+    if (
+      this.disposed ||
+      this.pendingSettingsUpdates !== 0 ||
+      this.taskRepository !== repository ||
+      this.settings?.taskFolder !== taskFolder ||
+      state.connection.status !== "connected" ||
+      state.health.topology.status !== "fresh" ||
+      state.snapshot === null
+    ) {
+      return false;
+    }
+    if (task === undefined) return true;
+    const currentTask = state.tasks.find((candidate) =>
+      canonicalUuidEquals(candidate.taskId, task.taskId)
+    );
+    return (
+      currentTask !== undefined &&
+      currentTask.file === task.file &&
+      currentTask.workflowStatus === "active" &&
+      !state.sessions.some((session) =>
+        session.assessment.surfacePresence === "present" &&
+        session.linkedTaskId !== null &&
+        canonicalUuidEquals(session.linkedTaskId, task.taskId)
+      )
+    );
   }
 
   private handleError(error: unknown, connectionFailure = true): void {

@@ -11,6 +11,7 @@ import type {
   TaskRenameEvidence
 } from "./tasks/TaskRepository";
 import { AGENT_COCKPIT_VIEW_TYPE, AgentCockpitView } from "./views/AgentCockpitView";
+import { WORK_BOARD_VIEW_TYPE, WorkBoardView } from "./views/WorkBoardView";
 
 export default class AgentCockpitPlugin extends Plugin {
   private controller: AgentCockpitController | null = null;
@@ -28,7 +29,22 @@ export default class AgentCockpitPlugin extends Plugin {
       new AutomaticProviderSessionResolver(providerMetadata)
     );
     this.controller = controller;
-    this.registerView(AGENT_COCKPIT_VIEW_TYPE, (leaf) => new AgentCockpitView(leaf, this.requireController()));
+    this.registerView(
+      AGENT_COCKPIT_VIEW_TYPE,
+      (leaf) => new AgentCockpitView(
+        leaf,
+        this.requireController(),
+        () => this.activateWorkBoard()
+      )
+    );
+    this.registerView(
+      WORK_BOARD_VIEW_TYPE,
+      (leaf) => new WorkBoardView(
+        leaf,
+        this.requireController(),
+        () => this.activateView()
+      )
+    );
     this.addRibbonIcon("layout-dashboard", `Open ${PRODUCT_NAME}`, () => {
       void runUiAction(() => this.activateView(), `Could not open ${PRODUCT_NAME}.`);
     });
@@ -46,6 +62,14 @@ export default class AgentCockpitPlugin extends Plugin {
       callback: () => void runUiAction(
         () => this.requireController().refreshNow(),
         `Could not refresh ${PRODUCT_NAME}.`
+      )
+    });
+    this.addCommand({
+      id: "open-work-board",
+      name: "Open work board",
+      callback: () => void runUiAction(
+        () => this.activateWorkBoard(),
+        "Could not open the work board."
       )
     });
     this.addSettingTab(new AgentCockpitSettingsTab(this.app, this, controller));
@@ -86,12 +110,20 @@ export default class AgentCockpitPlugin extends Plugin {
   }
 
   private async activateView(): Promise<void> {
+    await this.activateRegisteredView(AGENT_COCKPIT_VIEW_TYPE);
+  }
+
+  private async activateWorkBoard(): Promise<void> {
+    await this.activateRegisteredView(WORK_BOARD_VIEW_TYPE);
+  }
+
+  private async activateRegisteredView(viewType: string): Promise<void> {
     const controller = this.requireController();
     try {
-      let leaf = this.app.workspace.getLeavesOfType(AGENT_COCKPIT_VIEW_TYPE)[0];
+      let leaf = this.app.workspace.getLeavesOfType(viewType)[0];
       if (!leaf) {
         leaf = this.app.workspace.getLeaf("tab");
-        await leaf.setViewState({ type: AGENT_COCKPIT_VIEW_TYPE, active: true });
+        await leaf.setViewState({ type: viewType, active: true });
         if (this.controller !== controller) return;
       }
       await this.app.workspace.revealLeaf(leaf);

@@ -85,6 +85,10 @@ vi.mock("../../src/views/AgentCockpitView", () => ({
   AGENT_COCKPIT_VIEW_TYPE: "cmux-agent-orchestrator",
   AgentCockpitView: class {}
 }));
+vi.mock("../../src/views/WorkBoardView", () => ({
+  WORK_BOARD_VIEW_TYPE: "cmux-agent-orchestrator-work-board",
+  WorkBoardView: class {}
+}));
 
 import AgentCockpitPlugin from "../../src/main";
 

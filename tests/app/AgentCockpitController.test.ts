@@ -1615,6 +1615,107 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("parks only explicitly selected active tasks that still have no live run", async () => {
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(Date.now()))
+    );
+
+    await controller.initialize();
+    const parkable = await controller.createTask({ title: "Parkable task" });
+    const linked = await controller.createTask({ title: "Linked task" });
+    controller.store.update((state) => ({
+      sessions: state.sessions.map((session, index) =>
+        index === 0 ? { ...session, linkedTaskId: linked.taskId } : session
+      )
+    }));
+
+    await expect(
+      controller.parkTasksWithoutLiveSessions([parkable.taskId, linked.taskId])
+    ).resolves.toEqual({ parked: 1, skipped: 1 });
+    expect(controller.store.getState().tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: parkable.taskId, workflowStatus: "parked" }),
+      expect.objectContaining({ taskId: linked.taskId, workflowStatus: "active" })
+    ]));
+    controller.dispose();
+  });
+
+  it("refuses no-live parking when topology evidence is stale", async () => {
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const memory = memoryTaskApp();
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(Date.now()))
+    );
+
+    await controller.initialize();
+    const task = await controller.createTask({ title: "Stale topology task" });
+    controller.store.update((state) => ({
+      health: {
+        ...state.health,
+        topology: { ...state.health.topology, status: "stale" }
+      }
+    }));
+
+    await expect(controller.parkTasksWithoutLiveSessions([task.taskId])).resolves.toEqual({
+      parked: 0,
+      skipped: 1
+    });
+    expect(memory.frontmatterWriteAttempts()).toBe(0);
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("active");
+    controller.dispose();
+  });
+
+  it("revalidates a no-live selection during the frontmatter write", async () => {
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve;
+    });
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const memory = memoryTaskApp({
+      beforeFrontmatter: async () => {
+        markWriteStarted();
+        await writeGate;
+      }
+    });
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(Date.now()))
+    );
+
+    await controller.initialize();
+    const task = await controller.createTask({ title: "Live run race" });
+    const parking = controller.parkTasksWithoutLiveSessions([task.taskId]);
+    await writeStarted;
+    controller.store.update((state) => ({
+      sessions: state.sessions.map((session, index) =>
+        index === 0 ? { ...session, linkedTaskId: task.taskId } : session
+      )
+    }));
+    releaseWrite();
+
+    await expect(parking).resolves.toEqual({ parked: 0, skipped: 1 });
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("active");
+    controller.dispose();
+  });
+
   it("does not publish a queued workflow result onto a same-ID task in a newly selected folder", async () => {
     let persisted: unknown = { settings: { autoTrackAgentRuns: false } };
     let blockCreate = false;

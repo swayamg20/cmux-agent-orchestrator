@@ -11,9 +11,11 @@ function declarationsFor(selector: string): string {
 }
 
 describe("Work board viewport layout", () => {
-  it("keeps the plugin shell inside the Obsidian view instead of scrolling the whole page", () => {
+  it("keeps both plugin surfaces inside their Obsidian views", () => {
     expect(
-      declarationsFor(".workspace-leaf-content .view-content.agent-cockpit-view-content")
+      declarationsFor(
+        ".workspace-leaf-content .view-content.agent-cockpit-view-content,\n.workspace-leaf-content .view-content.agent-cockpit-board-view-content"
+      )
     ).toContain("overflow: hidden");
     expect(declarationsFor(".agent-cockpit")).toContain("display: flex");
     expect(declarationsFor(".agent-cockpit")).toContain("height: 100%");
@@ -21,10 +23,14 @@ describe("Work board viewport layout", () => {
     expect(declarationsFor(".agent-cockpit-panel-slot")).toContain("overflow: hidden");
   });
 
-  it("gives each workflow column its own vertical scroller", () => {
-    expect(declarationsFor(".agent-cockpit-mode-panel--work")).toContain("overflow: hidden");
-    expect(declarationsFor(".agent-cockpit-kanban-panel")).toContain("display: flex");
+  it("keeps the overview scrollable and gives the dedicated board bounded scrollers", () => {
+    expect(declarationsFor(".agent-cockpit-mode-panel--work")).toContain("overflow-y: auto");
+    expect(declarationsFor(".agent-cockpit-board-host")).toContain("overflow: hidden");
+    expect(declarationsFor(".agent-cockpit-board-host")).toContain("min-height: 0");
     expect(declarationsFor(".agent-cockpit-kanban-board")).toContain("overflow-y: hidden");
+    expect(declarationsFor(".agent-cockpit-kanban-board")).toContain("overflow-x: auto");
+    expect(declarationsFor(".agent-cockpit-kanban-board")).toContain("width: 100%");
+    expect(declarationsFor(".agent-cockpit-kanban-board")).toContain("min-width: 0");
     expect(declarationsFor(".agent-cockpit-kanban-column")).toContain("display: flex");
     expect(declarationsFor(".agent-cockpit-kanban-task-list")).toContain("overflow-y: auto");
   });

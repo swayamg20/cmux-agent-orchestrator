@@ -1,60 +1,65 @@
-import type { CockpitState } from "../state/types";
-import { WORKFLOW_LABELS } from "../state/types";
 import { renderTaskCard } from "../components/TaskCard";
 import type { WorkflowProposalActions } from "../components/WorkflowProposalNotice";
+import type { CockpitState } from "../state/types";
+import { WORKFLOW_LABELS } from "../state/types";
 import { WORKFLOW_STATUSES, type TaskRecord, type WorkflowStatus } from "../tasks/TaskSchema";
 
 export interface KanbanPanelActions extends WorkflowProposalActions {
-  createTask(): void;
   openTask(task: TaskRecord): void;
   moveTask(task: TaskRecord, status: WorkflowStatus): Promise<boolean>;
 }
 
-export function renderKanbanPanel(
+export interface KanbanSelectionActions {
+  selectedTaskIds: ReadonlySet<string>;
+  toggleTask(task: TaskRecord, selected: boolean): void;
+}
+
+export interface KanbanBoardOptions {
+  tasks: readonly TaskRecord[];
+  selection?: KanbanSelectionActions;
+}
+
+export function renderKanbanBoard(
   container: HTMLElement,
   state: Readonly<CockpitState>,
-  actions: KanbanPanelActions
+  actions: KanbanPanelActions,
+  options: KanbanBoardOptions
 ): void {
-  const panel = container.createEl("section", {
-    cls: "agent-cockpit-panel agent-cockpit-kanban-panel",
-    attr: { "aria-labelledby": "agent-cockpit-board-heading" }
+  const visibleTaskIds = new Set(options.tasks.map((task) => task.taskId));
+  const board = container.createDiv({
+    cls: "agent-cockpit-kanban-board",
+    attr: { "aria-label": "Workflow board" }
   });
-  const heading = panel.createDiv({ cls: "agent-cockpit-panel-heading" });
-  const title = heading.createDiv({ cls: "agent-cockpit-panel-title" });
-  const titleLine = title.createDiv({ cls: "agent-cockpit-title-line" });
-  titleLine.createEl("h2", { text: "Work board", attr: { id: "agent-cockpit-board-heading" } });
-  titleLine.createSpan({
-    cls: "agent-cockpit-count",
-    text: String(state.tasks.length),
-    attr: { "aria-label": `${state.tasks.length} durable tasks` }
-  });
-  title.createEl("p", {
-    text: "Durable Markdown tasks. Moving a card changes workflow only—it never controls a live agent."
-  });
-  const create = heading.createEl("button", { text: "New task", attr: { type: "button" } });
-  create.addEventListener("click", () => actions.createTask());
-
-  if (state.tasks.length === 0) {
-    panel.createDiv({
-      cls: "agent-cockpit-board-empty-note",
-      text: "No tracked work yet. With automatic tracking enabled, exact Claude and Codex sessions are added after startup or Refresh. Ambiguous runs remain under Agent runs."
-    });
-  }
-
-  const board = panel.createDiv({ cls: "agent-cockpit-kanban-board" });
   for (const status of WORKFLOW_STATUSES) {
-    const column = board.createDiv({ cls: "agent-cockpit-kanban-column" });
+    const column = board.createEl("section", {
+      cls: "agent-cockpit-kanban-column",
+      attr: { "aria-labelledby": `agent-cockpit-board-column-${status}` }
+    });
     column.dataset.status = status;
     const columnHeader = column.createDiv({ cls: "agent-cockpit-kanban-column-header" });
-    columnHeader.createEl("h3", { text: WORKFLOW_LABELS[status] });
-    const tasks = state.tasks.filter((task) => task.workflowStatus === status);
-    columnHeader.createSpan({ cls: "agent-cockpit-count", text: String(tasks.length) });
-    const taskList = column.createDiv({ cls: "agent-cockpit-kanban-task-list" });
+    columnHeader.createEl("h3", {
+      text: WORKFLOW_LABELS[status],
+      attr: { id: `agent-cockpit-board-column-${status}` }
+    });
+    const tasks = state.tasks.filter(
+      (task) => task.workflowStatus === status && visibleTaskIds.has(task.taskId)
+    );
+    columnHeader.createSpan({
+      cls: "agent-cockpit-count",
+      text: String(tasks.length),
+      attr: { "aria-label": `${tasks.length} ${WORKFLOW_LABELS[status].toLocaleLowerCase()} tasks` }
+    });
+    const taskList = column.createDiv({
+      cls: "agent-cockpit-kanban-task-list",
+      attr: { role: "list", "aria-label": `${WORKFLOW_LABELS[status]} tasks` }
+    });
     taskList.addEventListener("dragover", (event) => {
+      if (options.selection !== undefined) return;
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
     });
     taskList.addEventListener("drop", (event) => {
+      if (options.selection !== undefined) return;
       event.preventDefault();
       const taskId = event.dataTransfer?.getData("text/x-agent-cockpit-task");
       const task = state.tasks.find((candidate) => candidate.taskId === taskId);
@@ -74,11 +79,15 @@ export function renderKanbanPanel(
       const recentChange = state.recentWorkflowChanges.find(
         (candidate) => candidate.taskId === task.taskId
       ) ?? null;
-      renderTaskCard(taskList, task, sessions, proposal, recentChange, {
+      const card = taskList.createDiv({ attr: { role: "listitem" } });
+      renderTaskCard(card, task, sessions, proposal, recentChange, {
         open: (selectedTask) => actions.openTask(selectedTask),
         move: (selectedTask, nextStatus) => actions.moveTask(selectedTask, nextStatus),
         apply: (candidate) => actions.apply(candidate),
         dismiss: (candidate) => actions.dismiss(candidate)
+      }, options.selection === undefined ? null : {
+        selected: options.selection.selectedTaskIds.has(task.taskId),
+        toggle: (selectedTask, selected) => options.selection?.toggleTask(selectedTask, selected)
       });
     }
   }

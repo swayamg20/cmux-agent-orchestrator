@@ -16,23 +16,55 @@ export interface TaskCardActions extends WorkflowProposalActions {
   move(task: TaskRecord, status: WorkflowStatus): Promise<boolean>;
 }
 
+export interface TaskCardSelection {
+  selected: boolean;
+  toggle(task: TaskRecord, selected: boolean): void;
+}
+
 export function renderTaskCard(
   container: HTMLElement,
   task: TaskRecord,
   sessions: readonly LiveSession[],
   proposal: WorkflowProposal | null,
   recentChange: AppliedWorkflowChange | null,
-  actions: TaskCardActions
+  actions: TaskCardActions,
+  selection: TaskCardSelection | null = null
 ): HTMLElement {
-  const card = container.createDiv({ cls: "agent-cockpit-task-card", attr: { draggable: "true" } });
+  const card = container.createDiv({
+    cls: "agent-cockpit-task-card",
+    attr: {
+      draggable: selection === null ? "true" : "false",
+      ...(selection === null ? {} : { "data-selected": String(selection.selected) })
+    }
+  });
   card.dataset.taskId = task.taskId;
   card.addEventListener("dragstart", (event) => {
+    if (selection !== null) {
+      event.preventDefault();
+      return;
+    }
     event.dataTransfer?.setData("text/x-agent-cockpit-task", task.taskId);
     if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
   });
 
   const top = card.createDiv({ cls: "agent-cockpit-task-card-top" });
-  const priority = top.createSpan({ cls: "agent-cockpit-priority", text: task.priority });
+  const leading = top.createDiv({ cls: "agent-cockpit-task-card-leading" });
+  if (selection !== null) {
+    const selectionLabel = leading.createEl("label", {
+      cls: "agent-cockpit-task-selection",
+      attr: { title: `Select ${task.title}` }
+    });
+    const checkbox = selectionLabel.createEl("input", {
+      attr: {
+        type: "checkbox",
+        "aria-label": `Select ${task.title}`,
+        "data-focus-key": `board-select-${task.taskId}`
+      }
+    });
+    checkbox.checked = selection.selected;
+    checkbox.addEventListener("change", () => selection.toggle(task, checkbox.checked));
+  }
+  const priority = leading.createSpan({ cls: "agent-cockpit-priority", text: task.priority });
   priority.dataset.priority = task.priority;
   top.createSpan({ cls: "agent-cockpit-run-count", text: `${task.runCount} ${task.runCount === 1 ? "run" : "runs"}` });
 
