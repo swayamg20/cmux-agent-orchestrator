@@ -114,6 +114,7 @@ export interface CmuxTarget {
 }
 
 export interface CmuxResolvedTarget extends CmuxTarget {
+  windowId: string;
   workspaceTitle: string;
   surfaceTitle: string;
   currentDirectory: string | null;

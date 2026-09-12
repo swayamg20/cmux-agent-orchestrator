@@ -2190,19 +2190,19 @@ export class AgentCockpitController {
     const exactSession = preserveProviderIdentity
       ? this.resolveCurrentBindingSession(session)
       : this.resolveCurrentSession(session);
+    let activationError: string | null = null;
+    try {
+      await this.applicationActivator.activate();
+    } catch (error) {
+      activationError = readableError(error);
+    }
+    if (!this.focusOperationIsCurrent(clientGeneration, focusAction)) return null;
     let focus: FocusResult;
     try {
       focus = await focusAction.execute(this.store.getState().connection, exactSession);
     } catch (error) {
       if (!this.focusOperationIsCurrent(clientGeneration, focusAction)) return null;
       throw error;
-    }
-    if (!this.focusOperationIsCurrent(clientGeneration, focusAction)) return null;
-    let activationError: string | null = null;
-    try {
-      await this.applicationActivator.activate();
-    } catch (error) {
-      activationError = readableError(error);
     }
     if (!this.focusOperationIsCurrent(clientGeneration, focusAction)) return null;
     return { focus, activationError };

@@ -20,6 +20,7 @@ import {
   type CmuxNotification,
   type CmuxPreview,
   type CmuxProbe,
+  type CmuxResolvedTarget,
   type CmuxSnapshot,
   type CmuxTarget
 } from "./types";
@@ -243,8 +244,8 @@ export class CliCmuxTransport implements CmuxTransport {
     return decodeFocusedTarget(result.stdout);
   }
 
-  async focus(target: CmuxTarget, signal?: AbortSignal): Promise<void> {
-    await this.run(cmuxCommands.focusPanel(target), 32 * 1024, signal);
+  async focus(target: CmuxResolvedTarget, signal?: AbortSignal): Promise<void> {
+    await this.run(cmuxCommands.focusPanel(target, target.windowId), 32 * 1024, signal);
   }
 
   dispose(): void {

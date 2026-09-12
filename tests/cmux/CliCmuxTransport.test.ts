@@ -143,7 +143,7 @@ class CurrentSessionCommandRunner extends SafeProcessRunner {
             runtime_status: "running",
             active_prompt_turn_id: "81111111-1111-4111-8111-111111111111",
             last_prompt_turn_id: "81111111-1111-4111-8111-111111111111",
-            active_for_surface: false,
+            active_for_surface: true,
             active_for_workspace: false,
             default_visible: true,
             stored_pid_exists: true,

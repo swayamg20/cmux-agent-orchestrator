@@ -6,6 +6,7 @@ const target = {
   paneId: "33333333-3333-4333-8333-333333333333",
   surfaceId: "44444444-4444-4444-8444-444444444444"
 };
+const windowId = "11111111-1111-4111-8111-111111111111";
 
 describe("cmux command construction", () => {
   it("constructs exact JSON discovery arguments", () => {
@@ -34,18 +35,21 @@ describe("cmux command construction", () => {
   });
 
   it("constructs focus as an argument array with canonical IDs", () => {
-    expect(cmuxCommands.focusPanel(target)).toEqual([
+    expect(cmuxCommands.focusPanel(target, windowId)).toEqual([
       "focus-panel",
       "--panel",
       target.surfaceId,
       "--workspace",
-      target.workspaceId
+      target.workspaceId,
+      "--window",
+      windowId
     ]);
   });
 
   it("allows bounded provider evidence reads and rejects excessive lines", () => {
     expect(isCanonicalUuid("surface:1")).toBe(false);
-    expect(() => cmuxCommands.focusPanel({ ...target, surfaceId: "$(touch /tmp/nope)" })).toThrow();
+    expect(() => cmuxCommands.focusPanel({ ...target, surfaceId: "$(touch /tmp/nope)" }, windowId)).toThrow();
+    expect(() => cmuxCommands.focusPanel(target, "$(touch /tmp/nope)")).toThrow();
     expect(cmuxCommands.readScreen(target, 500)).toEqual([
       "--id-format",
       "uuids",

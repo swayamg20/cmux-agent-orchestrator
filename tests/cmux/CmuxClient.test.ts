@@ -18,6 +18,7 @@ describe("resolveTarget", () => {
       surfaceId: "55555555-5555-4555-8555-555555555555"
     });
     expect(resolved.surfaceTitle).toBe("Codex · parser tests");
+    expect(resolved.windowId).toBe("11111111-1111-4111-8111-111111111111");
   });
 
   it("resolves mixed-case target UUIDs to the authoritative snapshot identity", async () => {
@@ -67,7 +68,9 @@ describe("CmuxClient focus safety", () => {
       surfaceId: "44444444-4444-4444-8444-444444444444"
     });
     expect(result.verified).toBe(true);
-    expect(focused).toEqual(["44444444-4444-4444-8444-444444444444"]);
+    expect(focused).toEqual([
+      "11111111-1111-4111-8111-111111111111/44444444-4444-4444-8444-444444444444"
+    ]);
   });
 
   it("reports an unexpected cmux window-count change without cleanup", async () => {
@@ -210,7 +213,7 @@ function fakeTransport(
     readPreview: async (target) => ({ ...target, text: "", observedAt: 1, truncated: false }),
     focusedTarget: async () => focusedTarget,
     focus: async (target) => {
-      focused.push(target.surfaceId);
+      focused.push(`${target.windowId}/${target.surfaceId}`);
     },
     dispose: () => undefined
   };

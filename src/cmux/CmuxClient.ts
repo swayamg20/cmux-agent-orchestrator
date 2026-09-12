@@ -74,8 +74,8 @@ export class CmuxClient {
 
   async focusExact(target: CmuxTarget, signal?: AbortSignal): Promise<FocusResult> {
     const before = await this.snapshot(signal);
-    resolveTarget(before, target);
-    await this.transport.focus(target, signal);
+    const resolvedBefore = resolveTarget(before, target);
+    await this.transport.focus(resolvedBefore, signal);
     let focused: CmuxTarget | null = null;
     for (const delayMs of FOCUS_VERIFICATION_DELAYS_MS) {
       if (delayMs > 0) await boundedDelay(delayMs, signal);
@@ -134,6 +134,7 @@ export function resolveTarget(snapshot: CmuxSnapshot, target: CmuxTarget): CmuxR
         for (const surface of pane.surfaces) {
           if (!canonicalUuidEquals(surface.id, target.surfaceId)) continue;
           matches.push({
+            windowId: window.id,
             workspaceId: workspace.id,
             paneId: pane.id,
             surfaceId: surface.id,

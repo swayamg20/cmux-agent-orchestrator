@@ -4,6 +4,7 @@ import type {
   CmuxNotification,
   CmuxPreview,
   CmuxProbe,
+  CmuxResolvedTarget,
   CmuxSnapshot,
   CmuxTarget
 } from "./types";
@@ -28,6 +29,6 @@ export interface CmuxTransport {
   subscribeEvents?(observer: CmuxEventObserver): (() => void) | null;
   readPreview(target: CmuxTarget, request: PreviewRequest): Promise<CmuxPreview>;
   focusedTarget(signal?: AbortSignal): Promise<CmuxTarget | null>;
-  focus(target: CmuxTarget, signal?: AbortSignal): Promise<void>;
+  focus(target: CmuxResolvedTarget, signal?: AbortSignal): Promise<void>;
   dispose(): void;
 }

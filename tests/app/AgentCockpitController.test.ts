@@ -345,9 +345,11 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
-  it("focuses the exact surface before bringing cmux to the foreground", async () => {
+  it("brings cmux forward before focusing the exact surface", async () => {
     let focusedTarget: CmuxTarget | null = null;
+    const actionOrder: string[] = [];
     const focus = vi.fn(async (target: CmuxTarget) => {
+      actionOrder.push("focus");
       focusedTarget = target;
     });
     const transport: CmuxTransport = {
@@ -359,7 +361,9 @@ describe("AgentCockpitController connection failures", () => {
       loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
       saveData: async () => undefined
     } as unknown as Plugin;
-    const { activator, activate } = testApplicationActivator();
+    const { activator, activate } = testApplicationActivator(vi.fn(async () => {
+      actionOrder.push("activate");
+    }));
     const notices = (Notice as unknown as { messages: string[] }).messages;
     const controller = new AgentCockpitController(
       memoryTaskApp().app,
@@ -386,6 +390,7 @@ describe("AgentCockpitController connection failures", () => {
       undefined
     );
     expect(activate).toHaveBeenCalledOnce();
+    expect(actionOrder).toEqual(["activate", "focus"]);
     expect(notices.slice(noticeStart)).toEqual([
       "Focused repository / repository in cmux. Brought cmux forward."
     ]);
@@ -7145,7 +7150,7 @@ describe("AgentCockpitController workflow automation", () => {
     await expect(controller.reviewWorkflowProposalInCmux(proposal)).resolves.toBe(true);
 
     expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("review");
-    expect(activate).not.toHaveBeenCalled();
+    expect(activate).toHaveBeenCalledOnce();
     expect(notices.slice(noticeStart)).toEqual([
       "Moved the task to Review, but could not focus cmux: simulated focus failure"
     ]);

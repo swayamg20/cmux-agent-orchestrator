@@ -274,9 +274,9 @@ interface DecodedSessionAgent {
  * Decode the current `cmux sessions --json` shape into the same bounded
  * lifecycle contract used by the legacy `list-agents` command.
  *
- * `sessions` may retain multiple generations for one surface. Only the most
- * authoritative/current row is published, and exact ties with conflicting
- * identity or state are rejected instead of guessed.
+ * `sessions` deliberately retains restorable and transcript-backed history.
+ * Only the row cmux marks active for the exact surface is live identity; old
+ * rows must never be promoted into the current surface projection.
  */
 export function decodeSessionAgents(text: string): CmuxAgentRecord[] {
   const root = record(parseJson(text, "cmux sessions"), "cmux sessions");
@@ -305,6 +305,8 @@ export function decodeSessionAgents(text: string): CmuxAgentRecord[] {
       continue;
     }
     if (session.default_visible === false || session.stored_pid_exists === false) continue;
+    const activeForSurface = boolean(session.active_for_surface);
+    if (!activeForSurface) continue;
 
     const surfaceId = canonicalUuid(session.surface_id, `${label}.surface_id`);
     const workspaceId = canonicalUuid(session.workspace_id, `${label}.workspace_id`);
@@ -340,7 +342,7 @@ export function decodeSessionAgents(text: string): CmuxAgentRecord[] {
         updatedAt: Math.round(updatedAtUnix * 1_000)
       },
       workspaceId,
-      activeForSurface: boolean(session.active_for_surface),
+      activeForSurface,
       activeForWorkspace: boolean(session.active_for_workspace)
     };
     const current = selected.get(surfaceId);

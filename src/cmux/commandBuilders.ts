@@ -82,14 +82,17 @@ export const cmuxCommands = {
     ];
   },
 
-  focusPanel(target: CmuxTarget): readonly string[] {
+  focusPanel(target: CmuxTarget, windowId: string): readonly string[] {
     assertTarget(target);
+    assertCanonicalUuid(windowId, "Window ID");
     return [
       "focus-panel",
       "--panel",
       target.surfaceId,
       "--workspace",
-      target.workspaceId
+      target.workspaceId,
+      "--window",
+      windowId
     ];
   }
 };

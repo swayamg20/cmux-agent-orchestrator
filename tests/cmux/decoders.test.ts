@@ -117,34 +117,28 @@ describe("cmux 0.62.2 decoders", () => {
   it("decodes current cmux sessions and selects the authoritative row per surface", async () => {
     expect(decodeSessionAgents(await modernFixture("sessions.json"))).toEqual([
       {
-        surfaceId: "44444444-4444-4444-8444-444444444444",
-        state: "done",
-        source: "hook",
-        sessionId: "77777777-7777-4777-8777-777777777777",
-        updatedAt: 1788381001456
-      },
-      {
         surfaceId: "66666666-6666-4666-8666-666666666666",
         state: "working",
         source: "hook",
         sessionId: "99999999-9999-4999-8999-999999999999",
         updatedAt: 1788381002789
-      },
-      {
-        surfaceId: "b2222222-b222-4222-8222-b22222222222",
-        state: "idle",
-        source: "hook",
-        sessionId: "a1111111-a111-4111-8111-a11111111111",
-        updatedAt: 1788381003000
       }
     ]);
+  });
+
+  it("does not publish inactive transcript-backed history as a current surface session", async () => {
+    const fixtureText = await modernFixture("sessions.json");
+    const parsed = JSON.parse(fixtureText) as { sessions: Array<Record<string, unknown>> };
+    parsed.sessions = parsed.sessions.filter((session) => session.active_for_surface === false);
+
+    expect(decodeSessionAgents(JSON.stringify(parsed))).toEqual([]);
   });
 
   it("fails closed on contradictory or equally-current cmux session rows", async () => {
     const fixtureText = await modernFixture("sessions.json");
     const parsed = JSON.parse(fixtureText) as { sessions: Array<Record<string, unknown>> };
     parsed.sessions[2]!.runtime_status = "idle";
-    expect(decodeSessionAgents(JSON.stringify(parsed))[1]).toMatchObject({ state: "unknown" });
+    expect(decodeSessionAgents(JSON.stringify(parsed))[0]).toMatchObject({ state: "unknown" });
 
     parsed.sessions[2]!.runtime_status = "running";
     const conflicting = {
