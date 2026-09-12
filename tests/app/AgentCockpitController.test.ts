@@ -1,5 +1,6 @@
 import { Modal, Notice, type App, type Plugin } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
+import type { ApplicationActivator } from "../../src/actions/CmuxApplicationActivator";
 import { AgentCockpitController } from "../../src/app/AgentCockpitController";
 import { BindingRepository } from "../../src/bindings/BindingRepository";
 import type { ProviderSessionMapping } from "../../src/bindings/types";
@@ -159,6 +160,17 @@ function emptyCodexMetadataSource(): ProviderSessionSource {
     list: async () => [],
     get: async () => null,
     dispose: () => undefined
+  };
+}
+
+function testApplicationActivator(
+  activate = vi.fn(async (_signal?: AbortSignal) => undefined)
+) {
+  const dispose = vi.fn();
+  return {
+    activator: { activate, dispose } satisfies ApplicationActivator,
+    activate,
+    dispose
   };
 }
 
@@ -330,6 +342,53 @@ describe("AgentCockpitController connection failures", () => {
     expect(previewCalls).toBe(previewCallsBeforeDisconnect);
     expect(notices.slice(noticeStart)).toContain("cmux connection is not initialized.");
     expect(notices.slice(noticeStart)).toContain("cmux Agent Orchestrator is not connected to cmux.");
+    controller.dispose();
+  });
+
+  it("focuses the exact surface before bringing cmux to the foreground", async () => {
+    let focusedTarget: CmuxTarget | null = null;
+    const focus = vi.fn(async (target: CmuxTarget) => {
+      focusedTarget = target;
+    });
+    const transport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      focus,
+      focusedTarget: async () => focusedTarget
+    };
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const { activator, activate } = testApplicationActivator();
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexResolver(),
+      activator
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+    const noticeStart = notices.length;
+
+    await controller.focusSession(session);
+
+    expect(focus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: session.workspaceId,
+        paneId: session.paneId,
+        surfaceId: session.surfaceId
+      }),
+      undefined
+    );
+    expect(activate).toHaveBeenCalledOnce();
+    expect(notices.slice(noticeStart)).toEqual([
+      "Focused repository / repository in cmux. Brought cmux forward."
+    ]);
     controller.dispose();
   });
 
@@ -801,6 +860,53 @@ describe("AgentCockpitController connection failures", () => {
         oldFocusedTarget = target;
       },
       focusedTarget: async () => oldFocusedTarget
+    };
+    const currentTransport = connectedTransport(Date.now());
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(clientCreations++ === 0 ? firstTransport : currentTransport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const staleFocus = controller.focusSession(controller.store.getState().sessions[0]!);
+    await oldFocusStarted;
+
+    await controller.testConnection();
+    await controller.waitForBackgroundWork();
+    const noticeStart = notices.length;
+    releaseOldFocus();
+    await staleFocus;
+
+    expect(controller.store.getState().connection.status).toBe("connected");
+    expect(controller.store.getState().error).toBeNull();
+    expect(notices.slice(noticeStart)).toEqual([]);
+    controller.dispose();
+  });
+
+  it("does not report a focus failure from an earlier cmux connection", async () => {
+    let clientCreations = 0;
+    let releaseOldFocus!: () => void;
+    const oldFocusGate = new Promise<void>((resolve) => {
+      releaseOldFocus = resolve;
+    });
+    let markOldFocusStarted!: () => void;
+    const oldFocusStarted = new Promise<void>((resolve) => {
+      markOldFocusStarted = resolve;
+    });
+    const firstTransport: CmuxTransport = {
+      ...connectedTransport(Date.now()),
+      focus: async () => {
+        markOldFocusStarted();
+        await oldFocusGate;
+        throw new Error("stale focus failure");
+      }
     };
     const currentTransport = connectedTransport(Date.now());
     const plugin = {
@@ -6877,6 +6983,216 @@ describe("AgentCockpitController workflow automation", () => {
     expect(controller.store.getState().workflowProposals).toEqual([]);
     expect(controller.store.getState().recentWorkflowChanges).toEqual([]);
     expect(persisted).toBeDefined();
+    controller.dispose();
+  });
+
+  it("reviews an exact linked run, focuses only that surface, and brings cmux forward", async () => {
+    let focusedTarget: CmuxTarget | null = null;
+    const focus = vi.fn(async (target: CmuxTarget) => {
+      focusedTarget = target;
+    });
+    const transport: CmuxTransport = {
+      ...connectedTransport(Date.now() - 1_000),
+      focus,
+      focusedTarget: async () => focusedTarget
+    };
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "suggest" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const { activator, activate } = testApplicationActivator();
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done"),
+      activator
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const proposal = controller.store.getState().workflowProposals[0]!;
+    const session = controller.store.getState().sessions[0]!;
+    const noticeStart = notices.length;
+
+    await expect(controller.reviewWorkflowProposalInCmux(proposal)).resolves.toBe(true);
+
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("review");
+    expect(focus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: session.workspaceId,
+        paneId: session.paneId,
+        surfaceId: session.surfaceId
+      }),
+      undefined
+    );
+    expect(activate).toHaveBeenCalledOnce();
+    expect(notices.slice(noticeStart)).toEqual([
+      "Moved the task to Review. Focused repository / repository in cmux. Brought cmux forward."
+    ]);
+    controller.dispose();
+  });
+
+  it("does not change durable workflow when the exact cmux surface is only focused", async () => {
+    let focusedTarget: CmuxTarget | null = null;
+    const transport: CmuxTransport = {
+      ...connectedTransport(Date.now() - 1_000),
+      focus: async (target) => {
+        focusedTarget = target;
+      },
+      focusedTarget: async () => focusedTarget
+    };
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "suggest" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const { activator, activate } = testApplicationActivator();
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done"),
+      activator
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const session = controller.store.getState().sessions[0]!;
+
+    await controller.focusSession(session);
+
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("active");
+    expect(controller.store.getState().workflowProposals).toHaveLength(1);
+    expect(activate).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it("rejects a changed review proposal before writing or focusing", async () => {
+    const focus = vi.fn(async () => undefined);
+    const transport: CmuxTransport = {
+      ...connectedTransport(Date.now() - 1_000),
+      focus
+    };
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "suggest" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const { activator, activate } = testApplicationActivator();
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done"),
+      activator
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const proposal = controller.store.getState().workflowProposals[0]!;
+
+    await expect(
+      controller.reviewWorkflowProposalInCmux({
+        ...proposal,
+        explanation: `${proposal.explanation} changed`
+      })
+    ).resolves.toBe(false);
+
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("active");
+    expect(focus).not.toHaveBeenCalled();
+    expect(activate).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("keeps a completed Review write when exact cmux focus subsequently fails", async () => {
+    const transport: CmuxTransport = {
+      ...connectedTransport(Date.now() - 1_000),
+      focus: async () => {
+        throw new Error("simulated focus failure");
+      }
+    };
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "suggest" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const { activator, activate } = testApplicationActivator();
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done"),
+      activator
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const proposal = controller.store.getState().workflowProposals[0]!;
+    const noticeStart = notices.length;
+
+    await expect(controller.reviewWorkflowProposalInCmux(proposal)).resolves.toBe(true);
+
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("review");
+    expect(activate).not.toHaveBeenCalled();
+    expect(notices.slice(noticeStart)).toEqual([
+      "Moved the task to Review, but could not focus cmux: simulated focus failure"
+    ]);
+    controller.dispose();
+  });
+
+  it("reports foreground activation failure separately from a successful review and focus", async () => {
+    let focusedTarget: CmuxTarget | null = null;
+    const transport: CmuxTransport = {
+      ...connectedTransport(Date.now() - 1_000),
+      focus: async (target) => {
+        focusedTarget = target;
+      },
+      focusedTarget: async () => focusedTarget
+    };
+    const plugin = {
+      loadData: async () => ({
+        settings: { autoTrackAgentRuns: true, workflowAutomation: "suggest" }
+      }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const { activator } = testApplicationActivator(
+      vi.fn(async () => {
+        throw new Error("simulated activation failure");
+      })
+    );
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport),
+      new ProviderMetadataService([emptyCodexMetadataSource()]),
+      exactCodexLifecycleResolver("done"),
+      activator
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const proposal = controller.store.getState().workflowProposals[0]!;
+    const noticeStart = notices.length;
+
+    await expect(controller.reviewWorkflowProposalInCmux(proposal)).resolves.toBe(true);
+
+    expect(controller.store.getState().tasks[0]?.workflowStatus).toBe("review");
+    expect(notices.slice(noticeStart)).toEqual([
+      "Moved the task to Review. Focused repository / repository in cmux. Could not bring cmux forward: simulated activation failure"
+    ]);
     controller.dispose();
   });
 

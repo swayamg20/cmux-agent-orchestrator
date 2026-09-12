@@ -84,6 +84,7 @@ export function renderKanbanBoard(
         open: (selectedTask) => actions.openTask(selectedTask),
         move: (selectedTask, nextStatus) => actions.moveTask(selectedTask, nextStatus),
         apply: (candidate) => actions.apply(candidate),
+        reviewInCmux: (candidate) => actions.reviewInCmux(candidate),
         dismiss: (candidate) => actions.dismiss(candidate)
       }, options.selection === undefined ? null : {
         selected: options.selection.selectedTaskIds.has(task.taskId),

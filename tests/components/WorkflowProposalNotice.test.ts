@@ -74,19 +74,20 @@ function proposal(): WorkflowProposal {
 }
 
 describe("WorkflowProposalNotice", () => {
-  it("keeps task-card suggestions compact and routes Apply without duplicate clicks", async () => {
+  it("keeps task-card suggestions compact and routes Review in cmux without duplicate clicks", async () => {
     let release!: (value: boolean) => void;
     const operation = new Promise<boolean>((resolve) => {
       release = resolve;
     });
-    const apply = vi.fn(() => operation);
+    const apply = vi.fn(async () => true);
+    const reviewInCmux = vi.fn(() => operation);
     const dismiss = vi.fn(async () => true);
     const root = new TestElement();
 
     renderWorkflowProposalNotice(
       root as unknown as HTMLElement,
       proposal(),
-      { apply, dismiss },
+      { apply, reviewInCmux, dismiss },
       "task"
     );
     const buttons = root.descendants().filter((element) => element.tag === "button");
@@ -94,21 +95,24 @@ describe("WorkflowProposalNotice", () => {
     expect(root.descendants().map((element) => element.text)).not.toContain(
       "Fresh structured evidence says the turn completed."
     );
+    expect(buttons.map((button) => button.text)).toEqual(["Review in cmux", "Dismiss"]);
 
     buttons[0]!.trigger("click");
     buttons[0]!.trigger("click");
-    expect(apply).toHaveBeenCalledOnce();
+    expect(reviewInCmux).toHaveBeenCalledOnce();
     expect(buttons.map((button) => button.disabled)).toEqual([true, true]);
 
     release(true);
     await operation;
     await Promise.resolve();
     expect(buttons.map((button) => button.disabled)).toEqual([false, false]);
+    expect(apply).not.toHaveBeenCalled();
     expect(dismiss).not.toHaveBeenCalled();
   });
 
   it("routes Dismiss and labels Safe auto proposals honestly", async () => {
     const apply = vi.fn(async () => true);
+    const reviewInCmux = vi.fn(async () => true);
     const dismiss = vi.fn(async () => true);
     const root = new TestElement();
     const automatic = { ...proposal(), applyAutomatically: true };
@@ -116,7 +120,7 @@ describe("WorkflowProposalNotice", () => {
     renderWorkflowProposalNotice(
       root as unknown as HTMLElement,
       automatic,
-      { apply, dismiss },
+      { apply, reviewInCmux, dismiss },
       "attention"
     );
     const buttons = root.descendants().filter((element) => element.tag === "button");
@@ -131,6 +135,35 @@ describe("WorkflowProposalNotice", () => {
     await Promise.resolve();
     expect(dismiss).toHaveBeenCalledWith(automatic);
     expect(apply).not.toHaveBeenCalled();
+    expect(reviewInCmux).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-review workflow suggestions on the generic Apply action", async () => {
+    const apply = vi.fn(async () => true);
+    const reviewInCmux = vi.fn(async () => true);
+    const dismiss = vi.fn(async () => true);
+    const root = new TestElement();
+    const resumed: WorkflowProposal = {
+      ...proposal(),
+      from: "review",
+      to: "active",
+      reason: "work-resumed"
+    };
+
+    renderWorkflowProposalNotice(
+      root as unknown as HTMLElement,
+      resumed,
+      { apply, reviewInCmux, dismiss },
+      "task"
+    );
+    const buttons = root.descendants().filter((element) => element.tag === "button");
+    expect(buttons.map((button) => button.text)).toEqual(["Apply", "Dismiss"]);
+
+    buttons[0]!.trigger("click");
+    await Promise.resolve();
+
+    expect(apply).toHaveBeenCalledWith(resumed);
+    expect(reviewInCmux).not.toHaveBeenCalled();
   });
 
   it("renders a visible marker for an automatic workflow change", () => {

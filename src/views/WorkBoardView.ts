@@ -125,6 +125,7 @@ export class WorkBoardView extends ItemView {
       openTask: (task) => void this.controller.openTask(task),
       moveTask: (task, status) => this.controller.updateWorkflow(task, status),
       apply: (proposal) => this.controller.applyWorkflowProposal(proposal),
+      reviewInCmux: (proposal) => this.controller.reviewWorkflowProposalInCmux(proposal),
       dismiss: (proposal) => this.controller.dismissWorkflowProposal(proposal)
     }, {
       tasks: visible.tasks,

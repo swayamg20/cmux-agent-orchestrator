@@ -4,6 +4,7 @@ import type { WorkflowProposal } from "../workflow/WorkflowAutomationPolicy";
 
 export interface WorkflowProposalActions {
   apply(proposal: WorkflowProposal): Promise<boolean>;
+  reviewInCmux(proposal: WorkflowProposal): Promise<boolean>;
   dismiss(proposal: WorkflowProposal): Promise<boolean>;
 }
 
@@ -30,12 +31,15 @@ export function renderWorkflowProposalNotice(
   }
 
   const controls = notice.createDiv({ cls: "agent-cockpit-workflow-suggestion-actions" });
+  const reviewsInCmux = proposal.from === "active" && proposal.to === "review";
   const apply = controls.createEl("button", {
     cls: "mod-cta agent-cockpit-action",
-    text: "Apply",
+    text: reviewsInCmux ? "Review in cmux" : "Apply",
     attr: {
       type: "button",
-      "aria-label": `Apply workflow suggestion and move to ${WORKFLOW_LABELS[proposal.to]}`
+      "aria-label": reviewsInCmux
+        ? "Move the task to Review, focus its exact cmux surface, and bring cmux forward"
+        : `Apply workflow suggestion and move to ${WORKFLOW_LABELS[proposal.to]}`
     }
   });
   const dismiss = controls.createEl("button", {
@@ -57,7 +61,9 @@ export function renderWorkflowProposalNotice(
         dismiss.disabled = false;
       });
   };
-  apply.addEventListener("click", () => run(() => actions.apply(proposal)));
+  apply.addEventListener("click", () => run(() =>
+    reviewsInCmux ? actions.reviewInCmux(proposal) : actions.apply(proposal)
+  ));
   dismiss.addEventListener("click", () => run(() => actions.dismiss(proposal)));
   return notice;
 }

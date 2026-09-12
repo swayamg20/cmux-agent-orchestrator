@@ -136,6 +136,7 @@ export class AgentCockpitView extends ItemView {
         ...sessionActions,
         openTask: (task) => void this.controller.openTask(task),
         apply: (proposal) => this.controller.applyWorkflowProposal(proposal),
+        reviewInCmux: (proposal) => this.controller.reviewWorkflowProposalInCmux(proposal),
         dismiss: (proposal) => this.controller.dismissWorkflowProposal(proposal)
       });
       renderWorkOverview(panel, state, {

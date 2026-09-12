@@ -1,4 +1,8 @@
 import { Notice, type App, type Modal, type Plugin } from "obsidian";
+import {
+  CmuxApplicationActivator,
+  type ApplicationActivator
+} from "../actions/CmuxApplicationActivator";
 import { FocusSessionAction } from "../actions/FocusSessionAction";
 import { validateBinarySetting, validateBindingIdentity } from "../actions/validators";
 import { AgentDetector } from "../agents/AgentDetector";
@@ -9,7 +13,7 @@ import {
 import { BindingRepository } from "../bindings/BindingRepository";
 import type { BindingRecord, ProviderSessionMapping } from "../bindings/types";
 import { CMUX_SETUP_CLIPBOARD_TEXT } from "../cmux/accessSetup";
-import { CmuxClient } from "../cmux/CmuxClient";
+import { CmuxClient, type FocusResult } from "../cmux/CmuxClient";
 import {
   CmuxError,
   surfaceKey,
@@ -84,6 +88,11 @@ interface AutomaticTrackingPass {
   failedIssueKeys: Set<string>;
 }
 
+interface FocusAndActivationOutcome {
+  focus: FocusResult;
+  activationError: string | null;
+}
+
 const PROVIDER_METADATA_IDENTITY_SOURCES: ReadonlySet<LiveSession["provider"]["source"]> = new Set([
   "provider-session-mapping",
   "task-binding",
@@ -141,7 +150,8 @@ export class AgentCockpitController {
     private readonly createClient: CmuxClientFactory = (explicitBinaryPath) =>
       CmuxClient.create(explicitBinaryPath),
     private readonly providerMetadata = new ProviderMetadataService(),
-    private readonly providerSessionResolver: ProviderSessionResolver = NOOP_PROVIDER_SESSION_RESOLVER
+    private readonly providerSessionResolver: ProviderSessionResolver = NOOP_PROVIDER_SESSION_RESOLVER,
+    private readonly applicationActivator: ApplicationActivator = new CmuxApplicationActivator()
   ) {
     this.bindings = new BindingRepository(plugin);
     this.eventRefresh = new CmuxEventRefreshScheduler({
@@ -418,31 +428,11 @@ export class AgentCockpitController {
 
   async focusSession(session: LiveSession): Promise<void> {
     if (this.disposed) return;
-    const clientGeneration = this.clientGeneration;
-    const focusAction = this.focusAction;
     try {
-      if (focusAction === null) throw new Error("cmux connection is not initialized.");
-      const result = await focusAction.execute(this.store.getState().connection, session);
-      if (
-        this.disposed ||
-        clientGeneration !== this.clientGeneration ||
-        focusAction !== this.focusAction
-      ) {
-        return;
-      }
-      new Notice(
-        result.verified
-          ? `Focused ${result.target.workspaceTitle} / ${result.target.surfaceTitle} in cmux.`
-          : "cmux accepted the focus command, but the selected surface could not be verified within the bounded retry window."
-      );
+      const outcome = await this.focusAndActivateCmux(session);
+      if (outcome !== null) new Notice(focusOutcomeMessage(outcome));
     } catch (error) {
-      if (
-        this.disposed ||
-        clientGeneration !== this.clientGeneration ||
-        focusAction !== this.focusAction
-      ) {
-        return;
-      }
+      if (this.disposed) return;
       this.handleError(error, false);
       new Notice(readableError(error));
     }
@@ -807,6 +797,57 @@ export class AgentCockpitController {
     }
   }
 
+  async reviewWorkflowProposalInCmux(proposal: WorkflowProposal): Promise<boolean> {
+    if (this.disposed) return false;
+    const current = this.currentWorkflowProposal(proposal.id);
+    if (
+      current === null ||
+      !sameWorkflowProposal(current, proposal) ||
+      current.from !== "active" ||
+      current.to !== "review"
+    ) {
+      new Notice("That review suggestion is no longer current.");
+      return false;
+    }
+    const session = this.store.getState().sessions.find(
+      (candidate) => candidate.key === current.sessionKey
+    );
+    if (
+      session === undefined ||
+      session.linkedTaskId === null ||
+      !canonicalUuidEquals(session.linkedTaskId, current.taskId)
+    ) {
+      new Notice("The exact linked cmux run is no longer available. The task was not changed.");
+      return false;
+    }
+
+    let exactSession: LiveSession;
+    try {
+      exactSession = this.resolveCurrentBindingSession(session);
+      const applied = await this.workflowAutomation.apply(current);
+      if (!applied) {
+        if (!this.disposed) new Notice("That review suggestion is no longer current.");
+        return false;
+      }
+    } catch (error) {
+      if (!this.disposed) new Notice(`Could not move the task to Review: ${readableError(error)}`);
+      return false;
+    }
+
+    if (this.disposed) return true;
+    try {
+      const outcome = await this.focusAndActivateCmux(exactSession, true);
+      if (outcome === null) return true;
+      new Notice(`Moved the task to Review. ${focusOutcomeMessage(outcome)}`);
+    } catch (error) {
+      if (!this.disposed) {
+        this.handleError(error, false);
+        new Notice(`Moved the task to Review, but could not focus cmux: ${readableError(error)}`);
+      }
+    }
+    return true;
+  }
+
   async dismissWorkflowProposal(proposal: WorkflowProposal): Promise<boolean> {
     if (this.disposed) return false;
     try {
@@ -1016,6 +1057,7 @@ export class AgentCockpitController {
     this.client?.dispose();
     this.client = null;
     this.focusAction = null;
+    this.applicationActivator.dispose();
     this.providerSessionResolver.dispose();
     this.providerMetadata.dispose();
     this.attentionEngine.clear();
@@ -2138,6 +2180,45 @@ export class AgentCockpitController {
     return current;
   }
 
+  private async focusAndActivateCmux(
+    session: LiveSession,
+    preserveProviderIdentity = false
+  ): Promise<FocusAndActivationOutcome | null> {
+    const clientGeneration = this.clientGeneration;
+    const focusAction = this.focusAction;
+    if (focusAction === null) throw new Error("cmux connection is not initialized.");
+    const exactSession = preserveProviderIdentity
+      ? this.resolveCurrentBindingSession(session)
+      : this.resolveCurrentSession(session);
+    let focus: FocusResult;
+    try {
+      focus = await focusAction.execute(this.store.getState().connection, exactSession);
+    } catch (error) {
+      if (!this.focusOperationIsCurrent(clientGeneration, focusAction)) return null;
+      throw error;
+    }
+    if (!this.focusOperationIsCurrent(clientGeneration, focusAction)) return null;
+    let activationError: string | null = null;
+    try {
+      await this.applicationActivator.activate();
+    } catch (error) {
+      activationError = readableError(error);
+    }
+    if (!this.focusOperationIsCurrent(clientGeneration, focusAction)) return null;
+    return { focus, activationError };
+  }
+
+  private focusOperationIsCurrent(
+    clientGeneration: number,
+    focusAction: FocusSessionAction
+  ): boolean {
+    return (
+      !this.disposed &&
+      clientGeneration === this.clientGeneration &&
+      focusAction === this.focusAction
+    );
+  }
+
   private findCurrentSession(original: LiveSession): LiveSession | null {
     return this.store
       .getState()
@@ -2460,6 +2541,31 @@ function connectionAfterError(connection: ConnectionState, error: unknown, check
 
 function readableError(error: unknown): string {
   return error instanceof Error ? error.message : `An unknown ${PRODUCT_NAME} error occurred.`;
+}
+
+function sameWorkflowProposal(left: WorkflowProposal, right: WorkflowProposal): boolean {
+  return (
+    left.id === right.id &&
+    left.taskId === right.taskId &&
+    left.sessionKey === right.sessionKey &&
+    left.from === right.from &&
+    left.to === right.to &&
+    left.reason === right.reason &&
+    left.explanation === right.explanation &&
+    left.confidence === right.confidence &&
+    left.source === right.source &&
+    left.evidenceId === right.evidenceId &&
+    left.observedAt === right.observedAt &&
+    left.applyAutomatically === right.applyAutomatically
+  );
+}
+
+function focusOutcomeMessage(outcome: FocusAndActivationOutcome): string {
+  const focus = outcome.focus.verified
+    ? `Focused ${outcome.focus.target.workspaceTitle} / ${outcome.focus.target.surfaceTitle} in cmux.`
+    : "cmux accepted the focus command, but the selected surface could not be verified within the bounded retry window.";
+  if (outcome.activationError === null) return `${focus} Brought cmux forward.`;
+  return `${focus} Could not bring cmux forward: ${outcome.activationError}`;
 }
 
 function isAbort(error: unknown): boolean {
