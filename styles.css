@@ -662,6 +662,20 @@
 
 .agent-cockpit-action {
   min-height: 32px;
+  transition:
+    color 120ms var(--ac-ease),
+    background-color 120ms var(--ac-ease),
+    transform 120ms var(--ac-ease);
+}
+
+.agent-cockpit .agent-cockpit-action:not(.mod-cta):hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.agent-cockpit .agent-cockpit-action:not(.mod-cta):active {
+  background: var(--background-modifier-active-hover);
+  transform: translateY(1px);
 }
 
 .agent-cockpit-task-attention-row {
@@ -1144,8 +1158,9 @@
 .agent-cockpit-task-title {
   display: block;
   width: 100%;
-  padding: 0;
+  padding: var(--ac-space-1) var(--ac-space-2);
   border: 0;
+  border-radius: var(--radius-s);
   color: var(--text-normal);
   background: transparent;
   box-shadow: none;
@@ -1153,11 +1168,14 @@
   line-height: 1.35;
   text-align: left;
   white-space: normal;
+  transition:
+    color 120ms var(--ac-ease),
+    background-color 120ms var(--ac-ease);
 }
 
 .agent-cockpit-task-title:hover {
   color: var(--text-accent);
-  background: transparent;
+  background: var(--background-modifier-hover);
 }
 
 .agent-cockpit-task-repository {

@@ -16,13 +16,16 @@ import { renderSessionInbox } from "./SessionInbox";
 import { selectSessionInbox } from "./SessionInboxModel";
 import { renderSessionsPanel } from "./SessionsView";
 import { renderWorkOverview } from "./WorkOverview";
+import { PanelScrollMemory } from "./PanelScrollMemory";
 
 export const AGENT_COCKPIT_VIEW_TYPE = "agent-cockpit-view";
 
 export class AgentCockpitView extends ItemView {
   private unsubscribe: (() => void) | null = null;
   private readonly expanded = new Set<string>();
+  private readonly panelScroll = new PanelScrollMemory<CockpitSection>();
   private activeSection: CockpitSection = "work";
+  private renderedSection: CockpitSection | null = null;
   private pendingFocusKey: string | null = null;
   private showAllInbox = false;
   private headerSlot: HTMLElement | null = null;
@@ -67,6 +70,8 @@ export class AgentCockpitView extends ItemView {
       this.animationFrame = null;
     }
     this.queuedState = null;
+    this.renderedSection = null;
+    this.panelScroll.clear();
     this.contentEl.empty();
   }
 
@@ -103,6 +108,7 @@ export class AgentCockpitView extends ItemView {
     const active = this.contentEl.ownerDocument.activeElement as HTMLElement | null;
     const focusKey = this.pendingFocusKey ?? active?.dataset.focusKey ?? null;
     this.pendingFocusKey = null;
+    this.captureRenderedPanelScroll();
     if (!this.headerSlot || !this.connectionSlot || !this.tabsSlot || !this.panelSlot) {
       this.buildStableShell();
     }
@@ -154,6 +160,8 @@ export class AgentCockpitView extends ItemView {
       const next = this.contentEl.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(focusKey)}"]`);
       next?.focus({ preventScroll: true });
     }
+    this.panelScroll.restore(this.activeSection, panel);
+    this.renderedSection = this.activeSection;
   }
 
   private sessionActions(): SessionCardActions {
@@ -261,9 +269,18 @@ export class AgentCockpitView extends ItemView {
   }
 
   private activateSection(section: CockpitSection): void {
+    this.captureRenderedPanelScroll();
     this.activeSection = section;
     this.pendingFocusKey = `mode-${section}`;
     this.scheduleRender(this.controller.store.getState());
+  }
+
+  private captureRenderedPanelScroll(): void {
+    if (this.renderedSection === null || this.panelSlot === null) return;
+    const panel = this.panelSlot.querySelector<HTMLElement>(
+      `.agent-cockpit-mode-panel--${this.renderedSection}`
+    );
+    if (panel !== null) this.panelScroll.capture(this.renderedSection, panel);
   }
 }
 

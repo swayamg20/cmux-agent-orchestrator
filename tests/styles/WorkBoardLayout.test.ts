@@ -38,4 +38,13 @@ describe("Work board viewport layout", () => {
   it("does not let the Work panel occupy space while another tab is selected", () => {
     expect(declarationsFor(".agent-cockpit-mode-panel[hidden]")).toContain("display: none");
   });
+
+  it("provides explicit themed hover feedback for task and row actions", () => {
+    expect(declarationsFor(".agent-cockpit-task-title:hover")).toContain(
+      "background: var(--background-modifier-hover)"
+    );
+    expect(
+      declarationsFor(".agent-cockpit .agent-cockpit-action:not(.mod-cta):hover")
+    ).toContain("background: var(--background-modifier-hover)");
+  });
 });

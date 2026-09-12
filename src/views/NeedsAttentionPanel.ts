@@ -82,7 +82,11 @@ export function renderNeedsAttentionPanel(
     identity.createDiv({ cls: "agent-cockpit-session-meta", text: item.task?.title ?? "Linked task unavailable" });
     if (item.reasons[0]?.detail) row.createDiv({ cls: "agent-cockpit-attention-detail", text: item.reasons[0].detail });
     if (item.task) {
-      const button = row.createEl("button", { text: "Open task", attr: { type: "button" } });
+      const button = row.createEl("button", {
+        cls: "agent-cockpit-action",
+        text: "Open task",
+        attr: { type: "button" }
+      });
       button.addEventListener("click", () => actions.openTask(item.task!));
     }
   }
