@@ -74,7 +74,7 @@ function proposal(): WorkflowProposal {
 }
 
 describe("WorkflowProposalNotice", () => {
-  it("renders the explanation and routes Apply without allowing duplicate clicks", async () => {
+  it("keeps task-card suggestions compact and routes Apply without duplicate clicks", async () => {
     let release!: (value: boolean) => void;
     const operation = new Promise<boolean>((resolve) => {
       release = resolve;
@@ -90,8 +90,8 @@ describe("WorkflowProposalNotice", () => {
       "task"
     );
     const buttons = root.descendants().filter((element) => element.tag === "button");
-    expect(root.descendants().map((element) => element.text)).toContain("Suggested: Review");
-    expect(root.descendants().map((element) => element.text)).toContain(
+    expect(root.descendants().map((element) => element.text)).toContain("Ready for review");
+    expect(root.descendants().map((element) => element.text)).not.toContain(
       "Fresh structured evidence says the turn completed."
     );
 
@@ -122,6 +122,9 @@ describe("WorkflowProposalNotice", () => {
     const buttons = root.descendants().filter((element) => element.tag === "button");
     expect(root.descendants().map((element) => element.text)).toContain(
       "Safe auto eligible: Review"
+    );
+    expect(root.descendants().map((element) => element.text)).toContain(
+      "Active → Review · Fresh structured evidence says the turn completed."
     );
 
     buttons[1]!.trigger("click");

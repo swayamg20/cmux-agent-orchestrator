@@ -14,23 +14,24 @@ export function renderWorkflowProposalNotice(
   variant: "task" | "attention"
 ): HTMLElement {
   const notice = container.createDiv({
-    cls: `agent-cockpit-workflow-suggestion agent-cockpit-workflow-suggestion--${variant}`
+    cls: `agent-cockpit-workflow-suggestion agent-cockpit-workflow-suggestion--${variant}`,
+    attr: { role: "status", title: proposal.explanation }
   });
   const copy = notice.createDiv({ cls: "agent-cockpit-workflow-suggestion-copy" });
   copy.createDiv({
     cls: "agent-cockpit-workflow-suggestion-title",
-    text: proposal.applyAutomatically
-      ? `Safe auto eligible: ${WORKFLOW_LABELS[proposal.to]}`
-      : `Suggested: ${WORKFLOW_LABELS[proposal.to]}`
+    text: proposalTitle(proposal)
   });
-  copy.createDiv({
-    cls: "agent-cockpit-workflow-suggestion-detail",
-    text: proposal.explanation
-  });
+  if (variant === "attention") {
+    copy.createDiv({
+      cls: "agent-cockpit-workflow-suggestion-detail",
+      text: `${WORKFLOW_LABELS[proposal.from]} → ${WORKFLOW_LABELS[proposal.to]} · ${proposal.explanation}`
+    });
+  }
 
   const controls = notice.createDiv({ cls: "agent-cockpit-workflow-suggestion-actions" });
   const apply = controls.createEl("button", {
-    cls: "mod-cta",
+    cls: "mod-cta agent-cockpit-action",
     text: "Apply",
     attr: {
       type: "button",
@@ -38,6 +39,7 @@ export function renderWorkflowProposalNotice(
     }
   });
   const dismiss = controls.createEl("button", {
+    cls: "agent-cockpit-action",
     text: "Dismiss",
     attr: { type: "button", "aria-label": "Dismiss workflow suggestion" }
   });
@@ -58,6 +60,13 @@ export function renderWorkflowProposalNotice(
   apply.addEventListener("click", () => run(() => actions.apply(proposal)));
   dismiss.addEventListener("click", () => run(() => actions.dismiss(proposal)));
   return notice;
+}
+
+function proposalTitle(proposal: WorkflowProposal): string {
+  if (proposal.applyAutomatically) return `Safe auto eligible: ${WORKFLOW_LABELS[proposal.to]}`;
+  if (proposal.from === "active" && proposal.to === "review") return "Ready for review";
+  if (proposal.from === "review" && proposal.to === "active") return "Agent resumed";
+  return `Suggested: ${WORKFLOW_LABELS[proposal.to]}`;
 }
 
 export function renderAppliedWorkflowChange(

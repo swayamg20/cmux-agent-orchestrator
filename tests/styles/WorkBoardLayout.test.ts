@@ -47,4 +47,12 @@ describe("Work board viewport layout", () => {
       declarationsFor(".agent-cockpit .agent-cockpit-action:not(.mod-cta):hover")
     ).toContain("background: var(--background-modifier-hover)");
   });
+
+  it("keeps workflow suggestions horizontal without exposing card prose", () => {
+    expect(declarationsFor(".agent-cockpit-workflow-suggestion")).toContain("display: flex");
+    expect(declarationsFor(".agent-cockpit-workflow-suggestion")).toContain("flex-wrap: wrap");
+    expect(declarationsFor(".agent-cockpit-workflow-suggestion-detail")).toContain(
+      "text-overflow: ellipsis"
+    );
+  });
 });

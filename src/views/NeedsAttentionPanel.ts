@@ -54,6 +54,14 @@ export function renderNeedsAttentionPanel(
   const list = panel.createDiv({ cls: "agent-cockpit-attention-list" });
   for (const item of state.attention) {
     if (item.session) {
+      const proposal = state.workflowProposals.find(
+        (candidate) =>
+          candidate.taskId === item.task?.taskId &&
+          candidate.sessionKey === item.session?.key
+      );
+      if (proposal !== undefined) {
+        renderWorkflowProposalNotice(list, proposal, actions, "attention");
+      }
       renderSessionCard(list, {
         session: item.session,
         task: item.task,
@@ -66,14 +74,6 @@ export function renderNeedsAttentionPanel(
         actions,
         variant: "attention"
       });
-      const proposal = state.workflowProposals.find(
-        (candidate) =>
-          candidate.taskId === item.task?.taskId &&
-          candidate.sessionKey === item.session?.key
-      );
-      if (proposal !== undefined) {
-        renderWorkflowProposalNotice(list, proposal, actions, "attention");
-      }
       continue;
     }
     const row = list.createDiv({ cls: "agent-cockpit-task-attention-row" });

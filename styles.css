@@ -1208,8 +1208,8 @@
 }
 
 .agent-cockpit-workflow-suggestion {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--ac-space-3);
   padding: var(--ac-space-2) var(--ac-space-3);
@@ -1220,13 +1220,15 @@
 
 .agent-cockpit-workflow-suggestion--task {
   margin-top: var(--ac-space-3);
+  padding: var(--ac-space-2);
 }
 
 .agent-cockpit-workflow-suggestion--attention {
-  margin: 0 var(--ac-space-2) var(--ac-space-2);
+  margin: var(--ac-space-2);
 }
 
 .agent-cockpit-workflow-suggestion-copy {
+  flex: 1 1 220px;
   min-width: 0;
 }
 
@@ -1238,15 +1240,19 @@
 
 .agent-cockpit-workflow-suggestion-detail {
   margin-top: 2px;
+  overflow: hidden;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-cockpit-workflow-suggestion-actions {
   display: flex;
   flex: none;
   gap: var(--ac-space-1);
+  margin-left: auto;
 }
 
 .agent-cockpit-workflow-suggestion-actions button {
@@ -1459,10 +1465,6 @@
   }
 
   .agent-cockpit-task-attention-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .agent-cockpit-workflow-suggestion {
     grid-template-columns: minmax(0, 1fr);
   }
 
