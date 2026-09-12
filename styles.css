@@ -510,18 +510,6 @@
 
 .agent-cockpit-session-body {
   padding: var(--ac-space-2) var(--ac-space-2) var(--ac-space-6) 40px;
-  animation: agent-cockpit-reveal 160ms var(--ac-ease);
-}
-
-@keyframes agent-cockpit-reveal {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 .agent-cockpit-reasons {

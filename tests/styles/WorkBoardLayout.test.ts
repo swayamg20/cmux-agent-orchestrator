@@ -55,4 +55,8 @@ describe("Work board viewport layout", () => {
       "text-overflow: ellipsis"
     );
   });
+
+  it("does not replay an entrance animation whenever an expanded session refreshes", () => {
+    expect(declarationsFor(".agent-cockpit-session-body")).not.toContain("animation:");
+  });
 });

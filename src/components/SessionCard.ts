@@ -28,7 +28,8 @@ export interface SessionCardOptions {
 export function renderSessionCard(container: HTMLElement, options: SessionCardOptions): HTMLDetailsElement {
   const { session } = options;
   const details = container.createEl("details", {
-    cls: `agent-cockpit-session-row agent-cockpit-session-row--${options.variant}`
+    cls: `agent-cockpit-session-row agent-cockpit-session-row--${options.variant}`,
+    attr: { "data-scroll-anchor": session.key }
   });
   details.open = options.expanded;
   const summary = details.createEl("summary", { cls: "agent-cockpit-session-summary" });

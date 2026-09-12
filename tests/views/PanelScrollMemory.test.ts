@@ -35,4 +35,34 @@ describe("PanelScrollMemory", () => {
 
     expect(element).toEqual({ scrollLeft: 0, scrollTop: 0 });
   });
+
+  it("keeps the same row at the same viewport offset when content above it changes", () => {
+    const memory = new PanelScrollMemory<"cmux">();
+    const before = scrollFixture(200, [{ key: "target", documentTop: 220, height: 80 }]);
+    memory.capture("cmux", before);
+    const after = scrollFixture(0, [{ key: "target", documentTop: 300, height: 80 }]);
+
+    memory.restore("cmux", after);
+
+    expect(after.scrollTop).toBe(280);
+  });
 });
+
+function scrollFixture(
+  initialScrollTop: number,
+  rows: Array<{ key: string; documentTop: number; height: number }>
+) {
+  const element = {
+    scrollLeft: 0,
+    scrollTop: initialScrollTop,
+    getBoundingClientRect: () => ({ top: 0, bottom: 500 }),
+    querySelectorAll: () => rows.map((row) => ({
+      dataset: { scrollAnchor: row.key },
+      getBoundingClientRect: () => ({
+        top: row.documentTop - element.scrollTop,
+        bottom: row.documentTop - element.scrollTop + row.height
+      })
+    }))
+  };
+  return element;
+}
