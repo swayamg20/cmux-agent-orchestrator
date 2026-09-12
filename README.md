@@ -35,6 +35,7 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 - Bounded, memory-only terminal previews loaded only when a session is expanded or explicitly requested.
 - Exact Focus in cmux with fresh target resolution and bounded postcondition retries.
 - Markdown task creation and workflow states: Backlog, Active, Review, Parked, and Done.
+- Automatic repository hub links that connect same-repository task notes in Obsidian's graph without creating pairwise task links.
 - Off, Suggest, and Safe auto workflow-automation modes, with conservative suggestions enabled by default.
 - Guarded Apply and Dismiss actions for workflow proposals, plus a visible marker for safely auto-applied changes.
 - Machine-scoped task, run-history, surface, provider-conversation, and proposal-dismissal records in schema-v5 plugin data.
@@ -64,7 +65,7 @@ Exact, uniquely resolved Claude and Codex sessions become one neutral Active Mar
 
 If a linked task note is moved outside the configured task folder or deleted, the machine-local binding and run history are preserved and Work shows `Linked task note missing`. The plugin never recreates or deletes that note automatically; the user can explicitly attach the live session to an existing task or create a replacement.
 
-Task-note content changes, moves, and deletions are observed only for the configured task tree and its containing folders. Unrelated vault paths are ignored, and these events do not trigger cmux or provider reads.
+Task-note and managed repository-hub changes, moves, and deletions are observed only for their configured trees and containing folders. Unrelated vault paths are ignored, and these events do not trigger cmux or provider reads.
 
 `Track in board` remains available for manual cases: it opens a prefilled form, writes an Active durable task note, and attaches the exact cmux surface. The row's overflow menu provides Focus in cmux, Attach to existing task, and Choose provider conversation. A saved exact manual association takes precedence when it remains consistent with current evidence; the picker refuses a choice that contradicts a fresh exact cmux or provider-process identity. Moving any board card changes workflow only and never controls the agent. Workflow proposals remain separate, explain their evidence, and can be applied or dismissed from Attention or the dedicated board.
 
@@ -109,6 +110,7 @@ title: Human-readable task title
 workflow-status: active
 priority: normal
 repository:
+repository-note: "[[Agent Cockpit/Repositories/example-a1b2c3d4e5f6|example]]"
 branch:
 worktree:
 run-count: 0
@@ -116,6 +118,8 @@ created-at:
 updated-at:
 ---
 ```
+
+For every non-empty repository path, the plugin creates or reuses one managed note in a `Repositories/` folder beside the configured task folder. Every matching task receives a `repository-note` wikilink to that hub, so Obsidian's graph and backlinks connect all Claude and Codex work for the repository without an all-to-all link mesh. A stable hash of the normalized absolute path keeps repositories with the same basename distinct. Existing managed tasks are backfilled through Obsidian's frontmatter API without replacing their user-authored body, and repeated reconciliation is idempotent. Clearing a task's repository removes only this managed link. The original `repository` field remains the runtime matching value.
 
 cmux UUIDs and provider observations do not go into task frontmatter. Automatically created notes use a deterministic task UUID derived from the provider kind and canonical provider session ID without embedding or displaying that original ID. Plugin `data.json` schema version 5 stores settings, surface bindings, durable run relationships, idempotent task run-count targets, exact cmux-surface-to-provider-session-ID mappings, and a bounded set of dismissed workflow-proposal IDs under a one-way hashed machine namespace. Existing schema-v1 through schema-v4 data migrate in memory and are written as v5 on the next plugin-data mutation. Conversation titles, provider previews, terminal previews, notification bodies, event payloads, evidence ledgers, output fingerprints, source-health snapshots, and recent auto-apply markers remain memory-only.
 

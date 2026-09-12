@@ -1,4 +1,5 @@
 import { TFile, TFolder, type App } from "obsidian";
+import { parse as parseYamlDocument } from "yaml";
 
 export interface MemoryTaskAppOptions {
   failFrontmatterWrites?: number;
@@ -19,7 +20,11 @@ export interface MemoryTaskApp {
   createdFolderPaths: string[];
   markdownWrites: string[];
   createdPaths: string[];
+  repositoryHubMarkdownWrites: string[];
+  repositoryHubPaths: string[];
   frontmatterWriteAttempts: () => number;
+  frontmatterAt(path: string): Record<string, unknown> | null;
+  markdownAt(path: string): string | null;
   replaceFrontmatter(path: string, value: Record<string, unknown>): void;
   replaceMarkdown(path: string, markdown: string): void;
   replaceFile(path: string, frontmatter?: Record<string, unknown>): TFile;
@@ -37,15 +42,11 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
   const markdownByFile = new Map<TFile, string>();
   const markdownWrites: string[] = [];
   const createdPaths: string[] = [];
+  const repositoryHubMarkdownWrites: string[] = [];
+  const repositoryHubPaths: string[] = [];
   const createdFolderPaths: string[] = [];
   let createAttempts = 0;
   let frontmatterWriteAttempts = 0;
-  const line = (markdown: string, key: string): string => {
-    const match = markdown.match(new RegExp(`^${key}: (.+)$`, "m"));
-    if (!match?.[1]) throw new Error(`Missing ${key} in task fixture.`);
-    return match[1];
-  };
-  const jsonLine = (markdown: string, key: string): unknown => JSON.parse(line(markdown, key));
   const createFolder = async (path: string): Promise<void> => {
     await options.beforeCreateFolder?.(path);
     createdFolderPaths.push(path);
@@ -67,10 +68,17 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
       },
       createFolder,
       create: async (path: string, markdown: string) => {
-        createAttempts += 1;
-        await options.beforeCreate?.();
-        createdPaths.push(path);
-        markdownWrites.push(markdown);
+        const frontmatter = markdownFrontmatter(markdown);
+        const isTask = frontmatter["agent-cockpit"] === "task";
+        if (isTask) {
+          createAttempts += 1;
+          await options.beforeCreate?.();
+          createdPaths.push(path);
+          markdownWrites.push(markdown);
+        } else {
+          repositoryHubPaths.push(path);
+          repositoryHubMarkdownWrites.push(markdown);
+        }
         const name = path.split("/").pop() ?? path;
         const parent = entries.get(path.split("/").slice(0, -1).join("/"));
         const created = Object.assign(new TFile(), {
@@ -84,32 +92,19 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
         entries.set(path, created);
         markdownByFile.set(created, markdown);
         if (parent instanceof TFolder) parent.children.push(created);
-        cachedFrontmatter.set(created, {
-          "agent-cockpit": "task",
-          "schema-version": 1,
-          "task-id": jsonLine(markdown, "task-id"),
-          title: jsonLine(markdown, "title"),
-          "workflow-status": line(markdown, "workflow-status"),
-          priority: line(markdown, "priority"),
-          repository: jsonLine(markdown, "repository"),
-          branch: jsonLine(markdown, "branch"),
-          worktree: jsonLine(markdown, "worktree"),
-          "run-count": Number(line(markdown, "run-count")),
-          "created-at": jsonLine(markdown, "created-at"),
-          "updated-at": jsonLine(markdown, "updated-at")
-        });
-        await options.afterCreateMutation?.(path, created);
-        if (options.removeAfterCreate) {
+        cachedFrontmatter.set(created, frontmatter);
+        if (isTask) await options.afterCreateMutation?.(path, created);
+        if (isTask && options.removeAfterCreate) {
           queueMicrotask(() => {
             entries.delete(path);
             const index = parent instanceof TFolder ? parent.children.indexOf(created) : -1;
             if (parent instanceof TFolder && index >= 0) parent.children.splice(index, 1);
           });
         }
-        if (
+        if (isTask && (
           createAttempts <= (options.failCreatesAfterMutation ?? 0) ||
           options.failCreateAttemptsAfterMutation?.includes(createAttempts) === true
-        ) {
+        )) {
           throw new Error("simulated post-create vault failure");
         }
         return created;
@@ -147,7 +142,19 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
     createdFolderPaths,
     markdownWrites,
     createdPaths,
+    repositoryHubMarkdownWrites,
+    repositoryHubPaths,
     frontmatterWriteAttempts: () => frontmatterWriteAttempts,
+    frontmatterAt: (path) => {
+      const entry = entries.get(path);
+      if (!(entry instanceof TFile)) return null;
+      return cachedFrontmatter.get(entry) ?? null;
+    },
+    markdownAt: (path) => {
+      const entry = entries.get(path);
+      if (!(entry instanceof TFile)) return null;
+      return markdownByFile.get(entry) ?? null;
+    },
     replaceFrontmatter: (path, value) => {
       const entry = entries.get(path);
       if (!(entry instanceof TFile)) throw new Error(`Missing task fixture at ${path}.`);
@@ -253,4 +260,14 @@ export function createMemoryTaskApp(options: MemoryTaskAppOptions = {}): MemoryT
       return renamedFolder;
     }
   };
+}
+
+function markdownFrontmatter(markdown: string): Record<string, unknown> {
+  const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (match?.[1] === undefined) throw new Error("Missing frontmatter in task fixture.");
+  const parsed: unknown = parseYamlDocument(match[1]) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Invalid frontmatter in task fixture.");
+  }
+  return parsed as Record<string, unknown>;
 }

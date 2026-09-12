@@ -9,6 +9,15 @@ import {
 } from "obsidian";
 import { canonicalUuidEquals, normalizeCanonicalUuid } from "../security/identifiers";
 import { pathAffectsTaskFolder } from "./TaskFolderEvents";
+import {
+  createRepositoryHubMarkdown,
+  REPOSITORY_LINK_PROPERTY,
+  repositoryGraphTarget,
+  repositoryHubFolder,
+  repositoryHubFrontmatterMatches,
+  repositoryHubMarkdownMatches,
+  type RepositoryGraphTarget
+} from "./RepositoryGraph";
 import { createTaskMarkdown, type NewTaskInput } from "./TaskTemplate";
 import {
   assertWorkflowTransition,
@@ -45,6 +54,12 @@ export interface TaskInvalidationEvidence {
 export interface TaskRenameEvidence {
   file: TAbstractFile;
   oldPath: string;
+}
+
+export interface RepositoryGraphSyncResult {
+  hubsCreated: number;
+  tasksLinked: number;
+  staleLinksRemoved: number;
 }
 
 type MutationGuard = () => boolean;
@@ -131,9 +146,13 @@ export class TaskRepository {
   }
 
   observesVaultPath(path: string): boolean {
-    const folders = new Set([
+    const taskFolders = new Set([
       this.taskFolder,
       ...this.scope.pendingCreatesByFolder?.keys() ?? []
+    ]);
+    const folders = new Set([
+      ...taskFolders,
+      ...[...taskFolders].map((folder) => repositoryHubFolder(folder))
     ]);
     return [...folders].some((folder) => pathAffectsTaskFolder(path, folder));
   }
@@ -236,6 +255,27 @@ export class TaskRepository {
     });
   }
 
+  async reconcileRepositoryGraph(
+    canMutate?: MutationGuard
+  ): Promise<RepositoryGraphSyncResult | null> {
+    const taskFolder = this.taskFolder;
+    return this.enqueueMutation(async () => {
+      if (!this.repositoryGraphMutationAllowed(taskFolder, canMutate)) return null;
+      return this.reconcileRepositoryGraphTasks(this.list(), taskFolder, canMutate);
+    });
+  }
+
+  async reconcileTaskRepositoryGraph(
+    task: TaskRecord,
+    canMutate?: MutationGuard
+  ): Promise<RepositoryGraphSyncResult | null> {
+    const taskFolder = this.taskFolder;
+    return this.enqueueMutation(async () => {
+      if (!this.repositoryGraphMutationAllowed(taskFolder, canMutate)) return null;
+      return this.reconcileRepositoryGraphTasks([task], taskFolder, canMutate);
+    });
+  }
+
   async ensure(options: EnsureTaskOptions): Promise<EnsureTaskResult>;
   async ensure(
     options: EnsureTaskOptions,
@@ -288,12 +328,14 @@ export class TaskRepository {
     if (!(await this.ensureFolder(taskFolder, canMutate))) return null;
     if (canMutate && !canMutate()) return null;
     const now = new Date().toISOString();
+    const repository = taskContext(options.repository, "Repository", 4_096);
     const input: NewTaskInput = {
       title,
       taskId: normalizedTaskId,
       workflowStatus: options.workflowStatus ?? "active",
       priority: options.priority ?? "normal",
-      repository: taskContext(options.repository, "Repository", 4_096),
+      repository,
+      repositoryNote: repositoryGraphTarget(taskFolder, repository)?.link ?? null,
       branch: taskContext(options.branch, "Branch", 512),
       worktree: taskContext(options.worktree, "Worktree", 4_096),
       now
@@ -802,6 +844,132 @@ export class TaskRepository {
     return true;
   }
 
+  private async reconcileRepositoryGraphTasks(
+    tasks: readonly TaskRecord[],
+    taskFolder: string,
+    canMutate?: MutationGuard
+  ): Promise<RepositoryGraphSyncResult | null> {
+    const result: RepositoryGraphSyncResult = {
+      hubsCreated: 0,
+      tasksLinked: 0,
+      staleLinksRemoved: 0
+    };
+    const ensuredHubs = new Set<string>();
+
+    for (const task of tasks) {
+      if (!this.repositoryGraphMutationAllowed(taskFolder, canMutate)) return null;
+      const latest = this.resolveExactTask(task, taskFolder);
+      const target = repositoryGraphTarget(taskFolder, latest.repository);
+      if (target !== null && !ensuredHubs.has(target.repositoryId)) {
+        const created = await this.ensureRepositoryHub(target, taskFolder, canMutate);
+        if (created === null) return null;
+        if (created) result.hubsCreated += 1;
+        ensuredHubs.add(target.repositoryId);
+      }
+      if (!this.repositoryGraphMutationAllowed(taskFolder, canMutate)) return null;
+
+      const cachedFrontmatter = this.app.metadataCache.getFileCache(latest.file)?.frontmatter;
+      const currentLink = frontmatterProperty(cachedFrontmatter, REPOSITORY_LINK_PROPERTY);
+      const desiredLink = target?.link ?? null;
+      if (
+        (desiredLink === null && currentLink.kind === "missing") ||
+        (desiredLink !== null && currentLink.kind === "value" && currentLink.value === desiredLink)
+      ) {
+        continue;
+      }
+
+      let changed = false;
+      await this.app.fileManager.processFrontMatter(
+        latest.file,
+        (frontmatter: Record<string, unknown>) => {
+          if (!this.repositoryGraphMutationAllowed(taskFolder, canMutate)) return;
+          this.assertExactTaskFile(latest.file, taskFolder);
+          if (!frontmatterTaskIdMatches(frontmatter["task-id"], latest.taskId)) {
+            throw new Error("Task identity changed before its repository link could be updated.");
+          }
+          const currentTarget = repositoryGraphTarget(
+            taskFolder,
+            frontmatterText(frontmatter.repository, 4_096)
+          );
+          if (currentTarget?.repositoryId !== target?.repositoryId) {
+            throw new Error("Task repository changed before its graph link could be updated.");
+          }
+          if (desiredLink === null) {
+            if (Object.prototype.hasOwnProperty.call(frontmatter, REPOSITORY_LINK_PROPERTY)) {
+              delete frontmatter[REPOSITORY_LINK_PROPERTY];
+              changed = true;
+            }
+            return;
+          }
+          if (frontmatter[REPOSITORY_LINK_PROPERTY] !== desiredLink) {
+            frontmatter[REPOSITORY_LINK_PROPERTY] = desiredLink;
+            changed = true;
+          }
+        }
+      );
+      if (!this.repositoryGraphMutationAllowed(taskFolder, canMutate)) return null;
+      if (!changed) continue;
+      if (desiredLink === null) result.staleLinksRemoved += 1;
+      else result.tasksLinked += 1;
+    }
+    return result;
+  }
+
+  private async ensureRepositoryHub(
+    target: RepositoryGraphTarget,
+    taskFolder: string,
+    canMutate?: MutationGuard
+  ): Promise<boolean | null> {
+    if (!(await this.ensureFolder(target.folderPath, canMutate))) return null;
+    if (!this.repositoryGraphMutationAllowed(taskFolder, canMutate)) return null;
+
+    const existing = this.app.vault.getAbstractFileByPath(target.filePath);
+    if (existing !== null) {
+      await this.assertMatchingRepositoryHub(existing, target);
+      return false;
+    }
+
+    const markdown = createRepositoryHubMarkdown(target);
+    try {
+      await this.app.vault.create(target.filePath, markdown);
+      return true;
+    } catch (createError) {
+      const created = this.app.vault.getAbstractFileByPath(target.filePath);
+      if (created === null) throw createError;
+      try {
+        await this.assertMatchingRepositoryHub(created, target);
+        return true;
+      } catch {
+        throw createError;
+      }
+    }
+  }
+
+  private async assertMatchingRepositoryHub(
+    file: TAbstractFile,
+    target: RepositoryGraphTarget
+  ): Promise<void> {
+    if (!(file instanceof TFile) || file.extension !== "md") {
+      throw new Error(`${target.filePath} is occupied and is not a repository note.`);
+    }
+    const cachedFrontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    if (repositoryHubFrontmatterMatches(cachedFrontmatter, target)) return;
+    if (typeof file.stat.size === "number" && file.stat.size > 16_384) {
+      throw new Error(`${target.filePath} is occupied by an unverified note.`);
+    }
+    const markdown = await this.app.vault.read(file);
+    if (!repositoryHubMarkdownMatches(markdown, target)) {
+      throw new Error(`${target.filePath} is occupied by an unverified note.`);
+    }
+  }
+
+  private repositoryGraphMutationAllowed(
+    taskFolder: string,
+    canMutate?: MutationGuard
+  ): boolean {
+    return this.taskFolder === taskFolder && (canMutate === undefined || canMutate());
+  }
+
   private indexedTasks(taskFolder = this.taskFolder): TaskRecord[] {
     return this.taskFiles(taskFolder)
       .map((file) => parseTaskRecord(file, this.app.metadataCache.getFileCache(file)?.frontmatter))
@@ -1073,6 +1241,27 @@ function frontmatterTaskIdMatches(value: unknown, taskId: string): boolean {
 
 function workflowStatusFromFrontmatter(value: unknown): WorkflowStatus {
   return isWorkflowStatus(value) ? value : "backlog";
+}
+
+function frontmatterProperty(
+  frontmatter: unknown,
+  key: string
+): { kind: "missing" } | { kind: "value"; value: unknown } {
+  if (
+    typeof frontmatter !== "object" ||
+    frontmatter === null ||
+    Array.isArray(frontmatter) ||
+    !Object.prototype.hasOwnProperty.call(frontmatter, key)
+  ) {
+    return { kind: "missing" };
+  }
+  return { kind: "value", value: (frontmatter as Record<string, unknown>)[key] };
+}
+
+function frontmatterText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized ? normalized.slice(0, maxLength) : null;
 }
 
 function taskRecordFromCreate(file: TFile, input: NewTaskInput): TaskRecord {

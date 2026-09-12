@@ -1,6 +1,7 @@
 import { TFile, TFolder, type App } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
 import { TaskRepository } from "../../src/tasks/TaskRepository";
+import { repositoryGraphTarget } from "../../src/tasks/RepositoryGraph";
 import { createTaskMarkdown } from "../../src/tasks/TaskTemplate";
 import { createMemoryTaskApp } from "../helpers/memoryTaskApp";
 
@@ -127,6 +128,83 @@ describe("TaskRepository", () => {
 
     repository.setTaskFolder("Different Tasks");
     expect(repository.list()).toEqual([]);
+  });
+
+  it("links same-repository tasks through one idempotent managed hub", async () => {
+    const memory = createMemoryTaskApp();
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const first = await repository.create({ title: "First run", repository: "/work/repo/" });
+    await repository.create({ title: "Second run", repository: "/work/repo" });
+    const firstFrontmatter = memory.frontmatterAt(first.file.path);
+    if (firstFrontmatter === null) throw new Error("Missing first task fixture.");
+    delete firstFrontmatter["repository-note"];
+    const userMarkdown = `${memory.markdownAt(first.file.path) ?? ""}\nUser-owned context remains.\n`;
+    memory.replaceMarkdown(first.file.path, userMarkdown);
+
+    const firstSync = await repository.reconcileRepositoryGraph();
+    const target = repositoryGraphTarget("Agent Cockpit/Tasks", "/work/repo");
+
+    expect(firstSync).toEqual({ hubsCreated: 1, tasksLinked: 1, staleLinksRemoved: 0 });
+    expect(memory.repositoryHubPaths).toEqual([target?.filePath]);
+    expect(memory.frontmatterAt(first.file.path)?.["repository-note"]).toBe(target?.link);
+    expect(memory.markdownAt(first.file.path)).toBe(userMarkdown);
+    expect(memory.frontmatterWriteAttempts()).toBe(1);
+
+    await expect(repository.reconcileRepositoryGraph()).resolves.toEqual({
+      hubsCreated: 0,
+      tasksLinked: 0,
+      staleLinksRemoved: 0
+    });
+    expect(memory.repositoryHubPaths).toHaveLength(1);
+    expect(memory.frontmatterWriteAttempts()).toBe(1);
+  });
+
+  it("uses distinct managed hubs for repositories with the same basename", async () => {
+    const memory = createMemoryTaskApp();
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    await repository.create({ title: "GitHub API", repository: "/work/github/api" });
+    await repository.create({ title: "GitLab API", repository: "/work/gitlab/api" });
+
+    await expect(repository.reconcileRepositoryGraph()).resolves.toMatchObject({
+      hubsCreated: 2
+    });
+    expect(new Set(memory.repositoryHubPaths).size).toBe(2);
+    expect(memory.repositoryHubPaths.every((path) => /\/api-[a-f0-9]{12}\.md$/.test(path))).toBe(true);
+  });
+
+  it("removes a stale managed repository link when a task has no repository", async () => {
+    const memory = createMemoryTaskApp();
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const task = await repository.create({ title: "Unscoped task" });
+    const frontmatter = memory.frontmatterAt(task.file.path);
+    if (frontmatter === null) throw new Error("Missing task fixture.");
+    frontmatter["repository-note"] = "[[Repositories/old|old]]";
+
+    await expect(repository.reconcileRepositoryGraph()).resolves.toEqual({
+      hubsCreated: 0,
+      tasksLinked: 0,
+      staleLinksRemoved: 1
+    });
+    expect(memory.frontmatterAt(task.file.path)).not.toHaveProperty("repository-note");
+    expect(memory.repositoryHubPaths).toEqual([]);
+  });
+
+  it("fails closed instead of overwriting an occupied repository-hub path", async () => {
+    const memory = createMemoryTaskApp();
+    const repository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    await repository.create({ title: "Run", repository: "/work/repo" });
+    const target = repositoryGraphTarget("Agent Cockpit/Tasks", "/work/repo");
+    if (target === null) throw new Error("Missing repository target fixture.");
+    await memory.app.vault.createFolder(target.folderPath);
+    await memory.app.vault.create(
+      target.filePath,
+      "---\ntype: user-note\n---\n\nDo not overwrite me.\n"
+    );
+
+    await expect(repository.reconcileRepositoryGraph()).rejects.toThrow(
+      `${target.filePath} is occupied by an unverified note.`
+    );
+    expect(memory.markdownAt(target.filePath)).toContain("Do not overwrite me.");
   });
 
   it("serializes concurrent deterministic task creation", async () => {

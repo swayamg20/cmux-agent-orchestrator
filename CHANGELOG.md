@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Add a dedicated reusable Work board tab with task/context search, live-run filtering, independently scrolling columns, responsive controls, and preserved keyboard focus/scroll position.
+- Connect tasks from the same repository in Obsidian's graph through one automatically managed, collision-safe repository hub note, including non-destructive backfill for existing managed tasks.
 - Add an explicit bulk-review flow for Active tasks without present linked runs. Selected tasks move to Parked only after fresh topology, current task state, and live-session absence are revalidated before each write.
 - Decode the current bounded `cmux sessions --json` lifecycle shape when `list-agents` is unavailable, including conservative generation selection and conflict rejection.
 

@@ -270,6 +270,39 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("backfills repository graph links automatically during initialization", async () => {
+    const memory = memoryTaskApp();
+    const taskRepository = new TaskRepository(memory.app, "Agent Cockpit/Tasks");
+    const task = await taskRepository.create({
+      title: "Existing agent task",
+      repository: "/work/repository"
+    });
+    const frontmatter = memory.frontmatterAt(task.file.path);
+    if (frontmatter === null) throw new Error("Missing task frontmatter fixture.");
+    delete frontmatter["repository-note"];
+    const plugin = {
+      loadData: async () => ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(
+      memory.app,
+      plugin,
+      async () => new CmuxClient(connectedTransport(275))
+    );
+
+    await controller.initialize();
+    await vi.waitFor(() => {
+      expect(memory.repositoryHubPaths).toHaveLength(1);
+      expect(memory.frontmatterAt(task.file.path)?.["repository-note"]).toMatch(
+        /^\[\[Agent Cockpit\/Repositories\/repository-[a-f0-9]{12}\|repository\]\]$/
+      );
+    });
+    expect(
+      controller.observesTaskVaultPath("Agent Cockpit/Repositories/repository-example.md")
+    ).toBe(true);
+    controller.dispose();
+  });
+
   it("preserves an initial access-blocked error during later manual refresh attempts", async () => {
     const app = {
       vault: {

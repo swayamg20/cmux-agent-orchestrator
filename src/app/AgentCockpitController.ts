@@ -142,6 +142,7 @@ export class AgentCockpitController {
   private focusAction: FocusSessionAction | null = null;
   private taskRepository: TaskRepository | null = null;
   private settings: AgentCockpitSettings | null = null;
+  private repositoryGraphIssue: string | null = null;
   private disposed = false;
 
   constructor(
@@ -231,6 +232,10 @@ export class AgentCockpitController {
       this.settings = this.bindings.getSettings();
       this.taskRepository = new TaskRepository(this.app, this.settings.taskFolder);
       await this.repairPersistedRunCounts(
+        this.taskRepository,
+        this.settings.taskFolder
+      );
+      void this.synchronizeRepositoryGraph(
         this.taskRepository,
         this.settings.taskFolder
       );
@@ -641,6 +646,11 @@ export class AgentCockpitController {
       await this.waitForSettingsUpdates();
       if (this.disposed) return task;
       const activeTaskFolder = this.requireSettings().taskFolder;
+      const activeRepository = this.requireTaskRepository();
+      if (activeTaskFolder === taskFolder) {
+        await this.synchronizeRepositoryGraph(activeRepository, activeTaskFolder, task);
+      }
+      if (this.disposed) return task;
       const activeTasks = this.requireTaskRepository().list();
       const activeTask = activeTasks.find(
         (candidate) => candidate.taskId === task.taskId && candidate.file.path === task.file.path
@@ -879,6 +889,7 @@ export class AgentCockpitController {
     if (this.disposed || repository === null || taskFolder === undefined) return;
     repository.invalidateVaultEvents(invalidations, renames);
     await this.repairPersistedRunCounts(repository, taskFolder);
+    void this.synchronizeRepositoryGraph(repository, taskFolder);
     if (this.disposed) return;
     this.store.update({ tasks: this.requireTaskRepository().list() });
     this.recomputeSessions();
@@ -1568,6 +1579,9 @@ export class AgentCockpitController {
 
   private async reconcileAutomaticTasks(generation: number): Promise<void> {
     if (!this.automaticTrackingAllowed(generation) || this.taskRepository === null) return;
+    const repository = this.taskRepository;
+    const taskFolder = this.settings?.taskFolder;
+    if (taskFolder === undefined) return;
 
     const relocated = await this.relocateResumedProviderSessions(generation);
     let changed = relocated > 0;
@@ -1641,6 +1655,13 @@ export class AgentCockpitController {
           continue;
         }
         changed ||= ensured.created;
+
+        await this.synchronizeRepositoryGraph(
+          repository,
+          taskFolder,
+          ensured.task,
+          () => this.automaticTrackingAllowed(generation)
+        );
 
         if (!this.automaticTrackingAllowed(generation)) break;
 
@@ -1887,6 +1908,31 @@ export class AgentCockpitController {
       runs: this.bindings.listRuns()
     });
     this.recomputeSessions();
+  }
+
+  private async synchronizeRepositoryGraph(
+    repository: TaskRepository,
+    taskFolder: string,
+    task: TaskRecord | null = null,
+    additionalGuard?: () => boolean
+  ): Promise<void> {
+    const canMutate = (): boolean =>
+      !this.disposed &&
+      this.taskRepository === repository &&
+      this.settings?.taskFolder === taskFolder &&
+      (additionalGuard === undefined || additionalGuard());
+    if (!canMutate()) return;
+    try {
+      if (task === null) await repository.reconcileRepositoryGraph(canMutate);
+      else await repository.reconcileTaskRepositoryGraph(task, canMutate);
+      if (canMutate()) this.repositoryGraphIssue = null;
+    } catch (error) {
+      if (!canMutate()) return;
+      const message = `Could not update repository graph links: ${readableError(error)}`;
+      if (message === this.repositoryGraphIssue) return;
+      this.repositoryGraphIssue = message;
+      new Notice(message);
+    }
   }
 
   private resolveCurrentAutomaticCandidate(candidate: AutomaticTrackCandidate): LiveSession | null {

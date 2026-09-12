@@ -6,6 +6,7 @@ export interface NewTaskInput {
   workflowStatus: WorkflowStatus;
   priority: TaskPriority;
   repository: string | null;
+  repositoryNote?: string | null;
   branch: string | null;
   worktree: string | null;
   now: string;
@@ -20,6 +21,9 @@ function heading(value: string): string {
 }
 
 export function createTaskMarkdown(input: NewTaskInput): string {
+  const repositoryNote = input.repositoryNote == null
+    ? ""
+    : `repository-note: ${yamlString(input.repositoryNote)}\n`;
   return `---
 agent-cockpit: task
 schema-version: 1
@@ -28,7 +32,7 @@ title: ${yamlString(heading(input.title))}
 workflow-status: ${input.workflowStatus}
 priority: ${input.priority}
 repository: ${yamlString(input.repository)}
-branch: ${yamlString(input.branch)}
+${repositoryNote}branch: ${yamlString(input.branch)}
 worktree: ${yamlString(input.worktree)}
 run-count: 0
 created-at: ${yamlString(input.now)}
