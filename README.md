@@ -89,6 +89,7 @@ Maintainers should follow the complete [release procedure](docs/RELEASING.md), i
 
 ## Project documentation
 
+- [Release roadmap](docs/ROADMAP.md)
 - [Product principles](PRODUCT.md)
 - [Design system](DESIGN.md)
 - [Detailed design brief](docs/DESIGN_BRIEF.md)
