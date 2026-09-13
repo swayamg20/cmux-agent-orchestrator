@@ -30,10 +30,7 @@ function directoryEntry(name: string, file: boolean): FakeDirectoryEntry {
   return { name, isFile: () => file };
 }
 
-function fakeDirectory(entries: FakeDirectoryEntry[]): {
-  read: ReturnType<typeof vi.fn>;
-  close: ReturnType<typeof vi.fn>;
-} {
+function fakeDirectory(entries: FakeDirectoryEntry[]) {
   let cursor = 0;
   return {
     read: vi.fn(async () => entries[cursor++] ?? null),

@@ -150,8 +150,8 @@ describe("cmux 0.62.2 decoders", () => {
   });
 
   it("fails closed on malformed or truncated output", () => {
-    expect(() => decodeTree('{"windows":[', Date.now())).toThrowError(CmuxError);
-    expect(() => decodeNotifications('{"notifications":[]}')).toThrowError(/must be an array/);
+    expect(() => decodeTree('{"windows":[', Date.now())).toThrow(CmuxError);
+    expect(() => decodeNotifications('{"notifications":[]}')).toThrow(/must be an array/);
   });
 
   it("rejects non-canonical identities even when the JSON shape is otherwise valid", async () => {
@@ -159,6 +159,6 @@ describe("cmux 0.62.2 decoders", () => {
       '"id": "44444444-4444-4444-8444-444444444444"',
       '"id": "surface:1"'
     );
-    expect(() => decodeTree(tree, Date.now())).toThrowError(/canonical UUID/);
+    expect(() => decodeTree(tree, Date.now())).toThrow(/canonical UUID/);
   });
 });

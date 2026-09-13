@@ -12,7 +12,11 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 
 ### Work
 
-![Work view with attention signals and the durable task board](screenshots/work.png)
+![Work view with compact attention signals and the durable workflow summary](screenshots/work.png)
+
+### Work board
+
+![Dedicated searchable Work board with independently scrolling workflow columns](screenshots/work-board.png)
 
 ### Agent runs
 
@@ -21,6 +25,10 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 ### cmux
 
 ![Live cmux workspace, pane, and terminal-surface hierarchy](screenshots/cmux.png)
+
+### Repository graph
+
+![Repository hub connecting multiple agent task notes in Obsidian's graph](screenshots/repository-graph.png)
 
 ## What the current build provides
 

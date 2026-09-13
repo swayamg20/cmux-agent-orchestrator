@@ -4,11 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-13
+
 ### Added
 
 - Add a dedicated reusable Work board tab with task/context search, live-run filtering, independently scrolling columns, responsive controls, and preserved keyboard focus/scroll position.
 - Connect tasks from the same repository in Obsidian's graph through one automatically managed, collision-safe repository hub note, including non-destructive backfill for existing managed tasks.
 - Add an explicit bulk-review flow for Active tasks without present linked runs. Selected tasks move to Parked only after fresh topology, current task state, and live-session absence are revalidated before each write.
+- Add a guarded `Review in cmux` action that applies the current review proposal, focuses the exact live surface, and requests foreground activation as separately reported outcomes.
 - Decode the current bounded `cmux sessions --json` lifecycle shape when `list-agents` is unavailable, including conservative generation selection and conflict rejection.
 
 ### Changed
@@ -21,10 +24,13 @@ All notable changes to this project will be documented in this file.
 
 - Restore structured lifecycle state on current cmux releases that replaced `list-agents` with `sessions --json`, without breaking snapshot-only legacy builds.
 - Keep board filtering, selection, and high-volume task lists inside bounded horizontal and per-column scrollers instead of extending the whole Obsidian page.
+- Present review-ready output in a compact attention row, preserve expanded-panel position across live refreshes, and keep task actions visibly interactive with mouse and keyboard focus.
+- Resolve and verify the complete cmux window, workspace, pane, and surface target before focusing, so similarly named sessions do not select the wrong terminal.
 
 ### Security
 
 - Fail closed on missing, stale, conflicting, or unsupported lifecycle data, and revalidate every explicit bulk Park write against the latest in-memory authority and compare-and-set task revision.
+- Upgrade the development test runner and YAML parser to versions containing the current upstream security fixes; neither dependency is shipped in the plugin bundle.
 
 ## [0.4.0] - 2026-09-06
 

@@ -4,15 +4,15 @@ cmux Agent Orchestrator is moving from a trustworthy observation and work-tracki
 
 The roadmap describes planned behavior, not the current release. See the [README](../README.md) for shipped capabilities and the [changelog](../CHANGELOG.md) for completed changes.
 
-## Current release: 0.4.0
+## Current release: 0.5.0
 
-The current public release observes existing cmux sessions, correlates exact Claude Code and Codex conversations when evidence permits, tracks durable Markdown work, and offers guarded workflow suggestions. It does not send terminal input or run an autonomous coordinator.
+The current public release observes existing cmux sessions, restores structured lifecycle state on current and legacy cmux builds, correlates exact Claude Code and Codex conversations when evidence permits, and tracks durable Markdown work through a focused board. It can apply a guarded review transition and focus that exact cmux surface, but it does not send terminal input or run an autonomous coordinator.
 
-## Next release: 0.5.0 — stabilization
+## Released: 0.5.0 — stabilization
 
 Version 0.5.0 makes the current observation and work-management experience dependable before the plugin gains command authority.
 
-Planned outcomes:
+Released outcomes:
 
 - Current and legacy cmux lifecycle compatibility.
 - A dedicated, stable Work board with bounded independent scrolling.
