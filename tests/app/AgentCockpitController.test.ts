@@ -253,6 +253,87 @@ describe("AgentCockpitController modal lifecycle", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("reports clipboard denial without closing the support modal", async () => {
+    vi.stubGlobal("navigator", {
+      clipboard: { writeText: async () => Promise.reject(new Error("clipboard denied")) }
+    });
+    const plugin = {
+      manifest: { version: "0.6.0" },
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(memoryTaskApp().app, plugin);
+    const instances = modalInstances();
+    const instanceCount = instances.length;
+    const settings = (Setting as unknown as {
+      instances: Array<{ buttons: Array<{ click: () => void }> }>;
+    }).instances;
+    const settingCount = settings.length;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
+
+    try {
+      controller.showHelpAndFeedback();
+      settings[settingCount]!.buttons[0]!.click();
+
+      await vi.waitFor(() => {
+        expect(notices.slice(noticeStart)).toEqual([
+          "Could not copy diagnostics: clipboard denied"
+        ]);
+      });
+      expect(instances[instanceCount]).toMatchObject({ opened: true });
+    } finally {
+      controller.dispose();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not notify when a support copy finishes after disposal", async () => {
+    let releaseClipboard!: () => void;
+    const clipboardGate = new Promise<void>((resolve) => {
+      releaseClipboard = resolve;
+    });
+    let markClipboardStarted!: () => void;
+    const clipboardStarted = new Promise<void>((resolve) => {
+      markClipboardStarted = resolve;
+    });
+    vi.stubGlobal("navigator", {
+      clipboard: {
+        writeText: async () => {
+          markClipboardStarted();
+          await clipboardGate;
+        }
+      }
+    });
+    const plugin = {
+      manifest: { version: "0.6.0" },
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(memoryTaskApp().app, plugin);
+    const settings = (Setting as unknown as {
+      instances: Array<{ buttons: Array<{ click: () => void }> }>;
+    }).instances;
+    const settingCount = settings.length;
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
+
+    try {
+      controller.showHelpAndFeedback();
+      settings[settingCount]!.buttons[0]!.click();
+      await clipboardStarted;
+      controller.dispose();
+      releaseClipboard();
+      await clipboardGate;
+      await Promise.resolve();
+
+      expect(notices.slice(noticeStart)).toEqual([]);
+    } finally {
+      controller.dispose();
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("AgentCockpitController connection failures", () => {
