@@ -1,5 +1,7 @@
 import { parse as parseYamlDocument } from "yaml";
 
+export const apiVersion = "1.13.1";
+
 export function normalizePath(value: string): string {
   return value.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
 }
@@ -25,10 +27,23 @@ export class Notice {
   }
 }
 
-class MockElement {
+export class MockElement {
   readonly children: MockElement[] = [];
   readonly classes = new Set<string>();
+  readonly attributes = new Map<string, string>();
+  readonly tagName: string;
   text = "";
+  value = "";
+  readOnly = false;
+  rows = 0;
+  href = "";
+  target = "";
+  rel = "";
+  disabled = false;
+
+  constructor(tagName = "div") {
+    this.tagName = tagName;
+  }
 
   addClass(...classes: string[]): void {
     for (const className of classes) this.classes.add(className);
@@ -43,16 +58,24 @@ class MockElement {
     this.text = value;
   }
 
-  createEl(_tag: string, options: { cls?: string; text?: string } = {}): MockElement {
-    return this.createChild(options);
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value);
+  }
+
+  createEl(tag: string, options: { cls?: string; text?: string } = {}): MockElement {
+    return this.createChild(tag, options);
   }
 
   createDiv(options: { cls?: string; text?: string } = {}): MockElement {
-    return this.createChild(options);
+    return this.createChild("div", options);
   }
 
-  private createChild(options: { cls?: string; text?: string }): MockElement {
-    const child = new MockElement();
+  createSpan(options: { cls?: string; text?: string } = {}): MockElement {
+    return this.createChild("span", options);
+  }
+
+  private createChild(tagName: string, options: { cls?: string; text?: string }): MockElement {
+    const child = new MockElement(tagName);
     if (options.cls) child.addClass(options.cls);
     if (options.text) child.setText(options.text);
     this.children.push(child);
@@ -179,6 +202,7 @@ export class ButtonComponent {
 
   setDisabled(value: boolean): this {
     this.disabled = value;
+    this.buttonEl.disabled = value;
     this.disabledValues.push(value);
     return this;
   }

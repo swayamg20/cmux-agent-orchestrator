@@ -118,6 +118,18 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
             )
           }
         ]
+      },
+      {
+        type: "group",
+        heading: "Help and feedback",
+        items: [
+          {
+            name: "Help and feedback",
+            desc: "Open support documentation, report a problem, suggest an idea, or review privacy-safe diagnostics.",
+            aliases: ["support", "report bug", "diagnostics", "feature request"],
+            render: (setting) => this.addHelpAndFeedbackButton(setting)
+          }
+        ]
       }
     ];
   }
@@ -130,6 +142,7 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
       this.renderSettingsUnavailable(
         new Setting(this.containerEl).setName("Settings unavailable")
       );
+      this.renderHelpAndFeedback();
       return;
     }
     const connection = this.controller.store.getState().connection;
@@ -187,6 +200,18 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
     );
 
     this.addSaveButton(new Setting(this.containerEl), draft);
+    this.renderHelpAndFeedback();
+  }
+
+  private renderHelpAndFeedback(): void {
+    new Setting(this.containerEl).setName("Help and feedback").setHeading();
+    this.addHelpAndFeedbackButton(
+      new Setting(this.containerEl)
+        .setName("Help and feedback")
+        .setDesc(
+          "Open support documentation, report a problem, suggest an idea, or review privacy-safe diagnostics."
+        )
+    );
   }
 
   private renderSettingsUnavailable(setting: Setting): void {
@@ -210,6 +235,14 @@ export class AgentCockpitSettingsTab extends PluginSettingTab {
         ).finally(() => {
           if (!this.controller.isDisposed()) button.setDisabled(false);
         });
+      })
+    );
+  }
+
+  private addHelpAndFeedbackButton(setting: Setting): void {
+    setting.addButton((button) =>
+      button.setButtonText("Open help and feedback").onClick(() => {
+        this.controller.showHelpAndFeedback();
       })
     );
   }

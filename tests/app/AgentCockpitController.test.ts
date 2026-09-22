@@ -1,4 +1,4 @@
-import { Modal, Notice, type App, type Plugin } from "obsidian";
+import { Modal, Notice, Setting, type App, type Plugin } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
 import type { ApplicationActivator } from "../../src/actions/CmuxApplicationActivator";
 import { AgentCockpitController } from "../../src/app/AgentCockpitController";
@@ -216,6 +216,42 @@ describe("AgentCockpitController modal lifecycle", () => {
     controller.dispose();
 
     expect(modal).toMatchObject({ closeCalls: 1, opened: false });
+  });
+
+  it("opens one support modal and copies its preview only after the user clicks", async () => {
+    const writeText = vi.fn(async (_value: string) => undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const plugin = {
+      manifest: { version: "0.6.0" },
+      loadData: async () => undefined,
+      saveData: async () => undefined
+    } as unknown as Plugin;
+    const controller = new AgentCockpitController(memoryTaskApp().app, plugin);
+    const instances = modalInstances();
+    const instanceCount = instances.length;
+    const settings = (Setting as unknown as {
+      instances: Array<{ buttons: Array<{ click: () => void }> }>;
+    }).instances;
+    const settingCount = settings.length;
+
+    try {
+      controller.showHelpAndFeedback();
+
+      expect(instances[instanceCount]).toMatchObject({ opened: true });
+      expect(writeText).not.toHaveBeenCalled();
+      settings[settingCount]!.buttons[0]!.click();
+      await vi.waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+
+      const copied = writeText.mock.calls[0]?.[0];
+      expect(JSON.parse(copied ?? "")).toMatchObject({
+        product: "cmux Agent Orchestrator",
+        versions: { plugin: "0.6.0", obsidianApi: "1.13.1", cmux: null },
+        settings: { loaded: false }
+      });
+    } finally {
+      controller.dispose();
+      vi.unstubAllGlobals();
+    }
   });
 });
 

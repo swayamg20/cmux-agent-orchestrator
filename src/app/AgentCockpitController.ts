@@ -1,4 +1,4 @@
-import { Notice, type App, type Modal, type Plugin } from "obsidian";
+import { Notice, apiVersion, type App, type Modal, type Plugin } from "obsidian";
 import {
   CmuxApplicationActivator,
   type ApplicationActivator
@@ -22,6 +22,7 @@ import {
 } from "../cmux/types";
 import { CreateTaskModal, TaskPickerModal } from "../components/TaskModals";
 import { ConversationPickerModal } from "../components/ConversationPickerModal";
+import { HelpAndFeedbackModal } from "../components/HelpAndFeedbackModal";
 import { CmuxEvidenceService } from "../evidence/CmuxEvidenceService";
 import { PRODUCT_NAME } from "../identity";
 import { ProviderMetadataService } from "../providers/ProviderMetadataService";
@@ -54,6 +55,10 @@ import type {
   SessionFilters,
   SourceHealth
 } from "../state/types";
+import {
+  buildSupportDiagnostics,
+  serializeSupportDiagnostics
+} from "../support/SupportDiagnostics";
 import type {
   CreateTaskOptions,
   TaskInvalidationEvidence,
@@ -466,6 +471,26 @@ export class AgentCockpitController {
         async (options) => {
           await this.createTask(options, session);
         },
+        closed
+      )
+    );
+  }
+
+  showHelpAndFeedback(): void {
+    if (this.disposed) return;
+    const diagnostics = serializeSupportDiagnostics(
+      buildSupportDiagnostics({
+        state: this.store.getState(),
+        settings: this.settings,
+        pluginVersion: this.plugin.manifest.version,
+        obsidianApiVersion: apiVersion
+      })
+    );
+    this.openModal((closed) =>
+      new HelpAndFeedbackModal(
+        this.app,
+        diagnostics,
+        () => this.copySupportDiagnostics(diagnostics),
         closed
       )
     );
@@ -947,6 +972,18 @@ export class AgentCockpitController {
     } catch (error) {
       if (this.disposed) return;
       new Notice(`Could not copy session metadata: ${readableError(error)}`);
+    }
+  }
+
+  private async copySupportDiagnostics(diagnostics: string): Promise<void> {
+    if (this.disposed) return;
+    try {
+      await navigator.clipboard.writeText(diagnostics);
+      if (this.disposed) return;
+      new Notice("Copied privacy-safe diagnostics.");
+    } catch (error) {
+      if (this.disposed) return;
+      new Notice(`Could not copy diagnostics: ${readableError(error)}`);
     }
   }
 

@@ -1067,6 +1067,75 @@
   font-size: var(--font-ui-small);
 }
 
+.agent-cockpit-support-modal {
+  display: grid;
+  gap: var(--ac-space-4);
+}
+
+.agent-cockpit-support-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ac-space-2);
+}
+
+.agent-cockpit-support-action {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ac-space-1);
+  min-width: 0;
+  padding: var(--ac-space-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+  background: var(--background-secondary);
+  font-weight: var(--font-medium);
+  text-decoration: none;
+}
+
+.agent-cockpit-support-action:hover,
+.agent-cockpit-support-action:focus-visible {
+  border-color: var(--background-modifier-border-hover);
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  text-decoration: none;
+}
+
+.agent-cockpit-support-action:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+.agent-cockpit-support-action-description {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-normal);
+}
+
+.agent-cockpit-support-diagnostics {
+  display: grid;
+  gap: var(--ac-space-2);
+  min-width: 0;
+}
+
+.agent-cockpit-support-diagnostics h3,
+.agent-cockpit-support-diagnostics p {
+  margin: 0;
+}
+
+.agent-cockpit-support-diagnostics p {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-support-diagnostics-preview {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-tight);
+}
+
 .agent-cockpit-task-card {
   padding: var(--ac-space-3);
   border: 1px solid var(--background-modifier-border);
@@ -1417,6 +1486,10 @@
 
   .agent-cockpit-work-summary {
     grid-template-columns: repeat(2, minmax(100px, 1fr));
+  }
+
+  .agent-cockpit-support-actions {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .agent-cockpit-board-toolbar {

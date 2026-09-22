@@ -19,10 +19,12 @@ function deferred<T>(): Deferred<T> {
 
 const harness = vi.hoisted(() => ({
   controller: null as { dispose: () => void } | null,
+  commands: [] as Array<{ id: string; name: string; callback: () => void }>,
   dispose: vi.fn(),
   initialize: vi.fn<() => Promise<void>>(),
   notices: [] as string[],
-  observesTaskVaultPath: vi.fn<(path: string) => boolean>()
+  observesTaskVaultPath: vi.fn<(path: string) => boolean>(),
+  showHelpAndFeedback: vi.fn()
 }));
 
 vi.mock("obsidian", () => {
@@ -33,7 +35,9 @@ vi.mock("obsidian", () => {
       workspace: {}
     };
 
-    addCommand(): void {}
+    addCommand(command: { id: string; name: string; callback: () => void }): void {
+      harness.commands.push(command);
+    }
     addRibbonIcon(): void {}
     addSettingTab(): void {}
     registerEvent(): void {}
@@ -68,6 +72,10 @@ vi.mock("../../src/app/AgentCockpitController", () => ({
     }
 
     async refreshNow(): Promise<void> {}
+
+    showHelpAndFeedback(): void {
+      harness.showHelpAndFeedback();
+    }
   }
 }));
 
@@ -102,7 +110,23 @@ describe("AgentCockpitPlugin lifecycle", () => {
     harness.dispose.mockReset();
     harness.initialize.mockReset().mockResolvedValue(undefined);
     harness.observesTaskVaultPath.mockReset().mockReturnValue(false);
+    harness.showHelpAndFeedback.mockReset();
+    harness.commands.length = 0;
     harness.notices.length = 0;
+  });
+
+  it("registers one command that opens help and feedback", async () => {
+    const plugin = createPlugin();
+    await plugin.onload();
+
+    const command = harness.commands.find((candidate) => candidate.id === "help-feedback");
+    expect(command).toMatchObject({
+      id: "help-feedback",
+      name: "Open help and feedback"
+    });
+    command?.callback();
+
+    expect(harness.showHelpAndFeedback).toHaveBeenCalledOnce();
   });
 
   it("forwards the event filter to every task path observed by the controller", async () => {
