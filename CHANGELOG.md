@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-23
+
 ### Added
 
 - Add a native Help and feedback modal available from settings and the command palette, with explicit routes for bugs, compatibility problems, ideas, questions, documentation, and private vulnerability reports.
