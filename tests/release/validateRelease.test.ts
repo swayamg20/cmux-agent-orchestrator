@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,8 +9,11 @@ const temporaryDirectories: string[] = [];
 async function createReleaseFixture(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "obsidian-plugin-release-"));
   temporaryDirectories.push(root);
+  await mkdir(path.join(root, ".github/ISSUE_TEMPLATE"), { recursive: true });
   await Promise.all([
     writeFile(path.join(root, "README.md"), "# Test\n", "utf8"),
+    writeFile(path.join(root, "SUPPORT.md"), "# Support\n", "utf8"),
+    writeFile(path.join(root, "SECURITY.md"), "# Security\n", "utf8"),
     writeFile(path.join(root, "LICENSE"), "Test license\n", "utf8"),
     writeFile(path.join(root, "main.js"), "module.exports = {};\n", "utf8"),
     writeFile(path.join(root, "styles.css"), ".test {}\n", "utf8"),
@@ -39,7 +42,22 @@ async function createReleaseFixture(): Promise<string> {
       }),
       "utf8"
     ),
-    writeFile(path.join(root, "versions.json"), JSON.stringify({ "0.1.0": "1.10.0" }), "utf8")
+    writeFile(path.join(root, "versions.json"), JSON.stringify({ "0.1.0": "1.10.0" }), "utf8"),
+    writeFile(
+      path.join(root, ".github/ISSUE_TEMPLATE/bug.yml"),
+      "name: Bug report\ndescription: Report a bug.\nbody:\n  - type: textarea\n    id: report\n    attributes:\n      label: Report\n",
+      "utf8"
+    ),
+    writeFile(
+      path.join(root, ".github/ISSUE_TEMPLATE/compatibility.yml"),
+      "name: Compatibility report\ndescription: Report compatibility.\nbody:\n  - type: textarea\n    id: report\n    attributes:\n      label: Report\n",
+      "utf8"
+    ),
+    writeFile(
+      path.join(root, ".github/ISSUE_TEMPLATE/config.yml"),
+      "blank_issues_enabled: false\ncontact_links:\n  - name: Ideas\n    url: https://github.com/swayamg20/cmux-agent-orchestrator/discussions/new?category=ideas\n    about: Suggest ideas.\n  - name: Questions\n    url: https://github.com/swayamg20/cmux-agent-orchestrator/discussions/new?category=q-a\n    about: Ask questions.\n  - name: Security\n    url: https://github.com/swayamg20/cmux-agent-orchestrator/security/advisories/new\n    about: Report privately.\n",
+      "utf8"
+    )
   ]);
   return root;
 }
@@ -83,5 +101,22 @@ describe("release validation", () => {
 
     const errors = await validateRelease(root, "0.1.0");
     expect(errors).toContain("manifest.description must not contain the redundant word Obsidian.");
+  });
+
+  it("rejects missing support documentation and invalid feedback routing", async () => {
+    const root = await createReleaseFixture();
+    await rm(path.join(root, "SUPPORT.md"));
+    await writeFile(
+      path.join(root, ".github/ISSUE_TEMPLATE/config.yml"),
+      "blank_issues_enabled: true\ncontact_links: []\n",
+      "utf8"
+    );
+
+    const errors = await validateRelease(root, "0.1.0");
+    expect(errors).toContain("SUPPORT.md is required.");
+    expect(errors).toContain(".github/ISSUE_TEMPLATE/config.yml must disable blank issues.");
+    expect(errors).toContain(
+      ".github/ISSUE_TEMPLATE/config.yml must route ideas, questions, and security reports."
+    );
   });
 });

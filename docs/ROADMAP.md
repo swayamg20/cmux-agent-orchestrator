@@ -23,6 +23,19 @@ Released outcomes:
 
 The complete scope and release gates are in the [0.5.0 plan](plans/v0.5.0.md).
 
+## Next release: 0.6.0 — support foundation
+
+Version 0.6.0 makes support and feedback a first-class, privacy-safe product surface before command authority is introduced.
+
+Planned outcomes:
+
+- Open one native Help and feedback modal from settings or the command palette.
+- Route bugs, compatibility problems, ideas, questions, and vulnerabilities to the correct GitHub channel.
+- Preview and explicitly copy allowlisted aggregate diagnostics without telemetry, persistence, or automatic uploads.
+- Document support expectations and validate the public feedback surfaces during release checks.
+
+The complete scope and release gates are in the [0.6.0 plan](plans/v0.6.0.md).
+
 ## Major milestone: 1.0.0 — command and orchestration
 
 Version 1.0.0 turns the plugin into an active orchestration surface while preserving exact targeting and human authority.
@@ -40,7 +53,7 @@ The complete product, architecture, and safety contract is in the [1.0.0 plan](p
 
 ## Sequencing policy
 
-- Implement and verify 0.5.0 before adding terminal-input authority.
+- Implement and verify 0.6.0 before adding terminal-input authority.
 - Develop 1.0.0 through small, reviewable commits and local test builds rather than one undifferentiated change.
 - Keep shipped behavior, planned behavior, and experiments clearly separated in public documentation.
 - Fail closed whenever cmux identity, provider identity, lifecycle state, or delivery outcome is ambiguous.

@@ -2,7 +2,7 @@
 
 cmux Agent Orchestrator is a desktop-only Obsidian community plugin for coordinating Claude Code and Codex CLI sessions that already run inside cmux. It is a human-in-the-loop orchestration layer: Obsidian owns durable work context, cmux remains the terminal and process owner, and each provider retains its own session state.
 
-The repository targets Obsidian 1.10 and newer. It feature-detects both the legacy cmux 0.62.2 snapshot-only command surface and the current `sessions --json` plus live-events command surface. It has no runtime npm dependencies, telemetry, hosted service, or external network requirement.
+The repository targets Obsidian 1.10 and newer. It feature-detects both the legacy cmux 0.62.2 snapshot-only command surface and the current `sessions --json` plus live-events command surface. It has no runtime npm dependencies, telemetry, hosted service, or background external network requirement. Selecting a Help and feedback destination explicitly opens the corresponding GitHub page in the user's browser.
 
 ## Install
 
@@ -56,6 +56,12 @@ Install cmux Agent Orchestrator from its [Obsidian Community Plugins listing](ht
 
 cmux Agent Orchestrator does not host a PTY, autonomously resume providers, send terminal input, read complete transcripts, or decide that a task is complete.
 
+## Help and feedback
+
+Open **cmux Agent Orchestrator: Open help and feedback** from the command palette or use the plugin settings. The support center routes bugs and compatibility problems to GitHub issue forms, ideas and questions to GitHub Discussions, and vulnerabilities to private security reporting.
+
+Its optional diagnostics preview is generated locally and shown before copying. Nothing is transmitted automatically. See [Support and feedback](SUPPORT.md) for the available channels and the complete privacy boundary.
+
 ## Ownership boundary
 
 | System | Owns |
@@ -103,6 +109,7 @@ Maintainers should follow the complete [release procedure](docs/RELEASING.md), i
 - [Design system](DESIGN.md)
 - [Detailed design brief](docs/DESIGN_BRIEF.md)
 - [Security model](SECURITY.md)
+- [Support and feedback](SUPPORT.md)
 - [Release procedure](docs/RELEASING.md)
 
 ## Storage
