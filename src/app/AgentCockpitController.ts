@@ -661,6 +661,70 @@ export class AgentCockpitController {
     }
   }
 
+  async clearClosedSessionLinks(): Promise<void> {
+    if (this.disposed) return;
+    let cleared = 0;
+    try {
+      const initial = this.store.getState();
+      const snapshot = initial.snapshot;
+      if (
+        snapshot === null ||
+        initial.connection.status !== "connected" ||
+        initial.health.topology.status !== "fresh"
+      ) {
+        throw new Error("Refresh cmux before clearing closed session links.");
+      }
+      const topologyGeneration = this.topologyRefreshGeneration;
+      const closed = initial.bindings.filter(
+        (binding) => !initial.sessions.some((session) => sessionMatchesBinding(session, binding))
+      );
+      if (closed.length === 0) {
+        new Notice("No closed cmux session links remain.");
+        return;
+      }
+
+      for (const expected of closed) {
+        const detached = await this.bindings.detachIfUnchanged(expected, () => {
+          if (this.disposed) return false;
+          const current = this.store.getState();
+          return (
+            this.topologyRefreshGeneration === topologyGeneration &&
+            current.snapshot?.observedAt === snapshot.observedAt &&
+            current.connection.status === "connected" &&
+            current.health.topology.status === "fresh" &&
+            !current.sessions.some((session) => sessionMatchesBinding(session, expected))
+          );
+        });
+        if (detached) cleared += 1;
+      }
+      if (this.disposed) return;
+      this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
+      this.recomputeSessions();
+      const skipped = closed.length - cleared;
+      if (cleared === 0) {
+        throw new Error(
+          "Closed session links changed before they could be cleared. Refresh and try again."
+        );
+      }
+      const noun = cleared === 1 ? "link" : "links";
+      const history = cleared === 1
+        ? "The task and run history were kept."
+        : "Tasks and run history were kept.";
+      const skippedSuffix = skipped > 0
+        ? ` ${skipped} changed ${skipped === 1 ? "link was" : "links were"} skipped.`
+        : "";
+      new Notice(`Cleared ${cleared} closed cmux session ${noun}. ${history}${skippedSuffix}`);
+    } catch (error) {
+      if (this.disposed) return;
+      if (cleared > 0) {
+        this.store.update({ bindings: this.bindings.list(), runs: this.bindings.listRuns() });
+        this.recomputeSessions();
+      }
+      new Notice(readableError(error));
+      throw error;
+    }
+  }
+
   async createTask(options: CreateTaskOptions, session: LiveSession | null = null): Promise<TaskRecord> {
     if (this.disposed) throw new Error(`${PRODUCT_NAME} is unloaded.`);
     try {
@@ -2624,6 +2688,14 @@ function connectionAfterError(connection: ConnectionState, error: unknown, check
 
 function readableError(error: unknown): string {
   return error instanceof Error ? error.message : `An unknown ${PRODUCT_NAME} error occurred.`;
+}
+
+function sessionMatchesBinding(session: LiveSession, binding: BindingRecord): boolean {
+  return (
+    canonicalUuidEquals(session.workspaceId, binding.workspaceId) &&
+    canonicalUuidEquals(session.paneId, binding.paneId) &&
+    canonicalUuidEquals(session.surfaceId, binding.surfaceId)
+  );
 }
 
 function sameWorkflowProposal(left: WorkflowProposal, right: WorkflowProposal): boolean {

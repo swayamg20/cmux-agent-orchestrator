@@ -6,7 +6,10 @@ import type { SessionCardActions } from "../components/SessionCard";
 import { renderConnectionBadge } from "../components/StatusBadge";
 import { PRODUCT_NAME } from "../identity";
 import type { CockpitState } from "../state/types";
-import { renderNeedsAttentionPanel } from "./NeedsAttentionPanel";
+import {
+  renderNeedsAttentionPanel,
+  selectAttentionPresentation
+} from "./NeedsAttentionPanel";
 import {
   COCKPIT_SECTIONS,
   sectionForNavigationKey,
@@ -135,6 +138,7 @@ export class AgentCockpitView extends ItemView {
       renderNeedsAttentionPanel(panel, state, this.expanded, {
         ...sessionActions,
         openTask: (task) => void this.controller.openTask(task),
+        clearClosedSessionLinks: () => this.controller.clearClosedSessionLinks(),
         apply: (proposal) => this.controller.applyWorkflowProposal(proposal),
         reviewInCmux: (proposal) => this.controller.reviewWorkflowProposalInCmux(proposal),
         dismiss: (proposal) => this.controller.dismissWorkflowProposal(proposal)
@@ -181,6 +185,7 @@ export class AgentCockpitView extends ItemView {
 
   private renderSectionTabs(container: HTMLElement, state: Readonly<CockpitState>): void {
     const untrackedRuns = selectSessionInbox(state, null).total;
+    const actionableAttentionCount = selectAttentionPresentation(state.attention).actionable.length;
     const counts: Record<CockpitSection, number> = {
       work: state.tasks.length,
       agents: untrackedRuns,
@@ -189,12 +194,12 @@ export class AgentCockpitView extends ItemView {
     const countLabels: Record<CockpitSection, string> = {
       work: "durable tasks",
       agents: "detected agent runs",
-      cmux: "cmux surfaces"
+      cmux: "current cmux surfaces"
     };
     const labels: Record<CockpitSection, string> = {
       work: "Work",
       agents: "Agent runs",
-      cmux: "cmux"
+      cmux: "Surfaces"
     };
     const icons: Record<CockpitSection, string> = {
       work: "list-checks",
@@ -228,13 +233,13 @@ export class AgentCockpitView extends ItemView {
         text: String(counts[section]),
         attr: { "aria-label": `${counts[section]} ${countLabels[section]}` }
       });
-      if (section === "work" && state.attention.length > 0) {
+      if (section === "work" && actionableAttentionCount > 0) {
         tab.createSpan({
           cls: "agent-cockpit-mode-tab-alert",
           attr: {
-            title: `${state.attention.length} ${state.attention.length === 1 ? "item needs" : "items need"} attention`,
+            title: `${actionableAttentionCount} ${actionableAttentionCount === 1 ? "item needs" : "items need"} attention`,
             role: "img",
-            "aria-label": `${state.attention.length} ${state.attention.length === 1 ? "item needs" : "items need"} attention`
+            "aria-label": `${actionableAttentionCount} ${actionableAttentionCount === 1 ? "item needs" : "items need"} attention`
           }
         });
       }
