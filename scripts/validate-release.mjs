@@ -1,6 +1,7 @@
 import { access, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const PLUGIN_ID = /^[a-z]+(?:-[a-z]+)*$/;
@@ -12,6 +13,16 @@ async function readJson(root, relativePath, errors) {
     return JSON.parse(source);
   } catch (error) {
     errors.push(`${relativePath} could not be read as JSON: ${readableError(error)}`);
+    return null;
+  }
+}
+
+async function readYaml(root, relativePath, errors) {
+  try {
+    const source = await readFile(path.join(root, relativePath), "utf8");
+    return parseYaml(source);
+  } catch (error) {
+    errors.push(`${relativePath} could not be read as YAML: ${readableError(error)}`);
     return null;
   }
 }
@@ -41,17 +52,39 @@ function readableError(error) {
 
 export async function validateRelease(root, expectedTag = null) {
   const errors = [];
-  const [manifest, packageJson, versions] = await Promise.all([
+  const [manifest, packageJson, versions, bugForm, compatibilityForm, issueConfig] = await Promise.all([
     readJson(root, "manifest.json", errors),
     readJson(root, "package.json", errors),
-    readJson(root, "versions.json", errors)
+    readJson(root, "versions.json", errors),
+    readYaml(root, ".github/ISSUE_TEMPLATE/bug.yml", errors),
+    readYaml(root, ".github/ISSUE_TEMPLATE/compatibility.yml", errors),
+    readYaml(root, ".github/ISSUE_TEMPLATE/config.yml", errors)
   ]);
 
   await Promise.all(
-    ["README.md", "LICENSE", "manifest.json", "main.js", "styles.css"].map((file) =>
+    [
+      "README.md",
+      "SUPPORT.md",
+      "SECURITY.md",
+      "LICENSE",
+      "manifest.json",
+      "main.js",
+      "styles.css",
+      ".github/ISSUE_TEMPLATE/bug.yml",
+      ".github/ISSUE_TEMPLATE/compatibility.yml",
+      ".github/ISSUE_TEMPLATE/config.yml"
+    ].map((file) =>
       requireNonEmptyFile(root, file, errors)
     )
   );
+
+  validateIssueForm(bugForm, ".github/ISSUE_TEMPLATE/bug.yml", errors);
+  validateIssueForm(
+    compatibilityForm,
+    ".github/ISSUE_TEMPLATE/compatibility.yml",
+    errors
+  );
+  validateIssueConfig(issueConfig, errors);
 
   if (manifest !== null) {
     const id = requireString(manifest, "id", "manifest", errors);
@@ -102,6 +135,32 @@ export async function validateRelease(root, expectedTag = null) {
   }
 
   return errors;
+}
+
+function validateIssueForm(value, location, errors) {
+  if (typeof value !== "object" || value === null) return;
+  requireString(value, "name", location, errors);
+  requireString(value, "description", location, errors);
+  if (!Array.isArray(value.body) || value.body.length === 0) {
+    errors.push(`${location}.body must contain at least one issue-form field.`);
+  }
+}
+
+function validateIssueConfig(value, errors) {
+  if (typeof value !== "object" || value === null) return;
+  if (value.blank_issues_enabled !== false) {
+    errors.push(".github/ISSUE_TEMPLATE/config.yml must disable blank issues.");
+  }
+  if (!Array.isArray(value.contact_links) || value.contact_links.length < 3) {
+    errors.push(".github/ISSUE_TEMPLATE/config.yml must route ideas, questions, and security reports.");
+    return;
+  }
+  for (const [index, link] of value.contact_links.entries()) {
+    const url = typeof link === "object" && link !== null ? link.url : null;
+    if (typeof url !== "string" || !url.startsWith("https://github.com/swayamg20/cmux-agent-orchestrator/")) {
+      errors.push(`.github/ISSUE_TEMPLATE/config.yml contact_links[${index}].url must use the project HTTPS URL.`);
+    }
+  }
 }
 
 function parseExpectedTag(argv) {

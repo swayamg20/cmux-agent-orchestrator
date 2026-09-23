@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Suggest an idea
+    url: https://github.com/swayamg20/cmux-agent-orchestrator/discussions/new?category=ideas
+    about: Propose a feature or workflow in GitHub Discussions.
+  - name: Ask a question
+    url: https://github.com/swayamg20/cmux-agent-orchestrator/discussions/new?category=q-a
+    about: Ask for usage help in GitHub Discussions.
+  - name: Report a security issue privately
+    url: https://github.com/swayamg20/cmux-agent-orchestrator/security/advisories/new
+    about: Do not disclose security vulnerabilities in a public issue.

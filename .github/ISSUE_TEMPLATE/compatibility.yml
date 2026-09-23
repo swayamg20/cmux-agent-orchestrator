@@ -1,0 +1,70 @@
+name: Compatibility report
+description: Report a version combination that the plugin does not handle correctly.
+title: "[Compatibility]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form when the problem depends on a particular cmux, Obsidian, Claude Code, or Codex version. Do not include transcripts, paths, credentials, tokens, or provider session files.
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      placeholder: 0.6.0
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: Obsidian version
+      placeholder: 1.13.1
+    validations:
+      required: true
+  - type: input
+    id: cmux-version
+    attributes:
+      label: cmux version
+      placeholder: 0.63.1
+    validations:
+      required: true
+  - type: input
+    id: provider-version
+    attributes:
+      label: Provider and version
+      description: State Claude Code or Codex and its version, or “Not applicable.”
+    validations:
+      required: true
+  - type: dropdown
+    id: failing-area
+    attributes:
+      label: Failing area
+      options:
+        - Connection or access mode
+        - Workspace and surface discovery
+        - Provider identity or conversation titles
+        - Lifecycle state
+        - Automatic tracking
+        - Focus in cmux
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Compatibility problem
+      description: Explain what is unavailable or behaves incorrectly in this version combination.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Privacy-safe diagnostics
+      description: Optional. In the plugin, run “Open help and feedback,” review the preview, then copy it here.
+      render: json
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I reviewed this report and removed private content, secrets, paths, identifiers, transcripts, and task content.
+          required: true

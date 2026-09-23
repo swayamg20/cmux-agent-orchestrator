@@ -40,7 +40,7 @@ describe("AgentCockpitSettingsTab", () => {
     const definitions = tab.getSettingDefinitions();
 
     expect(getSettings).not.toHaveBeenCalled();
-    expect(definitions).toHaveLength(1);
+    expect(definitions).toHaveLength(2);
     expect(definitions).toMatchObject([
       {
         type: "group",
@@ -58,6 +58,16 @@ describe("AgentCockpitSettingsTab", () => {
           { name: "Stale working threshold" },
           { name: "Save settings", searchable: false }
         ]
+      },
+      {
+        type: "group",
+        heading: "Help and feedback",
+        items: [
+          {
+            name: "Help and feedback",
+            desc: "Open support documentation, report a problem, suggest an idea, or review privacy-safe diagnostics."
+          }
+        ]
       }
     ]);
   });
@@ -66,9 +76,11 @@ describe("AgentCockpitSettingsTab", () => {
     const getSettings = vi.fn(() => {
       throw new Error("Strict settings access must not run after initialization fails.");
     });
+    const showHelpAndFeedback = vi.fn();
     const controller = {
       getLoadedSettings: () => null,
       getSettings,
+      showHelpAndFeedback,
       store: {
         getState: () => ({
           connection: { message: "Could not initialize cmux Agent Orchestrator." },
@@ -86,7 +98,11 @@ describe("AgentCockpitSettingsTab", () => {
     expect(() => renderClassicSettings()).not.toThrow();
 
     const displayed = (Setting as unknown as { instances: Setting[] }).instances.slice(instanceStart);
-    expect(displayed.at(-1)).toMatchObject({
+    const displayedSettings = displayed as unknown as Array<{
+      name: string;
+      description: string;
+    }>;
+    expect(displayedSettings.find((setting) => setting.name === "Settings unavailable")).toMatchObject({
       name: "Settings unavailable",
       description:
         "Could not initialize cmux Agent Orchestrator: Plugin data is unavailable. Reload the plugin after resolving the error; no settings were changed."
@@ -108,6 +124,18 @@ describe("AgentCockpitSettingsTab", () => {
       });
     }
     expect(getSettings).not.toHaveBeenCalled();
+
+    const support = (definitions[1] as {
+      items: Array<{ render?: (setting: Setting) => void }>;
+    }).items[0]!;
+    const supportSetting = new Setting({} as HTMLElement);
+    support.render?.(supportSetting);
+    const supportButtons = (supportSetting as unknown as {
+      buttons: Array<{ click: () => void }>;
+    }).buttons;
+    expect(supportButtons).toHaveLength(1);
+    supportButtons[0]!.click();
+    expect(showHelpAndFeedback).toHaveBeenCalledOnce();
   });
 
   it("does not publish a settings-save completion after controller disposal", async () => {

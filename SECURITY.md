@@ -36,6 +36,10 @@ Automatic Work tracking does not copy provider conversation titles, cmux titles,
 
 When cmux blocks a normally launched Obsidian process, cmux Agent Orchestrator provides GUI setup instructions and a connection retry. It never edits cmux configuration, enables Full open access, or restarts cmux.
 
-## Reporting a problem
+## Reporting a security vulnerability
 
-Keep reports free of terminal transcripts, notification bodies, socket paths, tokens, and provider session files. Include the plugin version, cmux version, the failing allowlisted action, and sanitized error text.
+[Open a private GitHub security advisory](https://github.com/swayamg20/cmux-agent-orchestrator/security/advisories/new). Do not disclose a vulnerability in a public issue or discussion.
+
+Keep reports free of terminal transcripts, notification bodies, task content, filesystem or socket paths, credentials, tokens, and provider session files. Include the plugin version, cmux version, the failing allowlisted action, and the minimum sanitized reproduction details needed to investigate.
+
+For non-security bugs, compatibility problems, ideas, and usage questions, use the channels in [SUPPORT.md](SUPPORT.md).

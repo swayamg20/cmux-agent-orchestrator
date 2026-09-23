@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-23
+
+### Added
+
+- Add a native Help and feedback modal available from settings and the command palette, with explicit routes for bugs, compatibility problems, ideas, questions, documentation, and private vulnerability reports.
+- Add a user-reviewed, allowlisted diagnostics preview and explicit clipboard action with no telemetry, persistence, refresh, provider inspection, or automatic transmission.
+- Add GitHub issue forms, Discussions routing, support documentation, and release validation for the public feedback surfaces.
+
+### Security
+
+- Exclude filesystem paths, executable paths, identifiers, titles, terminal output, transcripts, task content, notifications, raw errors, environment variables, and secrets from copied support diagnostics by construction.
+
 ## [0.5.0] - 2026-09-13
 
 ### Added

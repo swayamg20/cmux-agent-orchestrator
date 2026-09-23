@@ -72,6 +72,11 @@ export default class AgentCockpitPlugin extends Plugin {
         "Could not open the work board."
       )
     });
+    this.addCommand({
+      id: "help-feedback",
+      name: "Open help and feedback",
+      callback: () => this.requireController().showHelpAndFeedback()
+    });
     this.addSettingTab(new AgentCockpitSettingsTab(this.app, this, controller));
 
     this.registerEvent(

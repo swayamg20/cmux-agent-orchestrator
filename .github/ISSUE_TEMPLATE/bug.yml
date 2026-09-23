@@ -1,0 +1,80 @@
+name: Bug report
+description: Report behavior that is broken or different from what you expected.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Do not include terminal transcripts, task content, conversation titles, filesystem paths, credentials, tokens, or provider session files.
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: Find this in Settings → Community plugins.
+      placeholder: 0.6.0
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: Obsidian version
+      placeholder: 1.13.1
+    validations:
+      required: true
+  - type: input
+    id: cmux-version
+    attributes:
+      label: cmux version
+      placeholder: 0.63.1
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options:
+        - Claude Code
+        - Codex
+        - Not provider-specific
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened?
+      description: Describe the visible behavior without including private content.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Use the smallest sequence that reproduces the problem.
+      placeholder: |
+        1. Open…
+        2. Select…
+        3. Observe…
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Privacy-safe diagnostics
+      description: Optional. In the plugin, run “Open help and feedback,” review the preview, then copy it here.
+      render: json
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I reviewed this report and removed private content, secrets, paths, identifiers, transcripts, and task content.
+          required: true
+        - label: I searched existing issues for the same problem.
+          required: true

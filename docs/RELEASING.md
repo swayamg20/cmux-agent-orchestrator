@@ -34,6 +34,10 @@ For a pre-release `agent-cockpit` installation, copy its `data.json` into neithe
 Verify manually:
 
 - Obsidian loads the plugin without console errors.
+- **Open help and feedback** works from both the command palette and plugin settings and reuses the same native modal.
+- The diagnostics preview is visible before copying. Paste it into a temporary note and confirm it contains only versions, aggregate counts, health states, and relevant settings—never paths, identifiers, titles, terminal output, task content, notifications, raw errors, environment variables, or secrets.
+- Denying clipboard access shows one clear failure notice and leaves the preview available. Closing the modal or disabling the plugin during a copy produces no late notice.
+- Bug, compatibility, idea, question, documentation, and private-security actions open the correct public GitHub destinations. Merely opening the modal performs no network request.
 - The connection state is `cmux connected` after a normal macOS launch.
 - On a cmux build that advertises live events, the connection tooltip reports automatic updates only after the protocol acknowledgement, a controlled topology change appears without pressing Refresh, and stopping the event child returns the tooltip to manual Refresh. On a legacy build, it reports that Refresh is manual and starts no polling process.
 - Work, Agent runs, and cmux sections render in both light and dark themes; Work shows only Attention plus the compact workflow summary.
