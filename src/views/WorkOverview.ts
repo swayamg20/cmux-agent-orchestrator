@@ -1,11 +1,11 @@
 import { setIcon } from "obsidian";
+import { displayTaskTitle } from "../tasks/TaskTitleCache";
 import type { LiveSession } from "../state/types";
 import type { TaskRecord } from "../tasks/TaskSchema";
 import { WORKFLOW_LABELS } from "../state/types";
 import { phaseLabel } from "../components/StatusBadge";
-import { formatRelativeTime, providerLabel, sessionDisplayTitle } from "../components/SessionCard";
-import type { MissionControl, MissionControlStats } from "./MissionControlModel";
-import { lastActivity } from "./MissionControlModel";
+import { formatRelativeTime, providerLabel } from "../components/SessionCard";
+import type { LiveRow, MissionControl, MissionControlStats } from "./MissionControlModel";
 
 export interface WorkOverviewActions {
   createTask(): void;
@@ -39,6 +39,7 @@ export function renderWorkOverview(
   mission: MissionControl,
   showArchived: boolean,
   totalTasks: number,
+  titles: Readonly<Record<string, string>>,
   actions: WorkOverviewActions
 ): void {
   const panel = container.createEl("section", {
@@ -83,8 +84,8 @@ export function renderWorkOverview(
     groupHeading.createSpan({ text: group.repository });
     groupHeading.createSpan({ cls: "agent-cockpit-live-group-count", text: String(group.rows.length) });
     const list = section.createDiv({ cls: "agent-cockpit-live-list", attr: { role: "list" } });
-    for (const { session, task } of group.rows) {
-      renderLiveRow(list, session, task, actions);
+    for (const row of group.rows) {
+      renderLiveRow(list, row, actions);
     }
   }
 
@@ -113,38 +114,43 @@ export function renderWorkOverview(
       attr: { type: "button", role: "listitem", title: "Open task note" }
     });
     row.createSpan({ cls: "agent-cockpit-live-dot", attr: { "aria-hidden": "true" } });
-    row.createSpan({ cls: "agent-cockpit-live-title", text: task.title });
+    row.createSpan({ cls: "agent-cockpit-live-title", text: displayTaskTitle(task, titles) });
     row.createSpan({ cls: "agent-cockpit-live-meta", text: task.repository ? repositoryTail(task.repository) : "" });
     row.createSpan({ cls: "agent-cockpit-live-phase", text: WORKFLOW_LABELS[task.workflowStatus] });
     row.addEventListener("click", () => actions.openTask(task));
   }
 }
 
-function renderLiveRow(
-  list: HTMLElement,
-  session: LiveSession,
-  task: TaskRecord,
-  actions: WorkOverviewActions
-): void {
-  const row = list.createDiv({ cls: "agent-cockpit-live-row", attr: { role: "listitem" } });
-  row.dataset.state = session.assessment.executionPhase;
-  const focus = row.createEl("button", {
+function renderLiveRow(list: HTMLElement, row: LiveRow, actions: WorkOverviewActions): void {
+  const { session, task } = row;
+  const element = list.createDiv({ cls: "agent-cockpit-live-row", attr: { role: "listitem" } });
+  element.dataset.state = session.assessment.executionPhase;
+  const focus = element.createEl("button", {
     cls: "agent-cockpit-live-main",
-    attr: { type: "button", title: "Focus in cmux" }
+    attr: { type: "button", title: `Focus in cmux · ${session.workspaceTitle}` }
   });
   focus.createSpan({ cls: "agent-cockpit-live-dot", attr: { "aria-hidden": "true" } });
-  focus.createSpan({ cls: "agent-cockpit-live-title", text: task.title || sessionDisplayTitle(session) });
+  const text = focus.createSpan({ cls: "agent-cockpit-live-text" });
+  text.createSpan({ cls: "agent-cockpit-live-title", text: row.title });
+  if (row.detail !== null) {
+    text.createSpan({ cls: "agent-cockpit-live-detail", text: row.detail });
+  }
   focus.createSpan({ cls: "agent-cockpit-live-meta", text: providerLabel(session.provider.provider) });
-  focus.createSpan({ cls: "agent-cockpit-live-phase", text: phaseLabel(session.assessment.executionPhase) });
+  const known = session.assessment.executionPhase !== "unknown";
+  focus.createSpan({
+    cls: "agent-cockpit-live-phase",
+    text: known ? phaseLabel(session.assessment.executionPhase) : ""
+  });
+  const activityAt = session.assessment.lastActivityAt;
   focus.createSpan({
     cls: "agent-cockpit-live-time",
-    text: formatRelativeTime(lastActivity(session))
+    text: activityAt === null ? "" : formatRelativeTime(activityAt)
   });
   focus.addEventListener("click", () => actions.focus(session));
 
-  const open = row.createEl("button", {
+  const open = element.createEl("button", {
     cls: "agent-cockpit-live-open clickable-icon",
-    attr: { type: "button", "aria-label": `Open task note for ${task.title}`, title: "Open task note" }
+    attr: { type: "button", "aria-label": `Open task note for ${row.title}`, title: "Open task note" }
   });
   setIcon(open, "file-text");
   open.addEventListener("click", () => actions.openTask(task));

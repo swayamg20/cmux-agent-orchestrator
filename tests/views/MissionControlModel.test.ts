@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AttentionItem, LiveSession } from "../../src/state/types";
 import type { TaskRecord } from "../../src/tasks/TaskSchema";
-import { selectMissionControl } from "../../src/views/MissionControlModel";
+import { cleanSurfaceTitle, describeLiveRun, selectMissionControl } from "../../src/views/MissionControlModel";
 
 function task(
   taskId: string,
@@ -23,6 +23,8 @@ function session(
     key,
     linkedTaskId: taskId,
     currentDirectory: "/repos/fallback",
+    surfaceTitle: "",
+    conversation: null,
     observedAt: 0,
     assessment: { surfacePresence, lastActivityAt }
   } as LiveSession;
@@ -92,5 +94,63 @@ describe("MissionControlModel", () => {
     });
 
     expect(mission.liveGroups[0]?.repository).toBe("fallback");
+  });
+});
+
+describe("describeLiveRun", () => {
+  const conversation = (title: string) => ({ title }) as LiveSession["conversation"];
+
+  it("prefers the cmux tab title over a stale provider title", () => {
+    expect(
+      describeLiveRun(
+        { title: "Claude run · new_dashboard" },
+        { conversation: conversation("new-dashboard-0d"), surfaceTitle: "✳ SaaS platform authentication" },
+        "new_dashboard"
+      )
+    ).toEqual({ title: "SaaS platform authentication", detail: null });
+  });
+
+  it("uses the conversation title when the tab only shows a path", () => {
+    expect(
+      describeLiveRun(
+        { title: "Codex run · A2A" },
+        { conversation: conversation("Auto GTM agent discovery"), surfaceTitle: "…/Documents/GitHub/A2A" },
+        "A2A"
+      )
+    ).toEqual({ title: "Auto GTM agent discovery", detail: null });
+  });
+
+  it("falls back to the cleaned cmux tab title", () => {
+    expect(
+      describeLiveRun(
+        { title: "Claude run · pipecat-poc" },
+        { conversation: null, surfaceTitle: "[ . ] Action Required | Build ixigo flight reader | pipecat-poc" },
+        "pipecat-poc"
+      )
+    ).toEqual({ title: "Build ixigo flight reader", detail: null });
+  });
+
+  it("keeps a task name the user chose and shows the conversation beneath it", () => {
+    expect(
+      describeLiveRun(
+        { title: "Ship 0.6.1" },
+        { conversation: null, surfaceTitle: "◑ Last codex session review" },
+        "obsidian-agent"
+      )
+    ).toEqual({ title: "Ship 0.6.1", detail: "Last codex session review" });
+  });
+});
+
+describe("cleanSurfaceTitle", () => {
+  it.each([
+    ["✳ Tara Agent prototype dashboard integration", "new_dashboard", "Tara Agent prototype dashboard integration"],
+    ["◑ Last codex session review", "obsidian-agent", "Last codex session review"],
+    ["Compare Pipecat versions | pipecat-poc", "pipecat-poc", "Compare Pipecat versions"],
+    ["Build agentic platform workflow | new_dashboard", "other", "Build agentic platform workflow | new_dashboard"],
+    ["…/Documents/GitHub/A2A", "A2A", null],
+    ["~/.codex/memories", "A2A", null],
+    ["heimdall", "heimdall", null]
+  ])("cleans %j", (title, repository, expected) => {
+    expect(cleanSurfaceTitle(title, repository)).toBe(expected);
   });
 });

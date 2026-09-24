@@ -94,7 +94,7 @@ export function renderKanbanBoard(
       }, options.selection === undefined ? null : {
         selected: options.selection.selectedTaskIds.has(task.taskId),
         toggle: (selectedTask, selected) => options.selection?.toggleTask(selectedTask, selected)
-      });
+      }, state.taskTitles);
     }
   }
 }

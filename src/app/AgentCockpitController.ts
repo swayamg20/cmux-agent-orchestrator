@@ -1,4 +1,5 @@
 import { Notice, apiVersion, type App, type Modal, type Plugin } from "obsidian";
+import { TaskTitleCache, type TitleStorage } from "../tasks/TaskTitleCache";
 import {
   CmuxApplicationActivator,
   type ApplicationActivator
@@ -110,6 +111,7 @@ export class AgentCockpitController {
   readonly store = new CockpitStore();
 
   private readonly bindings: BindingRepository;
+  private readonly taskTitles: TaskTitleCache;
   private readonly detector = new AgentDetector();
   private readonly attentionEngine = new AttentionEngine();
   private readonly previewScheduler = new PreviewScheduler(2);
@@ -160,6 +162,8 @@ export class AgentCockpitController {
     private readonly applicationActivator: ApplicationActivator = new CmuxApplicationActivator()
   ) {
     this.bindings = new BindingRepository(plugin);
+    this.taskTitles = new TaskTitleCache(localTitleStorage(app));
+    this.store.update({ taskTitles: this.taskTitles.current() });
     this.eventRefresh = new CmuxEventRefreshScheduler({
       refreshAll: () => this.refreshNow(),
       refreshTopology: () => this.refreshTopology(),
@@ -1555,7 +1559,8 @@ export class AgentCockpitController {
       bindings: state.bindings,
       health: state.health
     });
-    this.store.update({ sessions, attention, workflowProposals, recentWorkflowChanges });
+    const taskTitles = this.taskTitles.observe(state.tasks, sessions);
+    this.store.update({ sessions, attention, workflowProposals, recentWorkflowChanges, taskTitles });
     this.workflowAutomation.schedule(workflowProposals);
   }
 
@@ -2688,6 +2693,16 @@ function connectionAfterError(connection: ConnectionState, error: unknown, check
 
 function readableError(error: unknown): string {
   return error instanceof Error ? error.message : `An unknown ${PRODUCT_NAME} error occurred.`;
+}
+
+function localTitleStorage(app: App): TitleStorage | null {
+  if (typeof app.loadLocalStorage !== "function" || typeof app.saveLocalStorage !== "function") {
+    return null;
+  }
+  return {
+    load: (key) => app.loadLocalStorage(key) as unknown,
+    save: (key, data) => app.saveLocalStorage(key, data)
+  };
 }
 
 function sessionMatchesBinding(session: LiveSession, binding: BindingRecord): boolean {

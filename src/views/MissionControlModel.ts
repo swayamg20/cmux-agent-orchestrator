@@ -13,6 +13,10 @@ export interface MissionControlStats {
 export interface LiveRow {
   session: LiveSession;
   task: TaskRecord;
+  /** What the session is about, in the most specific words available. */
+  title: string;
+  /** A second description when the task and conversation differ, else null. */
+  detail: string | null;
 }
 
 export interface LiveGroup {
@@ -57,7 +61,7 @@ export function selectMissionControl(
       if (attentionSessionKeys.has(session.key)) continue;
       const repository = repositoryName(task, session);
       const rows = groups.get(repository) ?? [];
-      rows.push({ session, task });
+      rows.push({ session, task, ...describeLiveRun(task, session, repository) });
       groups.set(repository, rows);
     }
   }
@@ -90,4 +94,49 @@ export function lastActivity(session: Pick<LiveSession, "assessment" | "observed
 function repositoryName(task: TaskRecord, session: LiveSession): string {
   if (task.repository) return repositoryLabel(task.repository);
   return repositoryLabel(session.currentDirectory);
+}
+
+const AUTO_TASK_TITLE = /^(?:Claude|Codex|Shell|Unknown provider) (?:run · .+|agent run)$/;
+
+/**
+ * Auto-tracked tasks are named "Codex run · repo", which says nothing about
+ * the work. Prefer the cmux tab title, then the provider conversation title,
+ * and keep a task name the user chose themselves.
+ */
+export function describeLiveRun(
+  task: Pick<TaskRecord, "title">,
+  session: Pick<LiveSession, "conversation" | "surfaceTitle">,
+  repository: string
+): { title: string; detail: string | null } {
+  const conversation = session.conversation?.title.trim() || null;
+  const surface = cleanSurfaceTitle(session.surfaceTitle, repository);
+  // The cmux tab title is what the user sees above the terminal, and agents
+  // keep it current; provider titles can be stale slugs like "repo-0d".
+  const summary = surface ?? conversation;
+  const customTask = AUTO_TASK_TITLE.test(task.title) ? null : task.title;
+
+  if (customTask !== null) {
+    const detail = summary !== null && !sameText(summary, customTask) ? summary : null;
+    return { title: customTask, detail };
+  }
+  return { title: summary ?? task.title, detail: null };
+}
+
+export function cleanSurfaceTitle(title: string, repository: string): string | null {
+  // A bare working directory ("…/GitHub/A2A", "~/.codex") is not a summary.
+  if (/^\s*(?:…|~|\.{1,2})?\//.test(title)) return null;
+  const cleaned = title
+    // cmux prefixes titles with spinner/status glyphs and "[ . ] Action Required |".
+    .replace(/^\[[^\]]*\]\s*[^|]*\|\s*/, "")
+    .replace(/^[^\p{L}\p{N}]+/u, "")
+    .replace(/\s*\|\s*[^|]+$/, (suffix) =>
+      sameText(suffix.replace(/^\s*\|\s*/, ""), repository) ? "" : suffix
+    )
+    .trim();
+  if (!cleaned || sameText(cleaned, repository)) return null;
+  return cleaned;
+}
+
+function sameText(left: string, right: string): boolean {
+  return left.trim().toLocaleLowerCase() === right.trim().toLocaleLowerCase();
 }

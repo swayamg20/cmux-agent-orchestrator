@@ -4,6 +4,8 @@ import { WORKFLOW_STATUSES } from "../tasks/TaskSchema";
 import { WORKFLOW_LABELS } from "../state/types";
 import { formatRelativeTime, providerLabel, repositoryLabel } from "./SessionCard";
 import { renderRuntimeBadge } from "./StatusBadge";
+import { describeLiveRun } from "../views/MissionControlModel";
+import { displayTaskTitle } from "../tasks/TaskTitleCache";
 import {
   renderAppliedWorkflowChange,
   renderWorkflowProposalNotice,
@@ -28,7 +30,8 @@ export function renderTaskCard(
   proposal: WorkflowProposal | null,
   recentChange: AppliedWorkflowChange | null,
   actions: TaskCardActions,
-  selection: TaskCardSelection | null = null
+  selection: TaskCardSelection | null = null,
+  titles: Readonly<Record<string, string>> = {}
 ): HTMLElement {
   const card = container.createDiv({
     cls: "agent-cockpit-task-card",
@@ -84,22 +87,22 @@ export function renderTaskCard(
     top.createSpan({ cls: "agent-cockpit-task-time", text: formatRelativeTime(activityAt) });
   }
 
+  const described = session
+    ? describeLiveRun(task, session, repositoryLabel(task.repository ?? session.currentDirectory))
+    : { title: displayTaskTitle(task, titles), detail: null };
   const title = card.createEl("button", {
     cls: "agent-cockpit-task-title",
-    text: task.title,
-    attr: { type: "button", title: task.title }
+    text: described.title,
+    attr: { type: "button", title: described.title }
   });
   title.addEventListener("click", () => actions.open(task));
 
   if (session) {
-    const conversationTitle = session.conversation?.title.trim();
-    if (conversationTitle && conversationTitle.toLocaleLowerCase() !== task.title.toLocaleLowerCase()) {
+    if (described.detail !== null) {
       card.createDiv({
         cls: "agent-cockpit-task-run-title",
-        text: conversationTitle,
-        attr: {
-          title: `Current ${providerLabel(session.provider.provider)} conversation: ${conversationTitle}`
-        }
+        text: described.detail,
+        attr: { title: described.detail }
       });
     }
     const unread = session.notifications.find((notification) => !notification.isRead);
@@ -126,7 +129,7 @@ export function renderTaskCard(
       attr: { title: `${session.workspaceTitle} · ${session.surfaceTitle}` }
     });
     runtime.createSpan({ text: providerLabel(session.provider.provider) });
-    renderRuntimeBadge(runtime, session.assessment);
+    if (session.assessment.executionPhase !== "unknown") renderRuntimeBadge(runtime, session.assessment);
     if (sessions.length > 1) {
       runtime.createSpan({
         cls: "agent-cockpit-run-count",

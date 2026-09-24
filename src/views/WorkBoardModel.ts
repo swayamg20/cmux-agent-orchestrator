@@ -11,7 +11,7 @@ export interface WorkBoardSelection {
 }
 
 export function selectWorkBoardTasks(
-  state: Pick<CockpitState, "tasks" | "sessions">,
+  state: Pick<CockpitState, "tasks" | "sessions"> & Partial<Pick<CockpitState, "taskTitles">>,
   query: string,
   runFilter: WorkBoardRunFilter,
   triageMode = false
@@ -23,7 +23,7 @@ export function selectWorkBoardTasks(
     if (runFilter === "live" && !hasLiveRun) return false;
     if (runFilter === "no-live" && hasLiveRun) return false;
     if (!normalizedQuery) return true;
-    return [task.title, task.repository, task.branch, task.worktree]
+    return [task.title, state.taskTitles?.[task.taskId], task.repository, task.branch, task.worktree]
       .some((value) => value?.toLocaleLowerCase().includes(normalizedQuery) === true);
   });
   return {

@@ -1555,6 +1555,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+.agent-cockpit .agent-cockpit-task-card .agent-cockpit-task-title {
+  background: transparent;
+  box-shadow: none;
+}
+
+.agent-cockpit .agent-cockpit-task-card .agent-cockpit-task-title:hover {
+  background: var(--background-modifier-hover);
+}
+
 .agent-cockpit-task-card .agent-cockpit-task-title {
   display: -webkit-box;
   height: auto;
@@ -1819,10 +1828,34 @@ button.agent-cockpit-live-row:hover {
   background: var(--text-muted);
 }
 
-.agent-cockpit-live-title {
+.agent-cockpit .agent-cockpit-live-main,
+.agent-cockpit button.agent-cockpit-live-row {
+  background: transparent;
+  box-shadow: none;
+}
+
+.agent-cockpit .agent-cockpit-live-row:hover,
+.agent-cockpit .agent-cockpit-live-row:focus-within {
+  background: var(--background-modifier-hover);
+}
+
+.agent-cockpit-live-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.agent-cockpit-live-title,
+.agent-cockpit-live-detail {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-cockpit-live-detail {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
 }
 
 .agent-cockpit-live-meta,
