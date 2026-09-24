@@ -18,7 +18,8 @@ import {
 import { renderSessionInbox } from "./SessionInbox";
 import { selectSessionInbox } from "./SessionInboxModel";
 import { renderSessionsPanel } from "./SessionsView";
-import { renderWorkOverview } from "./WorkOverview";
+import { renderMissionStats, renderWorkOverview } from "./WorkOverview";
+import { selectMissionControl } from "./MissionControlModel";
 import { PanelScrollMemory } from "./PanelScrollMemory";
 
 export const AGENT_COCKPIT_VIEW_TYPE = "agent-cockpit-view";
@@ -31,6 +32,7 @@ export class AgentCockpitView extends ItemView {
   private renderedSection: CockpitSection | null = null;
   private pendingFocusKey: string | null = null;
   private showAllInbox = false;
+  private showArchived = false;
   private headerSlot: HTMLElement | null = null;
   private connectionSlot: HTMLElement | null = null;
   private tabsSlot: HTMLElement | null = null;
@@ -135,6 +137,8 @@ export class AgentCockpitView extends ItemView {
     const panel = this.renderSectionPanels(panelSlot);
     const sessionActions = this.sessionActions();
     if (this.activeSection === "work") {
+      const mission = selectMissionControl(state);
+      renderMissionStats(panel, mission.stats);
       renderNeedsAttentionPanel(panel, state, this.expanded, {
         ...sessionActions,
         openTask: (task) => void this.controller.openTask(task),
@@ -143,9 +147,15 @@ export class AgentCockpitView extends ItemView {
         reviewInCmux: (proposal) => this.controller.reviewWorkflowProposalInCmux(proposal),
         dismiss: (proposal) => this.controller.dismissWorkflowProposal(proposal)
       });
-      renderWorkOverview(panel, state, {
+      renderWorkOverview(panel, mission, this.showArchived, state.tasks.length, {
         createTask: () => this.controller.showCreateTask(null),
-        openBoard: () => void this.openWorkBoard()
+        openBoard: () => void this.openWorkBoard(),
+        focus: (session) => sessionActions.focus(session),
+        openTask: (task) => sessionActions.openTask(task),
+        setShowArchived: (showArchived) => {
+          this.showArchived = showArchived;
+          this.scheduleRender(this.controller.store.getState());
+        }
       });
     } else if (this.activeSection === "agents") {
       renderSessionInbox(panel, state, this.showAllInbox, {

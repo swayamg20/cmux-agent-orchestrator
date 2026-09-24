@@ -47,6 +47,10 @@ export function renderTaskCard(
     if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
   });
 
+  const session = selectPrimarySession(sessions);
+  card.dataset.live = String(session !== null);
+  if (session) card.dataset.state = session.assessment.executionPhase;
+
   const top = card.createDiv({ cls: "agent-cockpit-task-card-top" });
   const leading = top.createDiv({ cls: "agent-cockpit-task-card-leading" });
   if (selection !== null) {
@@ -64,24 +68,29 @@ export function renderTaskCard(
     checkbox.checked = selection.selected;
     checkbox.addEventListener("change", () => selection.toggle(task, checkbox.checked));
   }
-  const priority = leading.createSpan({ cls: "agent-cockpit-priority", text: task.priority });
-  priority.dataset.priority = task.priority;
-  top.createSpan({ cls: "agent-cockpit-run-count", text: `${task.runCount} ${task.runCount === 1 ? "run" : "runs"}` });
+  leading.createSpan({ cls: "agent-cockpit-task-dot", attr: { "aria-hidden": "true" } });
+  const repository = leading.createSpan({
+    cls: "agent-cockpit-task-repository",
+    text: repositoryLabel(task.repository)
+  });
+  repository.setAttribute(
+    "title",
+    [task.repository ?? "Repository unknown", task.worktree ?? task.branch].filter(Boolean).join(" · ")
+  );
+  const activityAt = session
+    ? session.assessment.lastActivityAt ?? session.observedAt
+    : Date.parse(task.updatedAt);
+  if (Number.isFinite(activityAt)) {
+    top.createSpan({ cls: "agent-cockpit-task-time", text: formatRelativeTime(activityAt) });
+  }
 
   const title = card.createEl("button", {
     cls: "agent-cockpit-task-title",
     text: task.title,
-    attr: { type: "button" }
+    attr: { type: "button", title: task.title }
   });
   title.addEventListener("click", () => actions.open(task));
 
-  const repository = card.createDiv({ cls: "agent-cockpit-task-repository", text: repositoryLabel(task.repository) });
-  repository.setAttribute("title", task.repository ?? "Repository unknown");
-  if (task.branch || task.worktree) {
-    card.createDiv({ cls: "agent-cockpit-task-context", text: task.worktree ?? task.branch ?? "" });
-  }
-
-  const session = selectPrimarySession(sessions);
   if (session) {
     const conversationTitle = session.conversation?.title.trim();
     if (conversationTitle && conversationTitle.toLocaleLowerCase() !== task.title.toLocaleLowerCase()) {
@@ -93,27 +102,6 @@ export function renderTaskCard(
         }
       });
     }
-    const runtime = card.createDiv({ cls: "agent-cockpit-task-runtime" });
-    runtime.createSpan({ text: providerLabel(session.provider.provider) });
-    renderRuntimeBadge(runtime, session.assessment);
-    if (sessions.length > 1) {
-      runtime.createSpan({
-        cls: "agent-cockpit-run-count",
-        text: `${sessions.length} live`,
-        attr: { title: `${sessions.length} cmux surfaces are attached to this task.` }
-      });
-    }
-    card.createDiv({
-      cls: "agent-cockpit-task-context",
-      text: `${session.workspaceTitle} · ${session.surfaceTitle}`
-    });
-    card.createDiv({
-      cls: "agent-cockpit-task-context",
-      text:
-        session.assessment.lastActivityAt === null
-          ? `Seen ${formatRelativeTime(session.observedAt)}`
-          : `Activity ${formatRelativeTime(session.assessment.lastActivityAt)}`
-    });
     const unread = session.notifications.find((notification) => !notification.isRead);
     if (unread) {
       card.createDiv({
@@ -123,8 +111,6 @@ export function renderTaskCard(
     } else if (session.assessment.executionPhase === "waiting") {
       card.createDiv({ cls: "agent-cockpit-task-pending", text: "Possible input request" });
     }
-  } else {
-    card.createDiv({ cls: "agent-cockpit-task-runtime agent-cockpit-muted", text: "No live session" });
   }
 
   if (proposal !== null) {
@@ -133,8 +119,31 @@ export function renderTaskCard(
     renderAppliedWorkflowChange(card, recentChange);
   }
 
-  const workflowLabel = card.createEl("label", { cls: "agent-cockpit-workflow-control" });
-  workflowLabel.createSpan({ text: "Workflow" });
+  const footer = card.createDiv({ cls: "agent-cockpit-task-footer" });
+  if (session) {
+    const runtime = footer.createDiv({
+      cls: "agent-cockpit-task-runtime",
+      attr: { title: `${session.workspaceTitle} · ${session.surfaceTitle}` }
+    });
+    runtime.createSpan({ text: providerLabel(session.provider.provider) });
+    renderRuntimeBadge(runtime, session.assessment);
+    if (sessions.length > 1) {
+      runtime.createSpan({
+        cls: "agent-cockpit-run-count",
+        text: `${sessions.length} live`,
+        attr: { title: `${sessions.length} cmux surfaces are attached to this task.` }
+      });
+    }
+  } else {
+    footer.createDiv({ cls: "agent-cockpit-task-runtime agent-cockpit-muted", text: "Session closed" });
+  }
+  if (task.priority === "high" || task.priority === "urgent") {
+    const priority = footer.createSpan({ cls: "agent-cockpit-priority", text: task.priority });
+    priority.dataset.priority = task.priority;
+  }
+
+  const workflowLabel = footer.createEl("label", { cls: "agent-cockpit-workflow-control" });
+  workflowLabel.createSpan({ cls: "agent-cockpit-visually-hidden", text: "Workflow" });
   const select = workflowLabel.createEl("select", { attr: { "aria-label": `Workflow state for ${task.title}` } });
   for (const status of WORKFLOW_STATUSES) {
     const option = select.createEl("option", { value: status, text: WORKFLOW_LABELS[status] });

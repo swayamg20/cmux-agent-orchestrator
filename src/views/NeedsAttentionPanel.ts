@@ -59,7 +59,7 @@ export function renderNeedsAttentionPanel(
     const empty = panel.createDiv({ cls: "agent-cockpit-inline-empty" });
     const icon = empty.createSpan({ attr: { "aria-hidden": "true" } });
     setIcon(icon, "circle-check-big");
-    empty.createSpan({ cls: "agent-cockpit-inline-empty-title", text: "Nothing needs attention" });
+    empty.createSpan({ cls: "agent-cockpit-inline-empty-title", text: "Nothing needs you" });
     empty.createSpan({
       text:
         state.connection.status === "connected"
@@ -70,13 +70,12 @@ export function renderNeedsAttentionPanel(
     const heading = panel.createDiv({ cls: "agent-cockpit-panel-heading" });
     const title = heading.createDiv({ cls: "agent-cockpit-panel-title" });
     const titleLine = title.createDiv({ cls: "agent-cockpit-title-line" });
-    titleLine.createEl("h2", { text: "Attention", attr: { id: "agent-cockpit-attention-heading" } });
+    titleLine.createEl("h2", { text: "Needs you", attr: { id: "agent-cockpit-attention-heading" } });
     titleLine.createSpan({
       cls: "agent-cockpit-count",
       text: `${actionableCount}`,
       attr: { "aria-label": `${actionableCount} attention items` }
     });
-    title.createEl("p", { text: "Only signals that may need your judgment appear here." });
 
     attentionList = panel.createDiv({ cls: "agent-cockpit-attention-list" });
     for (const item of presentation.actionable) {

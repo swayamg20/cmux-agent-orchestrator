@@ -1437,6 +1437,494 @@
   overflow-wrap: anywhere;
 }
 
+/* Kanban board: status-led columns and calm cards */
+
+.agent-cockpit-kanban-column {
+  --ac-column-accent: var(--text-faint);
+  border: 1px solid var(--background-modifier-border);
+  border-top: 2px solid var(--ac-column-accent);
+  border-radius: var(--radius-m);
+}
+
+.agent-cockpit-kanban-column[data-status="active"] {
+  --ac-column-accent: var(--color-green);
+}
+
+.agent-cockpit-kanban-column[data-status="review"] {
+  --ac-column-accent: var(--color-orange);
+}
+
+.agent-cockpit-kanban-column[data-status="parked"] {
+  --ac-column-accent: var(--color-purple);
+}
+
+.agent-cockpit-kanban-column[data-status="done"] {
+  --ac-column-accent: var(--color-blue);
+}
+
+.agent-cockpit-kanban-column-header {
+  justify-content: flex-start;
+}
+
+.agent-cockpit-kanban-column-header h3 {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agent-cockpit-kanban-column-header .agent-cockpit-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-cockpit-kanban-column-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ac-column-accent);
+}
+
+.agent-cockpit-task-card {
+  position: relative;
+  padding: var(--ac-space-2) var(--ac-space-3) var(--ac-space-2);
+  border-radius: var(--radius-m);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  cursor: grab;
+}
+
+.agent-cockpit-task-card:active {
+  cursor: grabbing;
+}
+
+.agent-cockpit-task-card[data-live="false"] {
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.62;
+}
+
+.agent-cockpit-task-card[data-live="false"]:hover,
+.agent-cockpit-task-card[data-live="false"]:focus-within {
+  opacity: 1;
+}
+
+.agent-cockpit-task-card-top {
+  margin-bottom: var(--ac-space-1);
+}
+
+.agent-cockpit-task-card-leading {
+  gap: 6px;
+}
+
+.agent-cockpit-task-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.agent-cockpit-task-card[data-live="true"] .agent-cockpit-task-dot {
+  background: var(--text-muted);
+}
+
+.agent-cockpit-task-card[data-state="working"] .agent-cockpit-task-dot {
+  background: var(--color-green);
+  box-shadow: 0 0 0 3px rgba(var(--color-green-rgb), 0.18);
+}
+
+.agent-cockpit-task-card[data-state="waiting"] .agent-cockpit-task-dot,
+.agent-cockpit-task-card[data-state="turn-finished"] .agent-cockpit-task-dot {
+  background: var(--color-orange);
+}
+
+.agent-cockpit-task-card[data-state="failed"] .agent-cockpit-task-dot {
+  background: var(--color-red);
+}
+
+.agent-cockpit-task-card .agent-cockpit-task-repository {
+  margin-top: 0;
+  font-weight: var(--font-medium);
+}
+
+.agent-cockpit-task-time {
+  flex: none;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-cockpit-task-card .agent-cockpit-task-title {
+  display: -webkit-box;
+  height: auto;
+  margin: 0 calc(-1 * var(--ac-space-2));
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.agent-cockpit-task-card .agent-cockpit-task-run-title {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-weight: var(--font-normal);
+}
+
+.agent-cockpit-task-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ac-space-2);
+  margin-top: var(--ac-space-2);
+  padding-top: var(--ac-space-2);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.agent-cockpit-task-footer .agent-cockpit-task-runtime {
+  justify-content: flex-start;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.agent-cockpit-task-footer .agent-cockpit-priority {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+}
+
+.agent-cockpit-task-footer .agent-cockpit-workflow-control {
+  display: block;
+  margin: 0 0 0 auto;
+  opacity: 0;
+  transition: opacity 120ms var(--ac-ease);
+}
+
+.agent-cockpit-task-card:hover .agent-cockpit-workflow-control,
+.agent-cockpit-task-card:focus-within .agent-cockpit-workflow-control {
+  opacity: 1;
+}
+
+.agent-cockpit-task-footer .agent-cockpit-workflow-control select {
+  width: auto;
+  height: 22px;
+  padding: 0 22px 0 6px;
+  font-size: var(--font-ui-smaller);
+}
+
+@media (hover: none) {
+  .agent-cockpit-task-footer .agent-cockpit-workflow-control {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-cockpit-task-footer .agent-cockpit-workflow-control {
+    transition: none;
+  }
+}
+
+/* Mission control: Work tab */
+
+.agent-cockpit-mission-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: var(--ac-space-4) var(--ac-space-6) 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  overflow: hidden;
+}
+
+.agent-cockpit-mission-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--ac-space-3) var(--ac-space-4);
+}
+
+.agent-cockpit-mission-stat + .agent-cockpit-mission-stat {
+  border-left: 1px solid var(--background-modifier-border);
+}
+
+.agent-cockpit-mission-stat-value {
+  color: var(--text-normal);
+  font-size: 1.6em;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--font-semibold);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.agent-cockpit-mission-stat-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.agent-cockpit-mission-stat[data-stat="live"] .agent-cockpit-mission-stat-label::before,
+.agent-cockpit-mission-stat[data-stat="review"] .agent-cockpit-mission-stat-label::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  content: "";
+}
+
+.agent-cockpit-mission-stat[data-stat="live"] .agent-cockpit-mission-stat-label::before {
+  background: var(--color-green);
+}
+
+.agent-cockpit-mission-stat[data-stat="review"] .agent-cockpit-mission-stat-label::before {
+  background: var(--color-orange);
+}
+
+.agent-cockpit-mission-stat[data-stat="archived"] .agent-cockpit-mission-stat-value {
+  color: var(--text-faint);
+}
+
+.agent-cockpit-mode-panel--work > .agent-cockpit-mission-stats + .agent-cockpit-panel {
+  border-top: 0;
+}
+
+.agent-cockpit-attention-panel .agent-cockpit-panel-heading h2,
+.agent-cockpit-live-now .agent-cockpit-section-heading h2 {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agent-cockpit-attention-panel .agent-cockpit-panel-heading {
+  margin-bottom: var(--ac-space-2);
+}
+
+.agent-cockpit-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ac-space-3);
+  margin-bottom: var(--ac-space-3);
+}
+
+.agent-cockpit-section-heading h2 {
+  margin: 0;
+}
+
+.agent-cockpit-live-group + .agent-cockpit-live-group {
+  margin-top: var(--ac-space-4);
+}
+
+.agent-cockpit-live-group-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--ac-space-2);
+  margin-bottom: var(--ac-space-1);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+}
+
+.agent-cockpit-live-group-heading::after {
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--background-modifier-border);
+  content: "";
+}
+
+.agent-cockpit-live-group-count {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--font-normal);
+}
+
+.agent-cockpit-live-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-cockpit-live-row {
+  display: flex;
+  align-items: center;
+  gap: var(--ac-space-1);
+  min-width: 0;
+  border-radius: var(--radius-s);
+}
+
+.agent-cockpit-live-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.agent-cockpit-live-main,
+button.agent-cockpit-live-row {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 8px minmax(0, 1fr) auto 110px 64px;
+  align-items: center;
+  gap: var(--ac-space-3);
+  min-width: 0;
+  height: auto;
+  padding: 7px var(--ac-space-2);
+  border: 0;
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-normal);
+  text-align: left;
+  cursor: pointer;
+}
+
+button.agent-cockpit-live-row {
+  grid-template-columns: 8px minmax(0, 1fr) auto 64px;
+  width: 100%;
+}
+
+.agent-cockpit-live-main:hover,
+button.agent-cockpit-live-row:hover {
+  background: transparent;
+  box-shadow: none;
+}
+
+.agent-cockpit-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.agent-cockpit-live-row[data-state="working"] .agent-cockpit-live-dot {
+  background: var(--color-green);
+  box-shadow: 0 0 0 3px rgba(var(--color-green-rgb), 0.18);
+}
+
+.agent-cockpit-live-row[data-state="waiting"] .agent-cockpit-live-dot,
+.agent-cockpit-live-row[data-state="turn-finished"] .agent-cockpit-live-dot {
+  background: var(--color-orange);
+}
+
+.agent-cockpit-live-row[data-state="failed"] .agent-cockpit-live-dot {
+  background: var(--color-red);
+}
+
+.agent-cockpit-live-row[data-state="idle"] .agent-cockpit-live-dot {
+  background: var(--text-muted);
+}
+
+.agent-cockpit-live-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-cockpit-live-meta,
+.agent-cockpit-live-phase,
+.agent-cockpit-live-time {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.agent-cockpit-live-time {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.agent-cockpit-live-open {
+  flex: none;
+  opacity: 0;
+  transition: opacity 120ms var(--ac-ease);
+}
+
+.agent-cockpit-live-row:hover .agent-cockpit-live-open,
+.agent-cockpit-live-open:focus-visible {
+  opacity: 1;
+}
+
+.agent-cockpit-live-empty {
+  padding: var(--ac-space-3) var(--ac-space-2);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.agent-cockpit-archive {
+  margin-top: var(--ac-space-6);
+}
+
+.agent-cockpit-archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--ac-space-1);
+  margin: 0 auto;
+  border: 0;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--font-ui-smaller);
+}
+
+.agent-cockpit-archive-toggle:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.agent-cockpit-archive-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.agent-cockpit-archive-note {
+  margin: var(--ac-space-3) 0 var(--ac-space-2);
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  text-align: center;
+}
+
+.agent-cockpit-live-list.is-archived .agent-cockpit-live-title {
+  color: var(--text-muted);
+}
+
+@container (max-width: 620px) {
+  .agent-cockpit-mission-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-right: var(--ac-space-4);
+    margin-left: var(--ac-space-4);
+  }
+
+  .agent-cockpit-mission-stat:nth-child(3) {
+    border-left: 0;
+  }
+
+  .agent-cockpit-mission-stat:nth-child(n + 3) {
+    border-top: 1px solid var(--background-modifier-border);
+  }
+
+  .agent-cockpit-live-main,
+  button.agent-cockpit-live-row {
+    grid-template-columns: 8px minmax(0, 1fr) 64px;
+  }
+
+  .agent-cockpit-live-meta,
+  .agent-cockpit-live-phase {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-cockpit-live-open {
+    transition: none;
+  }
+}
+
 @container (max-width: 900px) {
   .agent-cockpit-detail-grid {
     grid-template-columns: minmax(0, 1fr);
