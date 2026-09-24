@@ -2846,11 +2846,8 @@ describe("AgentCockpitController connection failures", () => {
     await controller.waitForBackgroundWork();
 
     expect(controller.store.getState().sessions).toEqual([]);
-    expect(
-      controller.store.getState().attention.some((candidate) =>
-        candidate.reasons.some((candidateReason) => candidateReason.kind === "linked-surface-missing")
-      )
-    ).toBe(true);
+    expect(controller.store.getState().attention).toEqual([]);
+    expect(controller.store.getState().bindings).toHaveLength(1);
 
     await controller.clearClosedSessionLinks();
 

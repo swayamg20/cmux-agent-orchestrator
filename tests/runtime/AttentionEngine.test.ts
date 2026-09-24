@@ -33,10 +33,10 @@ const binding: BindingRecord = {
 };
 
 describe("AttentionEngine", () => {
-  it("reports a missing bound surface without completing the task", () => {
+  it("hides a closed bound surface without completing the task", () => {
     const work = task("active");
     const result = new AttentionEngine().build([], [work], [binding], 1_000, STALE_AFTER_MS);
-    expect(result[0]?.reasons[0]?.kind).toBe("linked-surface-missing");
+    expect(result).toEqual([]);
     expect(work.workflowStatus).toBe("active");
   });
 
@@ -135,7 +135,7 @@ describe("AttentionEngine", () => {
     )).toBe(false);
   });
 
-  it("reports a binding missing when the surface UUID exists under a different pane", () => {
+  it("hides a binding when the surface UUID exists under a different pane", () => {
     const session: LiveSession = {
       key: `${binding.workspaceId}:${binding.surfaceId}`,
       workspaceId: binding.workspaceId,
@@ -171,9 +171,7 @@ describe("AttentionEngine", () => {
       STALE_AFTER_MS
     );
 
-    expect(result.some((item) =>
-      item.reasons.some((reason) => reason.kind === "linked-surface-missing")
-    )).toBe(true);
+    expect(result.some((item) => item.task?.taskId === binding.taskId)).toBe(false);
   });
 
   it("reports when exact evidence proves that a bound surface now hosts another provider conversation", () => {
