@@ -4,7 +4,7 @@ cmux Agent Orchestrator is moving from a trustworthy observation and work-tracki
 
 The roadmap describes planned behavior, not the current release. See the [README](../README.md) for shipped capabilities and the [changelog](../CHANGELOG.md) for completed changes.
 
-## Current release: 0.6.0
+## Current release: 0.6.1
 
 The current public release observes existing cmux sessions, restores structured lifecycle state on current and legacy cmux builds, correlates exact Claude Code and Codex conversations when evidence permits, and tracks durable Markdown work through a focused board. It also provides privacy-safe support and feedback routes with a user-reviewed diagnostics preview. It can apply a guarded review transition and focus that exact cmux surface, but it does not send terminal input or run an autonomous coordinator.
 
