@@ -1,4 +1,5 @@
 import { renderTaskCard } from "../components/TaskCard";
+import { taskHasLiveSession } from "./WorkBoardModel";
 import type { WorkflowProposalActions } from "../components/WorkflowProposalNotice";
 import type { CockpitState } from "../state/types";
 import { WORKFLOW_LABELS } from "../state/types";
@@ -37,12 +38,16 @@ export function renderKanbanBoard(
     });
     column.dataset.status = status;
     const columnHeader = column.createDiv({ cls: "agent-cockpit-kanban-column-header" });
+    columnHeader.createSpan({ cls: "agent-cockpit-kanban-column-dot", attr: { "aria-hidden": "true" } });
     columnHeader.createEl("h3", {
       text: WORKFLOW_LABELS[status],
       attr: { id: `agent-cockpit-board-column-${status}` }
     });
-    const tasks = state.tasks.filter(
-      (task) => task.workflowStatus === status && visibleTaskIds.has(task.taskId)
+    const tasks = sortLiveFirst(
+      state.tasks.filter(
+        (task) => task.workflowStatus === status && visibleTaskIds.has(task.taskId)
+      ),
+      state
     );
     columnHeader.createSpan({
       cls: "agent-cockpit-count",
@@ -89,7 +94,22 @@ export function renderKanbanBoard(
       }, options.selection === undefined ? null : {
         selected: options.selection.selectedTaskIds.has(task.taskId),
         toggle: (selectedTask, selected) => options.selection?.toggleTask(selectedTask, selected)
-      });
+      }, state.taskTitles);
     }
   }
+}
+
+/** Live runs float to the top of each column; closed ones follow by recency. */
+export function sortLiveFirst(
+  tasks: readonly TaskRecord[],
+  state: Pick<CockpitState, "sessions">
+): TaskRecord[] {
+  return tasks
+    .map((task) => ({ task, live: taskHasLiveSession(task, state.sessions) }))
+    .sort(
+      (left, right) =>
+        Number(right.live) - Number(left.live) ||
+        right.task.updatedAt.localeCompare(left.task.updatedAt)
+    )
+    .map((entry) => entry.task);
 }

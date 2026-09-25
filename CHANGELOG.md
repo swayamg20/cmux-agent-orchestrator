@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-25
+
+### Changed
+
+- Redesign the Work tab as mission control: a Live, Review, Parked, and Archived stat strip, a compact "Needs you" section, and live agent runs grouped by repository with the most recently active first.
+- Title live runs and board cards with the cmux tab title agents keep current, falling back to the provider conversation title, while keeping task names the user chose.
+- Show when each session was last active from cmux screen activity and provider conversation writes, leaving the time blank rather than guessing.
+- Give the Work board status-accented columns and calmer cards that reveal the workflow selector on hover or focus and sort live runs above closed ones.
+- Rename the cmux tab to Surfaces; its count covers current cmux surfaces.
+
+### Fixed
+
+- Stop closed cmux sessions from flooding attention. Their saved links stay so a resumed conversation reconnects to its existing task, and tasks whose sessions are closed collapse behind a "Show archived" toggle.
+- Keep a descriptive title for closed tasks in per-device local storage, never in Markdown notes, and match it in board search.
+
 ## [0.6.0] - 2026-09-23
 
 ### Added

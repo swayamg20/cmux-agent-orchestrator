@@ -144,6 +144,8 @@ export interface CockpitState {
   attention: AttentionItem[];
   workflowProposals: WorkflowProposal[];
   recentWorkflowChanges: AppliedWorkflowChange[];
+  /** Last descriptive title seen per auto-named task, from local storage. */
+  taskTitles: Readonly<Record<string, string>>;
   health: CockpitHealth;
   filters: SessionFilters;
   refreshing: boolean;
@@ -178,6 +180,7 @@ export const INITIAL_COCKPIT_STATE: CockpitState = {
   attention: [],
   workflowProposals: [],
   recentWorkflowChanges: [],
+  taskTitles: {},
   health: {
     topology: {
       status: "unavailable",

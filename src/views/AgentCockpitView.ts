@@ -6,7 +6,10 @@ import type { SessionCardActions } from "../components/SessionCard";
 import { renderConnectionBadge } from "../components/StatusBadge";
 import { PRODUCT_NAME } from "../identity";
 import type { CockpitState } from "../state/types";
-import { renderNeedsAttentionPanel } from "./NeedsAttentionPanel";
+import {
+  renderNeedsAttentionPanel,
+  selectAttentionPresentation
+} from "./NeedsAttentionPanel";
 import {
   COCKPIT_SECTIONS,
   sectionForNavigationKey,
@@ -15,7 +18,8 @@ import {
 import { renderSessionInbox } from "./SessionInbox";
 import { selectSessionInbox } from "./SessionInboxModel";
 import { renderSessionsPanel } from "./SessionsView";
-import { renderWorkOverview } from "./WorkOverview";
+import { renderMissionStats, renderWorkOverview } from "./WorkOverview";
+import { selectMissionControl } from "./MissionControlModel";
 import { PanelScrollMemory } from "./PanelScrollMemory";
 
 export const AGENT_COCKPIT_VIEW_TYPE = "agent-cockpit-view";
@@ -28,6 +32,7 @@ export class AgentCockpitView extends ItemView {
   private renderedSection: CockpitSection | null = null;
   private pendingFocusKey: string | null = null;
   private showAllInbox = false;
+  private showArchived = false;
   private headerSlot: HTMLElement | null = null;
   private connectionSlot: HTMLElement | null = null;
   private tabsSlot: HTMLElement | null = null;
@@ -132,16 +137,25 @@ export class AgentCockpitView extends ItemView {
     const panel = this.renderSectionPanels(panelSlot);
     const sessionActions = this.sessionActions();
     if (this.activeSection === "work") {
+      const mission = selectMissionControl(state);
+      renderMissionStats(panel, mission.stats);
       renderNeedsAttentionPanel(panel, state, this.expanded, {
         ...sessionActions,
         openTask: (task) => void this.controller.openTask(task),
+        clearClosedSessionLinks: () => this.controller.clearClosedSessionLinks(),
         apply: (proposal) => this.controller.applyWorkflowProposal(proposal),
         reviewInCmux: (proposal) => this.controller.reviewWorkflowProposalInCmux(proposal),
         dismiss: (proposal) => this.controller.dismissWorkflowProposal(proposal)
       });
-      renderWorkOverview(panel, state, {
+      renderWorkOverview(panel, mission, this.showArchived, state.tasks.length, state.taskTitles, {
         createTask: () => this.controller.showCreateTask(null),
-        openBoard: () => void this.openWorkBoard()
+        openBoard: () => void this.openWorkBoard(),
+        focus: (session) => sessionActions.focus(session),
+        openTask: (task) => sessionActions.openTask(task),
+        setShowArchived: (showArchived) => {
+          this.showArchived = showArchived;
+          this.scheduleRender(this.controller.store.getState());
+        }
       });
     } else if (this.activeSection === "agents") {
       renderSessionInbox(panel, state, this.showAllInbox, {
@@ -181,6 +195,7 @@ export class AgentCockpitView extends ItemView {
 
   private renderSectionTabs(container: HTMLElement, state: Readonly<CockpitState>): void {
     const untrackedRuns = selectSessionInbox(state, null).total;
+    const actionableAttentionCount = selectAttentionPresentation(state.attention).actionable.length;
     const counts: Record<CockpitSection, number> = {
       work: state.tasks.length,
       agents: untrackedRuns,
@@ -189,12 +204,12 @@ export class AgentCockpitView extends ItemView {
     const countLabels: Record<CockpitSection, string> = {
       work: "durable tasks",
       agents: "detected agent runs",
-      cmux: "cmux surfaces"
+      cmux: "current cmux surfaces"
     };
     const labels: Record<CockpitSection, string> = {
       work: "Work",
       agents: "Agent runs",
-      cmux: "cmux"
+      cmux: "Surfaces"
     };
     const icons: Record<CockpitSection, string> = {
       work: "list-checks",
@@ -228,13 +243,13 @@ export class AgentCockpitView extends ItemView {
         text: String(counts[section]),
         attr: { "aria-label": `${counts[section]} ${countLabels[section]}` }
       });
-      if (section === "work" && state.attention.length > 0) {
+      if (section === "work" && actionableAttentionCount > 0) {
         tab.createSpan({
           cls: "agent-cockpit-mode-tab-alert",
           attr: {
-            title: `${state.attention.length} ${state.attention.length === 1 ? "item needs" : "items need"} attention`,
+            title: `${actionableAttentionCount} ${actionableAttentionCount === 1 ? "item needs" : "items need"} attention`,
             role: "img",
-            "aria-label": `${state.attention.length} ${state.attention.length === 1 ? "item needs" : "items need"} attention`
+            "aria-label": `${actionableAttentionCount} ${actionableAttentionCount === 1 ? "item needs" : "items need"} attention`
           }
         });
       }

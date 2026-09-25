@@ -2810,6 +2810,108 @@ describe("AgentCockpitController connection failures", () => {
     controller.dispose();
   });
 
+  it("clears closed cmux links while preserving durable tasks and run history", async () => {
+    let currentSnapshot = snapshot(1_900);
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted ?? ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const transport: CmuxTransport = {
+      ...connectedTransport(1_900),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const notices = (Notice as unknown as { messages: string[] }).messages;
+    const noticeStart = notices.length;
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const task = await controller.createTask({ title: "Keep durable history" });
+    await controller.attachTask(controller.store.getState().sessions[0]!, task);
+    expect(controller.store.getState().bindings).toHaveLength(1);
+    expect(controller.store.getState().runs).toHaveLength(1);
+
+    currentSnapshot = snapshot(2_000);
+    const pane = currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!;
+    pane.surfaces = [];
+    pane.selectedSurfaceId = null;
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    expect(controller.store.getState().sessions).toEqual([]);
+    expect(controller.store.getState().attention).toEqual([]);
+    expect(controller.store.getState().bindings).toHaveLength(1);
+
+    await controller.clearClosedSessionLinks();
+
+    expect(controller.store.getState().bindings).toEqual([]);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    expect(controller.store.getState().tasks).toMatchObject([
+      { taskId: task.taskId, title: task.title }
+    ]);
+    expect(controller.store.getState().attention).toEqual([]);
+    expect(notices.slice(noticeStart)).toContain(
+      "Cleared 1 closed cmux session link. The task and run history were kept."
+    );
+    expect(persisted).toBeDefined();
+    controller.dispose();
+  });
+
+  it("keeps a saved link when its cmux surface returns before cleanup commits", async () => {
+    let currentSnapshot = snapshot(2_100);
+    let persisted: unknown;
+    const plugin = {
+      loadData: async () => persisted ?? ({ settings: { autoTrackAgentRuns: false } }),
+      saveData: async (next: unknown) => {
+        persisted = structuredClone(next);
+      }
+    } as unknown as Plugin;
+    const transport: CmuxTransport = {
+      ...connectedTransport(2_100),
+      snapshot: async () => structuredClone(currentSnapshot)
+    };
+    const controller = new AgentCockpitController(
+      memoryTaskApp().app,
+      plugin,
+      async () => new CmuxClient(transport)
+    );
+
+    await controller.initialize();
+    await controller.waitForBackgroundWork();
+    const task = await controller.createTask({ title: "Keep returning surface" });
+    await controller.attachTask(controller.store.getState().sessions[0]!, task);
+
+    currentSnapshot = snapshot(2_200);
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.surfaces = [];
+    currentSnapshot.windows[0]!.workspaces[0]!.panes[0]!.selectedSurfaceId = null;
+    await controller.refreshNow();
+    await controller.waitForBackgroundWork();
+
+    const internal = controller as unknown as { bindings: BindingRepository };
+    const detachIfUnchanged = internal.bindings.detachIfUnchanged.bind(internal.bindings);
+    internal.bindings.detachIfUnchanged = async (expected, canMutate) => {
+      currentSnapshot = snapshot(2_300);
+      await controller.refreshNow();
+      await controller.waitForBackgroundWork();
+      return detachIfUnchanged(expected, canMutate);
+    };
+
+    await expect(controller.clearClosedSessionLinks()).rejects.toThrow(/changed before/);
+
+    expect(controller.store.getState().bindings).toMatchObject([{ taskId: task.taskId }]);
+    expect(controller.store.getState().sessions).toHaveLength(1);
+    expect(controller.store.getState().sessions[0]?.linkedTaskId).toBe(task.taskId);
+    expect(controller.store.getState().runs).toHaveLength(1);
+    controller.dispose();
+  });
+
   it("reconnects an exact provider conversation to its existing task after its surface changes", async () => {
     let persisted: unknown;
     let currentSnapshot = snapshot(2_000);

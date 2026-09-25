@@ -106,8 +106,11 @@ export class AttentionEngine {
     for (const binding of bindings) {
       const bindingKey = exactTargetKey(binding);
       const session = sessionByTarget.get(bindingKey) ?? null;
+      // Closed cmux surfaces are invisible. Their bindings are kept only so a
+      // resumed provider conversation can reconnect to its existing task.
+      if (session === null) continue;
       const boundTask = taskById.get(binding.taskId) ?? null;
-      const key = session?.key ?? `missing:${bindingKey}`;
+      const key = session.key;
       if (boundTask === null) {
         add(key, session, null, {
           kind: "linked-task-missing",
@@ -118,31 +121,20 @@ export class AttentionEngine {
           firstObservedAt: this.seenAt(key, now)
         });
       }
-      if (session !== null) {
-        if (
-          boundTask !== null &&
-          bindingConflictsWithExactProviderIdentity(binding, session)
-        ) {
-          const taskKey = `task:${binding.taskId}`;
-          add(taskKey, null, boundTask, {
-            kind: "linked-session-changed",
-            label: "Linked agent run changed",
-            detail: "This cmux surface now proves a different provider conversation. The durable task and previous run remain unchanged; attach the new run explicitly or enable automatic tracking.",
-            severity: 3,
-            confidence: "high",
-            firstObservedAt: this.seenAt(taskKey, now)
-          });
-        }
-        continue;
+      if (
+        boundTask !== null &&
+        bindingConflictsWithExactProviderIdentity(binding, session)
+      ) {
+        const taskKey = `task:${binding.taskId}`;
+        add(taskKey, null, boundTask, {
+          kind: "linked-session-changed",
+          label: "Linked agent run changed",
+          detail: "This cmux surface now proves a different provider conversation. The durable task and previous run remain unchanged; attach the new run explicitly or enable automatic tracking.",
+          severity: 3,
+          confidence: "high",
+          firstObservedAt: this.seenAt(taskKey, now)
+        });
       }
-      add(key, null, boundTask, {
-        kind: "linked-surface-missing",
-        label: "Linked surface disappeared",
-        detail: "The cmux surface is absent. The task remains unchanged and provider exit is not proven.",
-        severity: 3,
-        confidence: "medium",
-        firstObservedAt: this.seenAt(key, now)
-      });
     }
 
     for (const task of tasks.filter((candidate) => candidate.workflowStatus === "review")) {
