@@ -6,6 +6,7 @@ import { WORKFLOW_LABELS } from "../state/types";
 import { phaseLabel } from "../components/StatusBadge";
 import { formatRelativeTime, providerLabel } from "../components/SessionCard";
 import type { LiveRow, MissionControl, MissionControlStats } from "./MissionControlModel";
+import { lastActiveAt } from "./MissionControlModel";
 
 export interface WorkOverviewActions {
   createTask(): void;
@@ -141,10 +142,11 @@ function renderLiveRow(list: HTMLElement, row: LiveRow, actions: WorkOverviewAct
     cls: "agent-cockpit-live-phase",
     text: known ? phaseLabel(session.assessment.executionPhase) : ""
   });
-  const activityAt = session.assessment.lastActivityAt;
+  const activeAt = lastActiveAt(session);
   focus.createSpan({
     cls: "agent-cockpit-live-time",
-    text: activityAt === null ? "" : formatRelativeTime(activityAt)
+    text: activeAt === null ? "" : formatRelativeTime(activeAt),
+    attr: activeAt === null ? {} : { title: `Last active ${new Date(activeAt).toLocaleString()}` }
   });
   focus.addEventListener("click", () => actions.focus(session));
 

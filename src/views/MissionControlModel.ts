@@ -66,12 +66,18 @@ export function selectMissionControl(
     }
   }
 
+  const recency = (row: LiveRow): number => lastActiveAt(row.session) ?? 0;
   const liveGroups = [...groups.entries()]
     .map(([repository, rows]) => ({
       repository,
-      rows: rows.sort((left, right) => lastActivity(right.session) - lastActivity(left.session))
+      rows: rows.sort((left, right) => recency(right) - recency(left))
     }))
-    .sort((left, right) => left.repository.localeCompare(right.repository));
+    // Most recently active repository first; ties fall back to name.
+    .sort(
+      (left, right) =>
+        recency(right.rows[0]!) - recency(left.rows[0]!) ||
+        left.repository.localeCompare(right.repository)
+    );
 
   archived.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 
@@ -87,8 +93,17 @@ export function selectMissionControl(
   };
 }
 
-export function lastActivity(session: Pick<LiveSession, "assessment" | "observedAt">): number {
-  return session.assessment.lastActivityAt ?? session.observedAt;
+/**
+ * When the agent last did something: the newest of cmux screen activity and
+ * the provider's own conversation write time. Null when neither is known,
+ * so the UI never shows a made-up "just now".
+ */
+export function lastActiveAt(
+  session: Pick<LiveSession, "assessment" | "conversation">
+): number | null {
+  const candidates = [session.assessment.lastActivityAt, session.conversation?.updatedAt ?? null]
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
+  return candidates.length === 0 ? null : Math.max(...candidates);
 }
 
 function repositoryName(task: TaskRecord, session: LiveSession): string {

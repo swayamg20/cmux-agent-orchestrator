@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { AttentionItem, LiveSession } from "../../src/state/types";
 import type { TaskRecord } from "../../src/tasks/TaskSchema";
-import { cleanSurfaceTitle, describeLiveRun, selectMissionControl } from "../../src/views/MissionControlModel";
+import {
+  cleanSurfaceTitle,
+  describeLiveRun,
+  lastActiveAt,
+  selectMissionControl
+} from "../../src/views/MissionControlModel";
 
 function task(
   taskId: string,
@@ -48,8 +53,8 @@ describe("MissionControlModel", () => {
       attention: []
     });
 
-    expect(mission.liveGroups.map((group) => group.repository)).toEqual(["agent", "store"]);
-    expect(mission.liveGroups[1]!.rows.map((row) => row.task.title)).toEqual([
+    expect(mission.liveGroups.map((group) => group.repository)).toEqual(["store", "agent"]);
+    expect(mission.liveGroups[0]!.rows.map((row) => row.task.title)).toEqual([
       "Newer store run",
       "Older store run"
     ]);
@@ -152,5 +157,26 @@ describe("cleanSurfaceTitle", () => {
     ["heimdall", "heimdall", null]
   ])("cleans %j", (title, repository, expected) => {
     expect(cleanSurfaceTitle(title, repository)).toBe(expected);
+  });
+});
+
+describe("lastActiveAt", () => {
+  const at = (lastActivityAt: number | null, updatedAt: number | null) =>
+    lastActiveAt({
+      assessment: { lastActivityAt },
+      conversation: updatedAt === null ? null : { updatedAt }
+    } as Pick<LiveSession, "assessment" | "conversation">);
+
+  it("uses the newest of screen activity and the provider conversation write", () => {
+    expect(at(100, 500)).toBe(500);
+    expect(at(900, 500)).toBe(900);
+  });
+
+  it("uses the provider time when cmux saw no activity", () => {
+    expect(at(null, 500)).toBe(500);
+  });
+
+  it("is unknown rather than guessed when neither source has a time", () => {
+    expect(at(null, null)).toBeNull();
   });
 });

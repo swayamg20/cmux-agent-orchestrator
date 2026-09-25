@@ -4,7 +4,7 @@ import { WORKFLOW_STATUSES } from "../tasks/TaskSchema";
 import { WORKFLOW_LABELS } from "../state/types";
 import { formatRelativeTime, providerLabel, repositoryLabel } from "./SessionCard";
 import { renderRuntimeBadge } from "./StatusBadge";
-import { describeLiveRun } from "../views/MissionControlModel";
+import { describeLiveRun, lastActiveAt } from "../views/MissionControlModel";
 import { displayTaskTitle } from "../tasks/TaskTitleCache";
 import {
   renderAppliedWorkflowChange,
@@ -80,11 +80,13 @@ export function renderTaskCard(
     "title",
     [task.repository ?? "Repository unknown", task.worktree ?? task.branch].filter(Boolean).join(" · ")
   );
-  const activityAt = session
-    ? session.assessment.lastActivityAt ?? session.observedAt
-    : Date.parse(task.updatedAt);
-  if (Number.isFinite(activityAt)) {
-    top.createSpan({ cls: "agent-cockpit-task-time", text: formatRelativeTime(activityAt) });
+  const activityAt = session ? lastActiveAt(session) : Date.parse(task.updatedAt);
+  if (activityAt !== null && Number.isFinite(activityAt)) {
+    top.createSpan({
+      cls: "agent-cockpit-task-time",
+      text: formatRelativeTime(activityAt),
+      attr: { title: `Last active ${new Date(activityAt).toLocaleString()}` }
+    });
   }
 
   const described = session
